@@ -43,7 +43,7 @@ adblock = [
 
 "https://raw.hellogithub.com/hosts",
 
-"https://raw.gitmirror.com/lingeringsound/10007_auto/master/reward"
+"https://raw.gitmirror.com/lingeringsound/10007_auto/master/reward",
 
 "https://raw.githubusercontent.com/PhoenixLjw/AdRules/main/adguard.txt",
 
