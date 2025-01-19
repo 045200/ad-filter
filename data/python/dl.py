@@ -65,7 +65,8 @@ allow = [
 
 "https://mirror.ghproxy.com/raw.githubusercontent.com/8680/GOODBYEADS/master/allow.txt",
 
-"https://mirror.ghproxy.com/raw.githubusercontent.com/qq5460168/666/master/allow.txt"
+"https://mirror.ghproxy.com/raw.githubusercontent.com/qq5460168/666/master/allow.txt",
+"https://raw.gitmirror.com/lingeringsound/10007_auto/master/Adaway_white_list.prop"
 ]
 
 # 下载
