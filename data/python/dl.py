@@ -36,7 +36,6 @@ subprocess.run("cp ./data/mod/whitelist.txt ./tmp/allow01.txt", shell=True)
 # 拦截规则
 adblock = [
  "https://raw.githubusercontent.com/8680/GOODBYEADS/master/data/rules/adblock.txt",
- "https://raw.gitmirror.com/lingeringsound/adblock_auto/main/Rules/adblock_auto.txt",
 
 "https://raw.hellogithub.com/hosts",
 
