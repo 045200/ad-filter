@@ -35,37 +35,32 @@ subprocess.run("cp ./data/mod/whitelist.txt ./tmp/allow01.txt", shell=True)
 
 # 拦截规则
 adblock = [
-    "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/multi.txt",
  "https://raw.githubusercontent.com/8680/GOODBYEADS/master/data/rules/adblock.txt",
-
-"https://raw.githubusercontent.com/xndeye/adblock_list/beta/rule/easylist.txt",
  "https://raw.gitmirror.com/lingeringsound/adblock_auto/main/Rules/adblock_auto.txt",
 
 "https://raw.hellogithub.com/hosts",
 
-"https://raw.gitmirror.com/lingeringsound/10007_auto/master/reward",
+"https://raw.githubusercontent.com/lingeringsound/10007_auto/Feature/reward",
 
-"https://raw.githubusercontent.com/PhoenixLjw/AdRules/main/adguard.txt",
+"https://raw.githubusercontent.com/damengzhu/banad/main/jiekouAD.txt",
 
-"https://raw.githubusercontent.com/217heidai/adblockfilters/main/rules/adblockdns.txt",
+"https://raw.gitmirror.com/TG-Twilight/AWAvenue-Ads-Rule/main/Filters/AWAvenue-Ads-Rule-hosts.txt",
 
-"https://raw.githubusercontent.com/217heidai/adblockfilters/main/rules/adblockfilters.txt",
+"https://raw.githubusercontent.com/2771936993/HG/main/hg1.txt",
 
-"https://raw.githubusercontent.com/qq5460168/dangchu/main/black.txt",
+"https://raw.githubusercontent.com/Goooler/1024_hosts/master/hosts",
 
-"https://mirror.ghproxy.com/raw.githubusercontent.com/qq5460168/666/master/rules.txt"
+"https://raw.githubusercontent.com/jdlingyu/ad-wars/master/hosts",
+
     ]
 
 # 白名单规则
 allow = [
 
-"https://hub.gitmirror.com/https://raw.githubusercontent.com/qq5460168/dangchu/main/white.txt",
-
 "https://file-git.trli.club/file-hosts/allow/Domains",
 
 "https://mirror.ghproxy.com/raw.githubusercontent.com/8680/GOODBYEADS/master/allow.txt",
 
-"https://mirror.ghproxy.com/raw.githubusercontent.com/qq5460168/666/master/allow.txt",
 "https://raw.gitmirror.com/lingeringsound/10007_auto/master/Adaway_white_list.prop"
 ]
 
