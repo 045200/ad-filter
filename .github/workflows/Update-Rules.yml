@@ -8,7 +8,7 @@ on:
       - 'data/python/**'
       - 'data/source/**'
       - 'data/mod/**'
-    
+
 jobs:
   update:
     runs-on: ubuntu-latest
@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          
+
       - name: Check for file changes
         id: changes
         uses: tj-actions/changed-files@v42
@@ -41,6 +41,13 @@ jobs:
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
           python ./data/python/filter-dns.py
+
+      - name: Process AdGuard Rules
+        if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        run: |
+          pip install adblock-rs
+          python ./data/python/rules.py
+          ls -la adb.txt adw.txt add.txt
    
       - name: Generate mihomo Rules
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
