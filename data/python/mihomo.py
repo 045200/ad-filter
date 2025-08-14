@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 import os
-import sys
 import re
-import urllib.request
+import sys
 import gzip
 import shutil
+import urllib.request
 from pathlib import Path
-import subprocess
 from datetime import datetime
 import tempfile
+import subprocess
 
 def log(message):
     print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} [INFO] {message}")
@@ -18,116 +18,103 @@ def error(message):
 
 def is_valid_rule(line, is_allow=False):
     """
-    检查是否为有效规则（支持拦截和放行规则）
+    强化规则验证（严格匹配AdBlock/Hosts格式）
     """
     line = line.strip()
-    
-    # 跳过空行和注释
-    if not line or line.startswith(('!', '#', '@', '/', '[', '=====')):
+    if not line or line.startswith(('!', '#', '@@|', '===')):
         return False
-    
-    # 匹配AdBlock规则
-    if re.match(r'^(\|\|?[\w.-]+\^?|/{2}.*?/|\|https?://)', line):
+
+    # 精确匹配AdBlock规则（||domain^ 或 ||domain^$modifier）
+    if re.match(r'^\|\|[\w.-]+\^(?:\$[\w,=-]+)?$', line):
         return True
-    
-    # 匹配Hosts规则
-    if re.match(r'^(0\.0\.0\.0|127\.0\.0\.1)\s+[\w.-]+', line) and not is_allow:
-        return True
-    
-    # 匹配放行规则（特殊语法）
+
+    # 精确匹配放行规则（@@||domain^）
     if is_allow and re.match(r'^@@\|\|[\w.-]+\^$', line):
         return True
-    
-    # 匹配纯域名规则
-    if re.match(r'^[\w.-]+\.[\w.-]+$', line):
+
+    # 匹配Hosts规则（0.0.0.0 domain）
+    if re.match(r'^(0\.0\.0\.0|127\.0\.0\.1)\s+[\w.-]+$', line):
         return True
-    
+
     return False
 
 def convert_rule(line, is_allow=False):
     """
-    增强的语法转换逻辑（支持拦截和放行规则）
+    强化规则转换（保持与Mihomo策略组兼容）
     """
     line = line.strip()
     policy = "DIRECT" if is_allow else "REJECT"
-    
-    # 1. AdBlock拦截规则转换
-    if line.startswith("||") and line.endswith("^"):
-        domain = line[2:-1]
+
+    # 处理AdBlock规则（||domain^）
+    if line.startswith("||") and '^' in line:
+        domain = line[2:].split('^')[0]
         return f"DOMAIN-SUFFIX,{domain},{policy}"
-    
-    # 2. AdBlock放行规则转换（@@||domain^）
-    if is_allow and line.startswith("@@||") and line.endswith("^"):
-        domain = line[4:-1]
-        return f"DOMAIN-SUFFIX,{domain},DIRECT"
-    
-    # 3. Hosts规则转换
-    if re.match(r'^(0\.0\.0\.0|127\.0\.0\.1)\s+([\w.-]+)', line):
-        domain = line.split()[1]
-        return f"DOMAIN,{domain},{policy}"
-    
-    # 4. 纯域名规则转换
-    if re.match(r'^[\w.-]+\.[\w.-]+$', line):
-        return f"DOMAIN-SUFFIX,{line},{policy}"
-    
-    # 5. 其他格式原样保留
-    return line
+
+    # 处理Hosts规则（0.0.0.0 domain）
+    if match := re.match(r'^(0\.0\.0\.0|127\.0\.0\.1)\s+([\w.-]+)$', line):
+        return f"DOMAIN,{match.group(2)},{policy}"
+
+    return None
 
 def process_rules(input_path, output_path, is_allow=False):
     """
-    处理规则文件并转换格式
+    优化规则处理流程（自动处理编码问题）
     """
     try:
         processed = 0
-        with open(input_path, 'r', encoding='utf-8', errors='ignore') as f_in, \
-             open(output_path, 'w', encoding='utf-8') as f_out:
+        with open(input_path, 'r', encoding='utf-8', errors='replace') as f_in, \
+             open(output_path, 'a' if output_path.exists() else 'w', encoding='utf-8') as f_out:
 
             for line in f_in:
                 if not is_valid_rule(line, is_allow):
                     continue
-                
-                converted = convert_rule(line, is_allow)
-                f_out.write(converted + '\n')
-                processed += 1
 
-        log(f"Processed {processed} {'allow' if is_allow else 'block'} rules: {input_path} → {output_path}")
+                if converted := convert_rule(line, is_allow):
+                    f_out.write(converted + '\n')
+                    processed += 1
+
+        log(f"Processed {processed} {'allow' if is_allow else 'block'} rules from {input_path.name}")
         return True
 
     except Exception as e:
-        error(f"Rule processing failed: {str(e)}")
+        error(f"Failed to process {input_path.name}: {str(e)}")
         return False
 
 def download_mihomo_tool(tool_dir):
-    """下载Mihomo转换工具"""
+    """
+    优化工具下载（增加重试机制）
+    """
     try:
         tool_dir = Path(tool_dir)
         tool_dir.mkdir(parents=True, exist_ok=True)
 
+        # 获取最新版本
         version_url = "https://github.com/MetaCubeX/mihomo/releases/latest/download/version.txt"
-        version_file = tool_dir / "version.txt"
+        for _ in range(3):  # 重试3次
+            try:
+                with urllib.request.urlopen(version_url, timeout=10) as resp:
+                    version = resp.read().decode('utf-8').strip()
+                    break
+            except Exception:
+                continue
+        else:
+            raise Exception("Failed to fetch version after 3 retries")
 
-        log(f"Fetching latest Mihomo version...")
-        urllib.request.urlretrieve(version_url, version_file)
-
-        with open(version_file, 'r') as f:
-            version = f.read().strip()
-
+        # 下载工具
         tool_name = f"mihomo-linux-amd64-{version}"
         tool_url = f"https://github.com/MetaCubeX/mihomo/releases/latest/download/{tool_name}.gz"
-        tool_gz_path = tool_dir / f"{tool_name}.gz"
-
-        log(f"Downloading Mihomo tool v{version}...")
-        urllib.request.urlretrieve(tool_url, tool_gz_path)
-
         tool_path = tool_dir / tool_name
-        with gzip.open(tool_gz_path, 'rb') as f_in:
+
+        log(f"Downloading {tool_name}...")
+        urllib.request.urlretrieve(tool_url, f"{tool_path}.gz")
+
+        # 解压工具
+        with gzip.open(f"{tool_path}.gz", 'rb') as f_in:
             with open(tool_path, 'wb') as f_out:
                 shutil.copyfileobj(f_in, f_out)
 
         tool_path.chmod(0o755)
-        version_file.unlink(missing_ok=True)
-        tool_gz_path.unlink(missing_ok=True)
-
+        os.remove(f"{tool_path}.gz")
         return tool_path
 
     except Exception as e:
@@ -135,83 +122,72 @@ def download_mihomo_tool(tool_dir):
         return None
 
 def convert_to_mrs(input_file, output_file, tool_path):
-    """转换为Mihomo规则集"""
+    """
+    规则集转换（增加超时处理）
+    """
     try:
-        cmd = [
-            str(tool_path),
-            "convert-ruleset",
-            "domain",
-            "text",
-            str(input_file),
-            str(output_file)
-        ]
-        subprocess.run(cmd, check=True)
+        subprocess.run(
+            [str(tool_path), "convert-ruleset", "domain", "text",
+             str(input_file), str(output_file)],
+            check=True,
+            timeout=30
+        )
         return True
+    except subprocess.TimeoutExpired:
+        error("Conversion timed out after 30 seconds")
+        return False
     except subprocess.CalledProcessError as e:
-        error(f"Conversion failed: {str(e)}")
+        error(f"Conversion failed with code {e.returncode}")
         return False
 
 def main():
     try:
-        # 路径配置（输入输出都在根目录）
-        base_dir = Path(__file__).parent.parent.parent  # 仓库根目录
+        # 配置路径（兼容原脚本结构）
+        base_dir = Path(__file__).parent.parent.parent
         config = {
-            "input_block": base_dir / "adblock.txt",  # 拦截规则
-            "input_allow": base_dir / "allow.txt",    # 新增：放行规则
-            "temp_block": Path(tempfile.gettempdir()) / "block.tmp",
-            "temp_allow": Path(tempfile.gettempdir()) / "allow.tmp",
-            "output": base_dir / "adb.mrs",        # 最终合并输出
-            "tool_dir": Path(tempfile.gettempdir()) / "mihomo_tools"
+            "input_files": {
+                "block": base_dir / "adblock.txt",
+                "allow": base_dir / "allow.txt"
+            },
+            "temp_files": {
+                "merged": Path(tempfile.gettempdir()) / "merged_rules.tmp"
+            },
+            "output": base_dir / "adb.mrs",
+            "tool_dir": base_dir / "mihomo_tools"
         }
 
-        # 处理拦截规则
-        if not process_rules(config["input_block"], config["temp_block"]):
-            sys.exit(1)
+        # 初始化临时文件
+        config["temp_files"]["merged"].unlink(missing_ok=True)
 
-        # 处理放行规则（如果存在）
-        if config["input_allow"].exists():
-            if not process_rules(config["input_allow"], config["temp_allow"], is_allow=True):
+        # 处理规则（优先放行规则）
+        if config["input_files"]["allow"].exists():
+            if not process_rules(config["input_files"]["allow"], config["temp_files"]["merged"], is_allow=True):
                 sys.exit(1)
         else:
-            log("No allow.txt found, skipping allow rules processing")
+            log("No allow rules found, skipping")
 
-        # 合并规则文件
-        with open(config["output"], 'w', encoding='utf-8') as f_out:
-            # 先写入放行规则（优先级更高）
-            if config["input_allow"].exists():
-                with open(config["temp_allow"], 'r') as f_in:
-                    f_out.write(f_in.read())
-            
-            # 再写入拦截规则
-            with open(config["temp_block"], 'r') as f_in:
-                f_out.write(f_in.read())
+        if not process_rules(config["input_files"]["block"], config["temp_files"]["merged"]):
+            sys.exit(1)
 
         # 转换为Mihomo格式
-        tool = download_mihomo_tool(config["tool_dir"])
-        if not tool:
+        if not (tool := download_mihomo_tool(config["tool_dir"])):
             sys.exit(1)
 
-        if not convert_to_mrs(config["output"], config["output"], tool):
+        if not convert_to_mrs(config["temp_files"]["merged"], config["output"], tool):
             sys.exit(1)
 
-        # 清理临时文件
-        try:
-            config["temp_block"].unlink(missing_ok=True)
-            if config["input_allow"].exists():
-                config["temp_allow"].unlink(missing_ok=True)
-            shutil.rmtree(config["tool_dir"], ignore_errors=True)
-            log("Temporary files cleaned up")
-        except Exception as e:
-            error(f"Error cleaning temp files: {str(e)}")
-
-        log("="*50)
-        log("Rule conversion complete!")
-        log(f"Final output: {config['output']}")
-        log("="*50)
+        log(f"Successfully generated: {config['output'].name}")
+        log(f"Output size: {os.path.getsize(config['output']) / 1024:.2f} KB")
+        return 0
 
     except Exception as e:
-        error(f"Main process failed: {str(e)}")
-        sys.exit(1)
+        error(f"Fatal error: {str(e)}")
+        return 1
+    finally:
+        # 增强的清理逻辑
+        config["temp_files"]["merged"].unlink(missing_ok=True)
+        if 'tool' in locals():
+            shutil.rmtree(config["tool_dir"], ignore_errors=True)
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
