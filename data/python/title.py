@@ -19,11 +19,7 @@ def get_beijing_time() -> str:
 
 def process_rule_files(target_files: Set[str], base_dir: Path) -> None:
     """
-    处理规则文件，添加标准头信息
-    
-    Args:
-        target_files: 需要处理的目标文件名集合
-        base_dir: 仓库根目录路径（文件直接放在这里）
+    处理规则文件，添加标准头信息（仅显示单个文件的总规则数）
     """
     beijing_time = get_beijing_time()
 
@@ -31,32 +27,37 @@ def process_rule_files(target_files: Set[str], base_dir: Path) -> None:
         file_path = base_dir / file_name
         
         if not file_path.exists():
-            print(f"⚠️ 文件不存在，跳过处理: {file_path.name}")
+            print(f"⚠️ 文件不存在，跳过处理: {file_name}")
             continue
 
         try:
-            # 读取文件内容并计算有效规则行数
+            # 读取文件内容
             with file_path.open('r', encoding='utf-8') as file:
                 lines = file.readlines()
-                line_count = len([line for line in lines 
-                                if line.strip() 
-                                and not line.startswith(('!', '#', '@'))])
+                
+                # 统计有效规则（排除注释和空行）
+                line_count = len([
+                    line for line in lines 
+                    if line.strip() 
+                    and not line.startswith(('!', '#', '@', '/', '[', '====='))
+                ])
+                
                 original_content = ''.join(lines)
 
-            # 生成新内容（保留原始编码声明）
+            # 生成新内容（仅显示总规则数）
             new_content = HEADER_TEMPLATE.format(
                 timestamp=beijing_time,
                 line_count=line_count
-            ) + original_content.lstrip('\ufeff')  # 保留可能的BOM头
+            ) + original_content.lstrip('\ufeff')
 
             # 写回文件
             with file_path.open('w', encoding='utf-8') as file:
                 file.write(new_content)
 
-            print(f"✅ 已处理 {file_path.name} | 规则数量: {line_count} | 更新时间: {beijing_time}")
+            print(f"✅ 已处理 {file_name} | 规则总数: {line_count}")
 
         except Exception as e:
-            print(f"❌ 处理文件 {file_path.name} 时出错: {str(e)}")
+            print(f"❌ 处理 {file_name} 出错: {str(e)}")
 
 if __name__ == "__main__":
     # 需要处理的文件列表（直接放在根目录）
