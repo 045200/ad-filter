@@ -160,7 +160,7 @@ def main():
             "input_allow": base_dir / "allow.txt",    # 新增：放行规则
             "temp_block": Path(tempfile.gettempdir()) / "block.tmp",
             "temp_allow": Path(tempfile.gettempdir()) / "allow.tmp",
-            "output": base_dir / "final.mrs",        # 最终合并输出
+            "output": base_dir / "adb.mrs",        # 最终合并输出
             "tool_dir": Path(tempfile.gettempdir()) / "mihomo_tools"
         }
 
