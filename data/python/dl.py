@@ -2,28 +2,21 @@ import os
 import subprocess
 import time
 import shutil
+import glob
 
-# 删除目录下所有的文件
-directory = "./data/rules/"
+# 定义要删除的文件扩展名模式
+patterns = ['*.txt', '*.mrs']
 
-# 确保目录存在并遍历删除其中的文件
-if os.path.exists(directory):
-    for file_name in os.listdir(directory):
-        file_path = os.path.join(directory, file_name)
+# 遍历每个模式并删除匹配的文件
+for pattern in patterns:
+    # 使用glob查找匹配的文件
+    for file_path in glob.glob(os.path.join('./', pattern)):
         try:
             if os.path.isfile(file_path):
                 os.unlink(file_path)
+                print(f"已删除文件: {file_path}")
         except Exception as e:
             print(f"无法删除文件: {file_path}, 错误: {e}")
-else:
-    print(f"目录 {directory} 不存在")
-
-# 删除目录本身
-try:
-    shutil.rmtree(directory)
-    print(f"成功删除目录 {directory} 及其中的所有文件")
-except Exception as e:
-    print(f"无法删除目录 {directory}, 错误: {e}")
 
 # 创建临时文件夹
 os.makedirs("./tmp/", exist_ok=True)
