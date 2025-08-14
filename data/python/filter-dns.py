@@ -1,118 +1,83 @@
 import re
 from pathlib import Path
-import logging
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('dns_filter.log', encoding='utf-8')
-    ]
-)
-logger = logging.getLogger(__name__)
-
-class AdGuardRuleValidator:
-    """AdGuard Home规则验证器（支持所有官方语法）[citation:3][citation:8]"""
+class AdGuardDNSFilter:
+    """AdGuard Home DNS黑名单处理器"""
     
     @staticmethod
     def is_valid_rule(line):
         """
-        验证规则是否符合AdGuard Home支持的完整语法：
-        1. Adblock-style语法：||domain^、|https://、/regex/
-        2. Hosts语法：0.0.0.0 domain
+        验证规则是否符合AdGuard Home DNS黑名单语法规范
+        支持类型：
+        1. Adblock语法：||domain^、|https://domain|
+        2. Hosts语法：0.0.0.0 domain（含IPv6）
         3. 纯域名：domain.com
-        4. 正则表达式：/^ads.*\.com$/
-        5. 特殊修饰符规则：||domain^$dnstype=A
+        4. 正则表达式：/ads.*\.com/
+        5. 修饰符规则：||domain^$dnstype=A
         """
         line = line.strip()
-        
-        # 跳过空行和注释[citation:3]
-        if not line or line.startswith(('!', '#', '@@', '=====', '//')):
+        if not line or line.startswith(('!', '#', '@@', '//')):
             return False
             
-        # 匹配Adblock语法[citation:3][citation:8]
-        if re.match(r'^(\|\|[\w.-]+\^|\|https?://|/{2}.*?/)', line):
-            return True
-            
-        # 匹配带修饰符的规则[citation:3]
-        if re.match(r'^[\w|*/].+\$[a-z]+(=.*)?(,.*)?$', line):
-            return True
-            
-        # 匹配Hosts语法[citation:3][citation:4]
-        if re.match(r'^(0\.0\.0\.0|127\.0\.0\.1)\s+[\w.-]+', line):
-            return True
-            
-        # 匹配纯域名规则（需包含点且不含特殊字符）[citation:3]
-        if re.match(r'^([\w-]+\.)+[\w-]+$', line):
-            return True
-            
-        # 匹配正则表达式规则[citation:3]
-        if re.match(r'^/.*/$', line):
-            return True
-            
-        return False
+        # 官方支持的全部DNS过滤规则模式[citation:3][citation:8]
+        patterns = [
+            r'^(\|\|[\w.-]+\^|\|https?://[\w.-]+|)',  # Adblock基础语法
+            r'^([\w.-]+\.)+[\w-]+$',  # 纯域名规则（必须含点）
+            r'^((0\.0\.0\.0|127\.0\.0\.1|::)\s+[\w.-]+)',  # Hosts语法（含IPv6）
+            r'^/.*/$',  # 正则表达式规则
+            r'^\|\|[\w.-]+\^\$[a-z]+(=.*)?(,.*)?$',  # 修饰符规则
+            r'^\|\|[\w.-]+\^\$dnstype=[A-Z]+',  # DNS类型过滤
+            r'^\|\|[\w.-]+\^\$client=([\w.-]+|\d+\.\d+\.\d+\.\d+)'  # 客户端过滤
+        ]
+        return any(re.match(p, line) for p in patterns)
 
     @staticmethod
     def normalize_rule(rule):
         """规则标准化处理（保留原始格式）"""
         return rule.strip()
 
-def filter_dns_rules(input_path, output_path, keep_comments=False):
+def process_dns_blacklist(input_file, output_file):
     """
-    生成AdGuard Home兼容的DNS规则文件
-    :param input_path: 输入文件路径
-    :param output_path: 输出文件路径
-    :param keep_comments: 是否保留关键注释（如! Title等）
+    处理DNS黑名单文件
+    :param input_file: 输入文件路径
+    :param output_file: 输出文件路径
     """
-    input_path = Path(input_path)
-    output_path = Path(output_path)
-
+    input_path = Path(input_file)
+    output_path = Path(output_file)
+    
     if not input_path.exists():
-        logger.error(f"输入文件不存在: {input_path}")
-        raise FileNotFoundError(f"输入文件不存在: {input_path}")
+        print(f"错误：输入文件不存在 {input_path}")
+        return
 
-    try:
-        with input_path.open('r', encoding='utf-8', errors='replace') as infile, \
-             output_path.open('w', encoding='utf-8', newline='\n') as outfile:
+    valid_rules = []
+    with input_path.open('r', encoding='utf-8', errors='replace') as f:
+        for line in f:
+            if AdGuardDNSFilter.is_valid_rule(line):
+                normalized = AdGuardDNSFilter.normalize_rule(line)
+                valid_rules.append(normalized)
+                print(f"已接受: {normalized}")
+            else:
+                print(f"已跳过: {line.strip()}")
 
-            rule_count = 0
-            for line in infile:
-                # 处理关键注释[citation:3]
-                if keep_comments and line.strip().startswith(('! Title:', '! Version:')):
-                    outfile.write(line)
-                    continue
-                    
-                if AdGuardRuleValidator.is_valid_rule(line):
-                    normalized = AdGuardRuleValidator.normalize_rule(line)
-                    outfile.write(normalized + '\n')
-                    rule_count += 1
+    # 按规则类型排序（提升查询性能）[citation:3]
+    sorted_rules = sorted(valid_rules, key=lambda x: (
+        0 if x.startswith('||') else
+        1 if x.startswith(('0.0.0.0', '127.0.0.1', '::')) else
+        2 if '/' in x else 3
+    ))
 
-            logger.info(f"已提取 {rule_count} 条有效规则 -> {output_path}")
-
-    except IOError as e:
-        logger.error(f"文件处理错误: {e}")
-        raise
-
-def main():
-    # 文件路径配置
-    base_dir = Path(__file__).parent.parent  # 指向项目根目录
-    input_file = base_dir / "adblock.txt"    # 混合规则输入文件
-    output_file = base_dir / "dns.txt"      # 规则输出文件
-    
-    # 确保输出目录存在
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    
-    try:
-        filter_dns_rules(
-            input_file, 
-            output_file,
-            keep_comments=True  # 保留关键注释
-        )
-    except Exception as e:
-        logger.error(f"处理失败: {e}")
-        exit(1)
+    with output_path.open('w', encoding='utf-8') as f:
+        f.write('\n'.join(sorted_rules))
+        print(f"\n处理完成！有效规则数: {len(sorted_rules)}")
+        print(f"输出文件: {output_path}")
 
 if __name__ == "__main__":
-    main()
+    # 文件路径配置（仓库根目录）
+    repo_root = Path(__file__).parent.parent
+    input_file = repo_root / "adblock.txt"  # 混合规则输入文件
+    output_file = repo_root / "dns.txt"     # 黑名单输出文件
+    
+    # 自动创建输出目录
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    process_dns_blacklist(input_file, output_file)
