@@ -69,7 +69,7 @@ with open('allow.txt', 'w', encoding='utf-8') as f:
     f.write(cleaned_allow)  # 直接使用已清理的白名单内容
 
 # 文件移动和去重
-target_dir = Path('../data/rules/')
+target_dir = Path('../')
 target_dir.mkdir(exist_ok=True)
 
 def deduplicate_file(filepath):
