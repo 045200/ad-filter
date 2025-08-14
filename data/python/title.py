@@ -6,7 +6,7 @@ import re
 
 HEADER_TEMPLATE = """[Adblock Plus 2.0]
 ! Title: EasyAds
-! Homepage: https://github.com/045200/EasyAds
+! Homepage: https://github.com/045200/ad-filter
 ! Expires: 12 Hours
 ! Version: {timestamp}（北京时间）
 ! Description: 适用于AdGuard的去广告规则，合并优质上游规则并去重整理排列
