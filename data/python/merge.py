@@ -37,7 +37,7 @@ ADGUARD_RULE_PATTERN = re.compile(
 )
 
 def is_block_rule(line):
-    return (line.startswith(('||', '|', '/', '*', '##', '$$')) and not line.startswith('@@')
+    return line.startswith(('||', '|', '/', '*', '##', '$$')) and not line.startswith('@@')
 
 def is_allow_rule(line):
     return line.startswith('@@') or '$dnstype=' in line or '$client=' in line
