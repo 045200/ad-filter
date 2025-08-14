@@ -5,7 +5,7 @@ from typing import Dict, List, Pattern
 import re
 
 HEADER_TEMPLATE = """[Adblock Plus 2.0]
-! Title: EasyAds
+! Title: ad-filter
 ! Homepage: https://github.com/045200/ad-filter
 ! Expires: 12 Hours
 ! Version: {timestamp}（北京时间）
@@ -135,6 +135,9 @@ if __name__ == "__main__":
         'adblock.txt': 'adblock',
         'allow.txt': 'allow',
         'dns.txt': 'dns'
+        'adb.txt': 'adb',
+        'adw.txt': 'adw',
+        'add.txt': 'add'
     }
 
     # 路径配置
