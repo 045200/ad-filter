@@ -17,55 +17,63 @@ def get_beijing_time() -> str:
     utc_time = datetime.datetime.now(pytz.timezone('UTC'))
     return utc_time.astimezone(pytz.timezone('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M:%S')
 
-def process_rule_files(target_files: Set[str], rules_dir: Path) -> None:
+def process_rule_files(target_files: Set[str], base_dir: Path) -> None:
     """
     处理规则文件，添加标准头信息
     
     Args:
         target_files: 需要处理的目标文件名集合
-        rules_dir: 规则文件目录路径
+        base_dir: 仓库根目录路径（文件直接放在这里）
     """
     beijing_time = get_beijing_time()
-    
-    for file_path in rules_dir.glob('*.txt'):
-        if file_path.name not in target_files:
+
+    for file_name in target_files:
+        file_path = base_dir / file_name
+        
+        if not file_path.exists():
+            print(f"⚠️ 文件不存在，跳过处理: {file_path.name}")
             continue
-            
+
         try:
-            # 读取文件内容并计算行数
+            # 读取文件内容并计算有效规则行数
             with file_path.open('r', encoding='utf-8') as file:
                 lines = file.readlines()
-                line_count = len([line for line in lines if line.strip() and not line.startswith('!')])
-                content = ''.join(lines)
-            
-            # 生成新内容
+                line_count = len([line for line in lines 
+                                if line.strip() 
+                                and not line.startswith(('!', '#', '@'))])
+                original_content = ''.join(lines)
+
+            # 生成新内容（保留原始编码声明）
             new_content = HEADER_TEMPLATE.format(
                 timestamp=beijing_time,
                 line_count=line_count
-            ) + content
-            
+            ) + original_content.lstrip('\ufeff')  # 保留可能的BOM头
+
             # 写回文件
             with file_path.open('w', encoding='utf-8') as file:
                 file.write(new_content)
-                
-            print(f"Processed {file_path.name} with {line_count} rules")
-                
-        except IOError as e:
-            print(f"Error processing {file_path.name}: {e}")
+
+            print(f"✅ 已处理 {file_path.name} | 规则数量: {line_count} | 更新时间: {beijing_time}")
+
+        except Exception as e:
+            print(f"❌ 处理文件 {file_path.name} 时出错: {str(e)}")
 
 if __name__ == "__main__":
-    target_files = {'adblock.txt', 'allow.txt', 'dns.txt'}
-    
-    # 修正路径构造
+    # 需要处理的文件列表（直接放在根目录）
+    TARGET_FILES = {'adblock.txt', 'allow.txt', 'dns.txt'}
+
+    # 路径配置（直接从脚本位置计算根目录）
     script_dir = Path(__file__).parent
-    base_dir = script_dir.parent  # 假设脚本在data/python/目录下
-    rules_dir = base_dir / "rules"  # 规则目录在data/rules/
+    base_dir = script_dir.parent.parent  # 假设脚本在 /data/python/ 目录下
     
-    # 调试输出
-    print(f"Looking for rules directory at: {rules_dir}")
-    print(f"Absolute rules directory path: {rules_dir.absolute()}")
-    
-    if not rules_dir.exists():
-        raise FileNotFoundError(f"Rules directory not found: {rules_dir}")
-    
-    process_rule_files(target_files, rules_dir)
+    # 调试信息
+    print("="*50)
+    print(f"📁 仓库根目录: {base_dir.absolute()}")
+    print(f"🔍 正在查找以下文件: {', '.join(TARGET_FILES)}")
+    print("="*50)
+
+    try:
+        process_rule_files(TARGET_FILES, base_dir)
+        print("✨ 所有文件处理完成")
+    except Exception as e:
+        print(f"🛑 主流程错误: {str(e)}")
