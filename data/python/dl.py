@@ -10,7 +10,7 @@ patterns = ['*.txt', '*.mrs']
 # 遍历每个模式并删除匹配的文件
 for pattern in patterns:
     # 使用glob查找匹配的文件
-    for file_path in glob.glob(os.path.join('./', pattern)):
+    for file_path in glob.glob(os.path.join('../', pattern)):
         try:
             if os.path.isfile(file_path):
                 os.unlink(file_path)
