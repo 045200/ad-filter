@@ -2,151 +2,306 @@ import os
 import glob
 import re
 from pathlib import Path
+from typing import List, Set, Pattern, Tuple, Optional
 
+# 全局配置
 os.chdir('tmp')
+TARGET_DIR = Path('../')
+TARGET_DIR.mkdir(exist_ok=True)
 
-# 增强版AdGuard/AdGuard Home规则匹配模式
-ALLOW_PATTERN = re.compile(
-    r'^@@\|\|[\w.-]+\^(\$~?[\w,=-]+)?|'  # 基础域名例外
-    r'^@@##.+|'                          # 元素隐藏例外
-    r'^@@\|\|[\w.-]+\^\$[a-z]+|'        # 各种修饰符例外
-    r'^@@\d+\.\d+\.\d+\.\d+|'           # IP例外
-    r'^@@/[^/]+/|'                       # 正则例外
-    r'^@@\|https?://|'                   # URL例外
-    r'^@@\|\*\.|'                        # 通配符例外
-    r'^@@\|\|[\w.-]+$|'                  # 简单域名例外(无^结尾)
-    r'^@@[\w.-]+\^|'                     # 简化的域名例外
-    r'^@@\|\|[\w.-]+\^\$[a-z]+=[\w.-]+|' # 带值的修饰符
-    r'^@@\|\|[\w.-]+\*?\^|'              # 带通配符的域名
-    r'^@@\|\|[\w.-]+\.\*\|'              # 子域名通配
-    r'^@@\|\|[\w*.-]+\^?[\w*.-]*'        # 更宽松的匹配
-)
+class RuleValidator:
+    """全覆盖的广告拦截规则验证器"""
+    
+    # 基础规则模式（兼容所有拦截器）
+    BASE_PATTERNS = {
+        # 域名规则
+        'domain': r'^\|\|[\w*.-]+\^(?:\$[\w-]+(?:=[\w.-]*)?(?:,~?[\w-]+(?:=[\w.-]*)?)*)?$',
+        'domain_suffix': r'^\|\|\*\.?[\w*.-]+\^',
+        'exact_domain': r'^\|https?://[\w*.-]+/',
+        'regex_domain': r'^/@\|\|[\w*.-]+\^/',
+        
+        # 元素规则
+        'element_hiding': r'^##[^#\s\[].*',
+        'extended_css': r'^#\?#[^#\s\[].*',
+        'exception_hiding': r'^#@#.+',
+        
+        # 网络规则
+        'hosts': r'^\d+\.\d+\.\d+\.\d+\s+[\w*.-]+',
+        'regex': r'^/(?:[^/\\]|\\.)*/[imsxADSUXJ]*$',
+        
+        # 修饰符（兼容所有拦截器）
+        'modifiers': {
+            'basic': r'\$(~?[\w-]+(?:=[\w.-]*)?(?:,~?[\w-]+(?:=[\w.-]*)?)*$',
+            'document': r'document',
+            'script': r'script',
+            'image': r'image',
+            'stylesheet': r'stylesheet',
+            'subrequest': r'subrequest',
+            'popup': r'popup',
+            'xmlhttprequest': r'xmlhttprequest',
+            'websocket': r'websocket',
+            'webrtc': r'webrtc',
+            'font': r'font',
+            'media': r'media',
+            'object': r'object',
+            'other': r'other',
+            'third-party': r'third-party',
+            'first-party': r'~third-party',
+            'domain': r'domain=([\w.-]+|\|[\w.-]+\|)',
+            'sitekey': r'sitekey=[\w/+=-]+',
+            'denyallow': r'denyallow=[\w.|-]+',
+            'redirect': r'redirect(?:-rule)?=[\w-]+',
+            'removeparam': r'removeparam=[^&]+',
+            'csp': r'csp=[\w\s-]+',
+            'header': r'header=[\w-]+',
+            'cookie': r'cookie=[^;]+',
+            'replace': r'replace=/[^/]+(?:/[^/]*)?/$',
+            'jsinject': r'jsinject',
+            'elemhide': r'elemhide',
+            'generichide': r'generichide',
+            'specifichide': r'specificblock',
+            'content': r'content',
+            'urlblock': r'urlblock',
+            'important': r'important',
+            'badfilter': r'badfilter',
+            'empty': r'empty',
+            'mp4': r'mp4',
+        },
+        
+        # 白名单规则
+        'whitelist': {
+            'domain': r'^@@\|\|[\w*.-]+\^',
+            'element': r'^@@##[^#\s]',
+            'regex': r'^@@/[^/]+/',
+            'modifiers': r'^@@\|\|[\w*.-]+\^\$[\w-]+',
+            'document': r'^@@\|\|[\w*.-]+\^\$document',
+        },
+        
+        # 特殊规则（各拦截器特有）
+        'special': {
+            'ublock': r'^\|\|[\w.-]+\^\$.*,\~?\w+',
+            'abp': r'^\|\|[\w.-]+\^\$~?\w+(?:,~?\w+)*',
+            'adguard': r'^\|\|[\w.-]+\^\$(?:[\w-]+=[\w.-]+|ctag|dnstype)',
+            'pihole': r'^(?:[\w*.-]+\s)?[\d.]+[\w*.-]+',
+            'brave': r'^\|\|[\w.-]+\^$$',
+        }
+    }
 
-BLOCK_PATTERN = re.compile(
-    r'^\|\|[\w.-]+\^(\$~?[\w,=-]+)?|'   # 基础域名规则
-    r'^\|\|[\w.-]+\^\$[a-z]+|'          # 各种修饰符
-    r'^##.+|'                            # 元素隐藏
-    r'^#\?#.+|'                          # 扩展CSS选择器
-    r'^#@#.+|'                           # 旧版元素隐藏例外
-    r'^\d+\.\d+\.\d+\.\d+\s+[\w.-]+|'   # Hosts格式
-    r'^/[\w/-]+/|'                       # 正则规则
-    r'^\|\|[\w.-]+\^\$[a-z]+=\w+|'       # 带值的修饰符
-    r'^\|\|\*\.'                         # 通配符规则
-    r'^\|\|[\w.-]+\^?\*|'                # 通配符变体
-    r'^\|\|[\w.-]+\.\*|'                 # 另一种通配符
-    r'^\|\|[\w.-]+$'                     # 简单域名规则
-)
+    @classmethod
+    def compile_patterns(cls) -> Tuple[Pattern, Pattern]:
+        """编译完整的正则表达式模式"""
+        # 黑名单模式
+        block_pattern = '|'.join([
+            cls.BASE_PATTERNS['domain'],
+            cls.BASE_PATTERNS['domain_suffix'],
+            cls.BASE_PATTERNS['exact_domain'],
+            cls.BASE_PATTERNS['regex_domain'],
+            cls.BASE_PATTERNS['element_hiding'],
+            cls.BASE_PATTERNS['extended_css'],
+            cls.BASE_PATTERNS['exception_hiding'],
+            cls.BASE_PATTERNS['hosts'],
+            cls.BASE_PATTERNS['regex'],
+            r'^\|\|[\w.-]+\^\$' + cls.BASE_PATTERNS['modifiers']['basic'],
+            *[rf'^\|\|[\w.-]+\^\${mod}' for mod in cls.BASE_PATTERNS['modifiers'].values() if isinstance(mod, str)],
+            *[rf'^\|\|[\w.-]+\^\${mod}' for mod in cls.BASE_PATTERNS['special'].values()]
+        ])
+        
+        # 白名单模式
+        allow_pattern = '|'.join([
+            cls.BASE_PATTERNS['whitelist']['domain'],
+            cls.BASE_PATTERNS['whitelist']['element'],
+            cls.BASE_PATTERNS['whitelist']['regex'],
+            cls.BASE_PATTERNS['whitelist']['modifiers'],
+            cls.BASE_PATTERNS['whitelist']['document'],
+            r'^@@\d+\.\d+\.\d+\.\d+',
+            r'^@@\|\*\.',
+            r'^@@[\w.-]+\^',
+            r'^@@\|\|[\w.-]+\^\$' + cls.BASE_PATTERNS['modifiers']['basic'],
+            *[rf'^@@\|\|[\w.-]+\^\${mod}' for mod in cls.BASE_PATTERNS['modifiers'].values() if isinstance(mod, str)],
+        ])
+        
+        return re.compile(block_pattern), re.compile(allow_pattern)
 
-def normalize_rules(content):
-    """规则标准化处理"""
-    # 统一域名大小写
-    content = re.sub(r'(\|\|[\w.-]+\^)', lambda m: m.group(1).lower(), content)
-    # 标准化修饰符格式
-    content = re.sub(r'\$(~?domain)=([\w.-]+)', 
-                    lambda m: f'${m.group(1)}={m.group(2).lower()}', content)
-    return content
-
-def clean_rules(content, pattern):
-    """增强版规则清理函数"""
-    lines = []
-    for line in content.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        # 保留注释和空行
-        if line.startswith('!') or pattern.search(line):
-            lines.append(line)
-    return '\n'.join(lines)
-
-def extract_allow_rules(content):
-    """精确提取白名单规则"""
-    return '\n'.join(line for line in content.splitlines() 
-                   if line.startswith('@@') and ALLOW_PATTERN.search(line))
-
-print("合并拦截规则...")
-with open('combined_adblock.txt', 'w', encoding='utf-8') as outfile:
-    for file in glob.glob('adblock*.txt'):
-        with open(file, 'r', encoding='utf-8', errors='ignore') as infile:
-            content = infile.read()
-            outfile.write(normalize_rules(content) + '\n')
-
-print("处理黑名单规则...")
-with open('combined_adblock.txt', 'r', encoding='utf-8') as f:
-    block_content = f.read()
-    extracted_allow = extract_allow_rules(block_content)
-    cleaned_block = clean_rules(block_content, BLOCK_PATTERN)
-
-with open('cleaned_adblock.txt', 'w', encoding='utf-8') as f:
-    f.write(cleaned_block)
-
-print("合并白名单规则...")
-with open('combined_allow.txt', 'w', encoding='utf-8') as outfile:
-    for file in glob.glob('allow*.txt'):
-        with open(file, 'r', encoding='utf-8', errors='ignore') as infile:
-            content = infile.read()
-            outfile.write(normalize_rules(content) + '\n')
-
-print("处理白名单规则...")
-with open('combined_allow.txt', 'r', encoding='utf-8') as f:
-    allow_content = f.read() + '\n' + extracted_allow
-    cleaned_allow = clean_rules(allow_content, ALLOW_PATTERN)
-
-with open('cleaned_allow.txt', 'w', encoding='utf-8') as f:
-    f.write(cleaned_allow)
-
-print("生成最终规则集...")
-with open('cleaned_adblock.txt', 'a', encoding='utf-8') as f:
-    f.write('\n' + cleaned_allow)
-
-with open('allow.txt', 'w', encoding='utf-8') as f:
-    f.write(cleaned_allow)
-
-# 文件处理
-target_dir = Path('../')
-target_dir.mkdir(exist_ok=True)
-
-def deduplicate_file(filepath):
-    """增强版去重函数（保留顺序+注释）"""
-    with open(filepath, 'r+', encoding='utf-8') as f:
-        seen = set()
-        unique_lines = []
-        for line in f:
-            norm_line = line.lower().strip() if not line.startswith('!') else line
-            if norm_line not in seen:
-                seen.add(norm_line)
-                unique_lines.append(line)
-        f.seek(0)
-        f.writelines(unique_lines)
-        f.truncate()
-
-Path('cleaned_adblock.txt').rename(target_dir / 'adblock.txt')
-Path('allow.txt').rename(target_dir / 'allow.txt')
-
-print("规则去重处理...")
-for file in [target_dir / 'adblock.txt', target_dir / 'allow.txt']:
-    if file.exists():
-        deduplicate_file(file)
-
-print("验证规则有效性...")
-def validate_rules(filepath):
-    with open(filepath, 'r', encoding='utf-8') as f:
-        for i, line in enumerate(f, 1):
+class AdblockProcessor:
+    """广告拦截规则处理器"""
+    
+    def __init__(self):
+        self.block_pattern, self.allow_pattern = RuleValidator.compile_patterns()
+    
+    def normalize_rules(self, content: str) -> str:
+        """高级规则标准化"""
+        def normalize_match(match: re.Match) -> str:
+            text = match.group(0)
+            
+            # 统一域名格式
+            if text.startswith(('||', '@@||', '|', '@@|')):
+                text = text.lower()
+                
+            # 标准化修饰符
+            if '$' in text:
+                parts = text.split('$')
+                domain = parts[0]
+                modifiers = '$' + '$'.join(parts[1:]).lower()
+                
+                # 特殊处理修饰符
+                modifiers = re.sub(
+                    r'\$domain=([\w.-]+)',
+                    lambda m: f'$domain={m.group(1).lower()}',
+                    modifiers
+                )
+                text = domain + modifiers
+            return text
+        
+        # 应用标准化
+        content = re.sub(
+            r'(?:\|\||@@\|\||\||@@\|)[\w*.-]+\^?(\$[^$]+)?',
+            normalize_match,
+            content,
+            flags=re.IGNORECASE
+        )
+        
+        # 标准化注释
+        content = re.sub(
+            r'^(!+\s*)(.*)',
+            lambda m: m.group(1) + m.group(2).strip(),
+            content,
+            flags=re.MULTILINE
+        )
+        
+        return content
+    
+    def clean_rules(self, content: str, pattern: Pattern) -> str:
+        """智能规则清理"""
+        lines = []
+        for line in content.splitlines():
             line = line.strip()
-            if line and not line.startswith('!'):
-                if filepath.name == 'adblock.txt':
-                    if not line.startswith('@@') and not BLOCK_PATTERN.search(line):
-                        print(f"警告：第{i}行可能无效 - {line[:50]}...")
-                elif filepath.name == 'allow.txt':
-                    if not line.startswith('@@'):
-                        print(f"警告：第{i}行不是白名单规则 - {line[:50]}...")
-                    elif not ALLOW_PATTERN.search(line):
-                        # 对白名单规则验证更宽松
-                        if not re.match(r'^@@\|\|?[\w*.-]+[\^*]?', line):
-                            print(f"警告：第{i}行可能无效 - {line[:50]}...")
+            if not line:
+                continue
+            
+            # 保留注释
+            if line.startswith('!'):
+                lines.append(line)
+                continue
+            
+            # 验证规则
+            if not pattern.search(line):
+                fixed = self.fix_rule(line)
+                if fixed and pattern.search(fixed):
+                    line = fixed
+                else:
+                    continue
+            
+            lines.append(line)
+        
+        return '\n'.join(lines)
+    
+    def fix_rule(self, line: str) -> Optional[str]:
+        """自动修复常见规则问题"""
+        # 修复域名规则
+        if line.startswith('||') and not line.endswith('^') and '$' not in line:
+            return line + '^'
+        
+        # 修复元素规则
+        if line.startswith(('##', '#@#')) and ' ' in line:
+            return line.split(' ')[0]
+        
+        # 修复修饰符
+        if '$' in line:
+            parts = line.split('$')
+            domain = parts[0]
+            mod = '$' + '$'.join(parts[1:])
+            
+            # 检查已知修饰符
+            for mod_type in RuleValidator.BASE_PATTERNS['modifiers'].values():
+                if isinstance(mod_type, str) and re.search(rf'\${mod_type}', mod):
+                    return domain + mod.lower()
+        
+        return None
+    
+    def process_files(self):
+        """处理规则文件"""
+        print("合并拦截规则...")
+        with open('combined_adblock.txt', 'w', encoding='utf-8') as out:
+            for file in glob.glob('adblock*.txt'):
+                with open(file, 'r', encoding='utf-8', errors='ignore') as f:
+                    out.write(self.normalize_rules(f.read()) + '\n')
+        
+        print("处理黑名单规则...")
+        with open('combined_adblock.txt', 'r', encoding='utf-8') as f:
+            content = f.read()
+            allow_rules = '\n'.join(
+                line for line in content.splitlines() 
+                if line.startswith('@@') and self.allow_pattern.search(line)
+            )
+            block_rules = self.clean_rules(content, self.block_pattern)
+        
+        with open('cleaned_adblock.txt', 'w', encoding='utf-8') as f:
+            f.write(block_rules)
+        
+        print("合并白名单规则...")
+        with open('combined_allow.txt', 'w', encoding='utf-8') as out:
+            for file in glob.glob('allow*.txt'):
+                with open(file, 'r', encoding='utf-8', errors='ignore') as f:
+                    out.write(self.normalize_rules(f.read()) + '\n')
+        
+        print("处理白名单规则...")
+        with open('combined_allow.txt', 'r', encoding='utf-8') as f:
+            content = f.read() + '\n' + allow_rules
+            allow_rules = self.clean_rules(content, self.allow_pattern)
+        
+        with open('allow.txt', 'w', encoding='utf-8') as f:
+            f.write(allow_rules)
+        
+        print("生成最终规则集...")
+        with open('cleaned_adblock.txt', 'a', encoding='utf-8') as f:
+            f.write('\n' + allow_rules)
+        
+        # 移动文件
+        Path('cleaned_adblock.txt').rename(TARGET_DIR / 'adblock.txt')
+        Path('allow.txt').rename(TARGET_DIR / 'allow.txt')
+        
+        print("规则去重处理...")
+        self.deduplicate_files()
+        
+        print("验证规则有效性...")
+        self.validate_files()
+        
+        print("处理完成！生成文件：")
+        print(f"- {TARGET_DIR / 'adblock.txt'}")
+        print(f"- {TARGET_DIR / 'allow.txt'}")
+    
+    def deduplicate_files(self):
+        """文件去重"""
+        for file in [TARGET_DIR / 'adblock.txt', TARGET_DIR / 'allow.txt']:
+            if file.exists():
+                with open(file, 'r+', encoding='utf-8') as f:
+                    seen = set()
+                    unique = []
+                    for line in f:
+                        norm = line.lower().strip() if not line.startswith('!') else line
+                        if norm not in seen:
+                            seen.add(norm)
+                            unique.append(line)
+                    f.seek(0)
+                    f.writelines(unique)
+                    f.truncate()
+    
+    def validate_files(self):
+        """规则验证"""
+        for file in [TARGET_DIR / 'adblock.txt', TARGET_DIR / 'allow.txt']:
+            with open(file, 'r', encoding='utf-8') as f:
+                for i, line in enumerate(f, 1):
+                    line = line.strip()
+                    if not line or line.startswith('!'):
+                        continue
+                    
+                    is_allow = file.name == 'allow.txt'
+                    pattern = self.allow_pattern if is_allow else self.block_pattern
+                    
+                    if not pattern.search(line):
+                        err_type = "白名单" if is_allow else "黑名单"
+                        print(f"警告：{err_type}规则第{i}行可能无效 - {line[:50]}...")
 
-for file in [target_dir / 'adblock.txt', target_dir / 'allow.txt']:
-    validate_rules(file)
-
-print("处理完成！生成文件：")
-print(f"- {target_dir / 'adblock.txt'}")
-print(f"- {target_dir / 'allow.txt'}")
+if __name__ == '__main__':
+    processor = AdblockProcessor()
+    processor.process_files()
