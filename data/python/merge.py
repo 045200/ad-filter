@@ -1,4 +1,3 @@
-```python
 import os
 import glob
 import re
@@ -208,20 +207,17 @@ class AdblockProcessor:
         """高级规则标准化（增强版）"""
         normalized_lines = []
         for line in content.splitlines():
-            try:
-                # 标准化注释
-                if line.startswith('!'):
-                    normalized = re.sub(
-                        r'^(!+\s*)(.*)',
-                        lambda m: m.group(1) + m.group(2).strip(),
-                        line
-                    )
-                else:
-                    normalized = self.normalize_rule(line)
+            # 标准化注释
+            if line.startswith('!'):
+                normalized = re.sub(
+                    r'^(!+\s*)(.*)',
+                    lambda m: m.group(1) + m.group(2).strip(),
+                    line
+                )
+            else:
+                normalized = self.normalize_rule(line)
 
-                normalized_lines.append(normalized)
-            except Exception:
-                continue
+            normalized_lines.append(normalized)
 
         return '\n'.join(normalized_lines)
 
@@ -229,203 +225,177 @@ class AdblockProcessor:
         """智能规则清理（增强版）"""
         lines = []
         for line in content.splitlines():
-            try:
-                line = line.strip()
-                if not line:
-                    continue
-
-                # 保留注释和空行
-                if line.startswith('!'):
-                    lines.append(line)
-                    continue
-
-                # 处理badfilter规则优先
-                if '$badfilter' in line:
-                    lines.insert(0, line)
-                    continue
-
-                # 验证规则
-                if not pattern.search(line):
-                    fixed = self.fix_rule(line)
-                    if fixed and pattern.search(fixed):
-                        line = fixed
-                    else:
-                        continue
-
-                # 域名模糊去重
-                domain = self.extract_domain(line)
-                if domain and domain in self.domain_map:
-                    existing_rule = self.domain_map[domain]
-                    if self.is_superior_rule(line, existing_rule):
-                        self.domain_map[domain] = line
-                        if existing_rule in lines:
-                            lines[lines.index(existing_rule)] = line
-                    continue
-
-                # 精确去重
-                rule_hash = hashlib.md5(line.encode()).hexdigest()
-                if rule_hash not in self.seen_rules:
-                    self.seen_rules.add(rule_hash)
-                    if domain:
-                        self.domain_map[domain] = line
-                    lines.append(line)
-            except Exception:
+            line = line.strip()
+            if not line:
                 continue
+
+            # 保留注释和空行
+            if line.startswith('!'):
+                lines.append(line)
+                continue
+
+            # 处理badfilter规则优先
+            if '$badfilter' in line:
+                lines.insert(0, line)
+                continue
+
+            # 验证规则
+            if not pattern.search(line):
+                fixed = self.fix_rule(line)
+                if fixed and pattern.search(fixed):
+                    line = fixed
+                else:
+                    continue
+
+            # 域名模糊去重
+            domain = self.extract_domain(line)
+            if domain and domain in self.domain_map:
+                existing_rule = self.domain_map[domain]
+                if self.is_superior_rule(line, existing_rule):
+                    self.domain_map[domain] = line
+                    if existing_rule in lines:
+                        lines[lines.index(existing_rule)] = line
+                    continue
+
+            # 精确去重
+            rule_hash = hashlib.md5(line.encode()).hexdigest()
+            if rule_hash not in self.seen_rules:
+                self.seen_rules.add(rule_hash)
+                if domain:
+                    self.domain_map[domain] = line
+                lines.append(line)
 
         return '\n'.join(lines)
 
     def extract_domain(self, rule: str) -> Optional[str]:
         """从规则中提取基础域名（用于模糊去重）"""
-        try:
-            if rule.startswith('||'):
-                return rule.split('^')[0].lower()
-            elif rule.startswith('@@||'):
-                return rule.split('^')[0][2:].lower()
-            elif re.match(r'^\d+\.\d+\.\d+\.\d+', rule):  # Hosts规则
-                return rule.split()[-1].lower()
-            return None
-        except Exception:
-            return None
+        if rule.startswith('||'):
+            return rule.split('^')[0].lower()
+        elif rule.startswith('@@||'):
+            return rule.split('^')[0][2:].lower()
+        elif re.match(r'^\d+\.\d+\.\d+\.\d+', rule):  # Hosts规则
+            return rule.split()[-1].lower()
+        return None
 
     def is_superior_rule(self, new_rule: str, existing_rule: str) -> bool:
         """判断新规则是否比现有规则更优"""
-        try:
-            # 优先保留带修饰符的规则
-            if '$' in new_rule and '$' not in existing_rule:
-                return True
-            # 优先保留更具体的规则
-            if 'specific' in new_rule.lower() and 'specific' not in existing_rule.lower():
-                return True
-            # 优先保留白名单规则
-            if new_rule.startswith('@@') and not existing_rule.startswith('@@'):
-                return True
-            return False
-        except Exception:
-            return False
+        # 优先保留带修饰符的规则
+        if '$' in new_rule and '$' not in existing_rule:
+            return True
+        # 优先保留更具体的规则
+        if 'specific' in new_rule.lower() and 'specific' not in existing_rule.lower():
+            return True
+        # 优先保留白名单规则
+        if new_rule.startswith('@@') and not existing_rule.startswith('@@'):
+            return True
+        return False
 
     def fix_rule(self, line: str) -> Optional[str]:
         """自动修复常见规则问题"""
-        try:
-            # 修复域名规则
-            if line.startswith('||') and not line.endswith('^') and '$' not in line:
-                return line + '^'
+        # 修复域名规则
+        if line.startswith('||') and not line.endswith('^') and '$' not in line:
+            return line + '^'
 
-            # 修复白名单规则
-            if line.startswith('@@||') and '$' not in line:
-                return line + '$document'
+        # 修复白名单规则
+        if line.startswith('@@||') and '$' not in line:
+            return line + '$document'
 
-            # 修复元素规则
-            if line.startswith(('##', '#@#')) and ' ' in line:
-                return line.split(' ')[0]
+        # 修复元素规则
+        if line.startswith(('##', '#@#')) and ' ' in line:
+            return line.split(' ')[0]
 
-            # 修复修饰符
-            if '$' in line:
-                parts = line.split('$')
-                domain = parts[0]
-                mod = '$' + '$'.join(parts[1:])
+        # 修复修饰符
+        if '$' in line:
+            parts = line.split('$')
+            domain = parts[0]
+            mod = '$' + '$'.join(parts[1:])
 
-                for mod_type in RuleValidator.BASE_PATTERNS['modifiers'].values():
-                    if isinstance(mod_type, str) and re.search(rf'\${mod_type}', mod):
-                        return domain + mod.lower()
+            for mod_type in RuleValidator.BASE_PATTERNS['modifiers'].values():
+                if isinstance(mod_type, str) and re.search(rf'\${mod_type}', mod):
+                    return domain + mod.lower()
 
-            # 转换Pi-hole规则
-            if re.match(RuleValidator.BASE_PATTERNS['pihole'], line):
-                return f'||{line}^'
+        # 转换Pi-hole规则
+        if re.match(RuleValidator.BASE_PATTERNS['pihole'], line):
+            return f'||{line}^'
 
-            return None
-        except Exception:
-            return None
+        return None
 
     def process_files(self):
         """处理规则文件主流程"""
         if not self._check_input_files():
             raise FileNotFoundError("缺少输入文件")
 
-        try:
-            # 合并拦截规则
-            print("合并拦截规则...")
-            with open(WORKING_DIR / 'combined_adblock.txt', 'w', encoding='utf-8') as out:
-                for file in WORKING_DIR.glob('adblock*.txt'):
-                    try:
-                        with open(file, 'r', encoding='utf-8', errors='ignore') as f:
-                            content = self.normalize_rules(f.read())
-                            out.write(content + '\n')
-                    except Exception:
-                        continue
+        # 合并拦截规则
+        print("合并拦截规则...")
+        with open(WORKING_DIR / 'combined_adblock.txt', 'w', encoding='utf-8') as out:
+            for file in WORKING_DIR.glob('adblock*.txt'):
+                with open(file, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = self.normalize_rules(f.read())
+                    out.write(content + '\n')
 
-            # 处理黑名单规则
-            print("处理黑名单规则...")
-            with open(WORKING_DIR / 'combined_adblock.txt', 'r', encoding='utf-8') as f:
-                content = f.read()
+        # 处理黑名单规则
+        print("处理黑名单规则...")
+        with open(WORKING_DIR / 'combined_adblock.txt', 'r', encoding='utf-8') as f:
+            content = f.read()
 
-                # 提取白名单规则
-                allow_rules = []
-                for line in content.splitlines():
-                    if line.startswith('@@') and self.allow_pattern.search(line):
-                        allow_rules.append(line)
+            # 提取白名单规则
+            allow_rules = []
+            for line in content.splitlines():
+                if line.startswith('@@') and self.allow_pattern.search(line):
+                    allow_rules.append(line)
 
-                # 处理黑名单规则（并行处理）
-                block_results = []
-                with ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
-                    futures = []
-                    for chunk in self.split_content(content, self.config.chunk_size):
-                        futures.append(executor.submit(
-                            self.clean_rules, 
-                            chunk, 
-                            self.block_pattern
-                        ))
+            # 处理黑名单规则（并行处理）
+            block_results = []
+            with ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
+                futures = []
+                for chunk in self.split_content(content, self.config.chunk_size):
+                    futures.append(executor.submit(
+                        self.clean_rules, 
+                        chunk, 
+                        self.block_pattern
+                    ))
 
-                    for future in as_completed(futures):
-                        try:
-                            block_results.append(future.result())
-                        except Exception:
-                            continue
+                for future in as_completed(futures):
+                    block_results.append(future.result())
 
-                block_rules = '\n'.join(block_results)
+            block_rules = '\n'.join(block_results)
 
-            # 写入黑名单文件（包含白名单规则）
-            with open(WORKING_DIR / 'cleaned_adblock.txt', 'w', encoding='utf-8') as f:
-                f.write(block_rules)
-                if self.config.keep_whitelist_in_blacklist:
-                    f.write('\n' + '\n'.join(allow_rules))
+        # 写入黑名单文件（包含白名单规则）
+        with open(WORKING_DIR / 'cleaned_adblock.txt', 'w', encoding='utf-8') as f:
+            f.write(block_rules)
+            if self.config.keep_whitelist_in_blacklist:
+                f.write('\n' + '\n'.join(allow_rules))
 
-            # 合并白名单规则
-            print("合并白名单规则...")
-            with open(WORKING_DIR / 'combined_allow.txt', 'w', encoding='utf-8') as out:
-                for file in WORKING_DIR.glob('allow*.txt'):
-                    try:
-                        with open(file, 'r', encoding='utf-8', errors='ignore') as f:
-                            out.write(self.normalize_rules(f.read()) + '\n')
-                    except Exception:
-                        continue
+        # 合并白名单规则
+        print("合并白名单规则...")
+        with open(WORKING_DIR / 'combined_allow.txt', 'w', encoding='utf-8') as out:
+            for file in WORKING_DIR.glob('allow*.txt'):
+                with open(file, 'r', encoding='utf-8', errors='ignore') as f:
+                    out.write(self.normalize_rules(f.read()) + '\n')
 
-            # 处理白名单规则
-            print("处理白名单规则...")
-            with open(WORKING_DIR / 'combined_allow.txt', 'r', encoding='utf-8') as f:
-                content = f.read() + '\n' + '\n'.join(allow_rules)
-                allow_rules = self.clean_rules(content, self.allow_pattern)
+        # 处理白名单规则
+        print("处理白名单规则...")
+        with open(WORKING_DIR / 'combined_allow.txt', 'r', encoding='utf-8') as f:
+            content = f.read() + '\n' + '\n'.join(allow_rules)
+            allow_rules = self.clean_rules(content, self.allow_pattern)
 
-            with open(WORKING_DIR / 'allow.txt', 'w', encoding='utf-8') as f:
-                f.write(allow_rules)
+        with open(WORKING_DIR / 'allow.txt', 'w', encoding='utf-8') as f:
+            f.write(allow_rules)
 
-            # 检测冲突
-            self.detect_conflicts(block_rules, allow_rules)
+        # 检测冲突
+        self.detect_conflicts(block_rules, allow_rules)
 
-            # 生成最终文件
-            print("生成最终规则集...")
-            Path(WORKING_DIR / 'cleaned_adblock.txt').rename(TARGET_DIR / 'adblock.txt')
-            Path(WORKING_DIR / 'allow.txt').rename(TARGET_DIR / 'allow.txt')
+        # 生成最终文件
+        print("生成最终规则集...")
+        Path(WORKING_DIR / 'cleaned_adblock.txt').rename(TARGET_DIR / 'adblock.txt')
+        Path(WORKING_DIR / 'allow.txt').rename(TARGET_DIR / 'allow.txt')
 
-            # 文件去重
-            self.deduplicate_files()
+        # 文件去重
+        self.deduplicate_files()
 
-            print("处理完成！生成文件：")
-            print(f"- {TARGET_DIR / 'adblock.txt'}")
-            print(f"- {TARGET_DIR / 'allow.txt'}")
-
-        except Exception as e:
-            print(f"处理过程中发生错误: {e}")
-            raise
+        print("处理完成！生成文件：")
+        print(f"- {TARGET_DIR / 'adblock.txt'}")
+        print(f"- {TARGET_DIR / 'allow.txt'}")
 
     def split_content(self, content: str, chunk_size: int) -> List[str]:
         """将内容分割为多个块用于并行处理"""
@@ -434,55 +404,44 @@ class AdblockProcessor:
 
     def detect_conflicts(self, block_rules: str, allow_rules: str):
         """检测黑白名单规则冲突"""
-        try:
-            black_domains = set(re.findall(r'\|\|([\w.-]+)\^', block_rules))
-            white_domains = set(re.findall(r'@@\|\|([\w.-]+)\^', allow_rules))
-            conflicts = black_domains & white_domains
+        black_domains = set(re.findall(r'\|\|([\w.-]+)\^', block_rules))
+        white_domains = set(re.findall(r'@@\|\|([\w.-]+)\^', allow_rules))
+        conflicts = black_domains & white_domains
 
-            if conflicts:
-                print(f"发现{len(conflicts)}个冲突域名（同时在黑名单和白名单中）")
-                for domain in sorted(conflicts)[:self.config.show_conflicts]:
-                    print(f"- {domain}")
-                if len(conflicts) > self.config.show_conflicts:
-                    print(f"- ...共{len(conflicts)}个冲突（仅显示前{self.config.show_conflicts}个）")
-        except Exception:
-            pass
+        if conflicts:
+            print(f"发现{len(conflicts)}个冲突域名（同时在黑名单和白名单中）")
+            for domain in sorted(conflicts)[:self.config.show_conflicts]:
+                print(f"- {domain}")
+            if len(conflicts) > self.config.show_conflicts:
+                print(f"- ...共{len(conflicts)}个冲突（仅显示前{self.config.show_conflicts}个）")
 
     def deduplicate_files(self):
         """文件去重（增强版）"""
         for file in [TARGET_DIR / 'adblock.txt', TARGET_DIR / 'allow.txt']:
-            try:
-                if file.exists():
-                    with open(file, 'r+', encoding='utf-8') as f:
-                        seen = set()
-                        unique = []
-                        for line in f:
-                            norm = line.lower().strip() if not line.startswith('!') else line
-                            if norm not in seen:
-                                seen.add(norm)
-                                unique.append(line)
-                        f.seek(0)
-                        f.writelines(unique)
-                        f.truncate()
-            except Exception:
-                continue
+            if file.exists():
+                with open(file, 'r+', encoding='utf-8') as f:
+                    seen = set()
+                    unique = []
+                    for line in f:
+                        norm = line.lower().strip() if not line.startswith('!') else line
+                        if norm not in seen:
+                            seen.add(norm)
+                            unique.append(line)
+                    f.seek(0)
+                    f.writelines(unique)
+                    f.truncate()
 
 if __name__ == '__main__':
-    try:
-        # 配置处理参数
-        config = ProcessingConfig(
-            chunk_size=10000,
-            max_workers=4,
-            show_conflicts=10,
-            keep_whitelist_in_blacklist=True  # 确保白名单规则保留在黑名单中
-        )
+    # 配置处理参数
+    config = ProcessingConfig(
+        chunk_size=10000,
+        max_workers=4,
+        show_conflicts=10,
+        keep_whitelist_in_blacklist=True  # 确保白名单规则保留在黑名单中
+    )
 
-        # 切换到工作目录
-        os.chdir(WORKING_DIR)
+    # 切换到工作目录
+    os.chdir(WORKING_DIR)
 
-        processor = AdblockProcessor(config)
-        processor.process_files()
-    except Exception as e:
-        print(f"处理失败: {e}")
-        exit(1)
-```
+    processor = AdblockProcessor(config)
+    processor.process_files()
