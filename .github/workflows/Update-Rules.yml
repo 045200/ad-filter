@@ -46,22 +46,22 @@ jobs:
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
     # 安装 Node.js 和 Git（用于克隆仓库）
-        sudo apt-get update
-        sudo apt-get install -y nodejs npm git
+          sudo apt-get update
+          sudo apt-get install -y nodejs npm git
 
     # 从 AdGuard 官方仓库安装 tsurlfilter
-        git clone https://github.com/AdguardTeam/tsurlfilter.git
-        cd tsurlfilter
-        npm install
-        npm run build
-        sudo npm link  # 全局链接包
+          git clone https://github.com/AdguardTeam/tsurlfilter.git
+          cd tsurlfilter
+          npm install
+          npm run build
+          sudo npm link  # 全局链接包
 
     # 返回工作目录并运行脚本
-        cd ${{ github.workspace }}
-        python ./data/python/rules.py
+          cd ${{ github.workspace }}
+          python ./data/python/rules.py
 
     # 验证输出
-        ls -la adb.txt adw.txt add.txt
+          ls -la adb.txt adw.txt add.txt
    
       - name: Generate mihomo Rules
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
