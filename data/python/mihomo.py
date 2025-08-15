@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import re
 import sys
+import os
 from pathlib import Path
 from datetime import datetime
 import tempfile
@@ -24,7 +25,7 @@ def is_valid_rule(line, is_allow=False):
     line = line.strip()
     if not line or line.startswith('!'):
         return False
-    
+
     if is_allow:
         # 白名单规则必须严格以 @@|| 开头 ^ 结尾
         return bool(re.match(r'^@@\|\|[\w.-]+\^(?:\$[\w,=-]+)?$', line))
@@ -41,7 +42,7 @@ def convert_rule(line, is_allow=False):
     """
     line = line.strip()
     policy = "DIRECT" if is_allow else "REJECT"
-    
+
     # 提取基础域名（忽略修饰符）
     domain = line.split('||')[1].split('^')[0]
     return f"DOMAIN-SUFFIX,{domain},{policy}"
@@ -118,9 +119,10 @@ def main():
         },
         "temp_files": {
             "block": Path(tempfile.gettempdir()) / "block.tmp",
-            "allow": Path(tempfile.gettempdir()) / "allow.tmp"
+            "allow": Path(tempfile.gettempdir()) / "allow.tmp",
+            "merged": Path(tempfile.gettempdir()) / "merged.tmp"  # Added merged file
         },
-        "output": base_dir / "mihomo_rules.mrs",
+        "output": base_dir / "adb.mrs",
         "tool_dir": base_dir / "temp_tools"
     }
 
@@ -142,15 +144,15 @@ def main():
             log("No adw.txt found, proceeding without allow rules")
 
         # 合并规则（白名单优先）
-        with open(config["output"], 'w', encoding='utf-8') as f_out:
+        with open(config["temp_files"]["merged"], 'w', encoding='utf-8') as f_out:
             if config["input_files"]["allow"].exists():
                 with open(config["temp_files"]["allow"], 'r') as f_in:
                     f_out.write(f_in.read())
-            
+
             with open(config["temp_files"]["block"], 'r') as f_in:
                 f_out.write(f_in.read())
 
-                # 转换为Mihomo格式
+        # 转换为Mihomo格式
         if not (tool := download_mihomo_tool(config["tool_dir"])):
             sys.exit(1)
 
@@ -165,8 +167,9 @@ def main():
         error(f"Fatal error: {str(e)}")
         return 1
     finally:
-        # 增强的清理逻辑
-        config["temp_files"]["merged"].unlink(missing_ok=True)
+        # 清理临时文件
+        for temp_file in config["temp_files"].values():
+            temp_file.unlink(missing_ok=True)
         if 'tool' in locals():
             shutil.rmtree(config["tool_dir"], ignore_errors=True)
 
