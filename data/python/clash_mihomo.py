@@ -199,7 +199,7 @@ rules:
 def main():
     try:
         # 配置文件路径
-        base_dir = Path(__file__).parent.parent
+        base_dir = Path(__file__).parent.parent.parent
         config = {
             "input_files": {
                 "block": base_dir / "adblock.txt",
