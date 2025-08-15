@@ -7,16 +7,30 @@ import glob
 # 定义要删除的文件扩展名模式
 patterns = ['*.txt', '*.mrs']
 
+# 获取脚本所在目录的父目录（即仓库根目录）
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+print(f"搜索根目录: {root_dir}")  # 调试用，确认路径是否正确
+
 # 遍历每个模式并删除匹配的文件
 for pattern in patterns:
-    # 使用glob查找匹配的文件
-    for file_path in glob.glob(os.path.join('../', pattern)):
+    # 使用glob查找匹配的文件（非递归，仅在根目录）
+    for file_path in glob.glob(os.path.join(root_dir, pattern)):
         try:
             if os.path.isfile(file_path):
                 os.unlink(file_path)
                 print(f"已删除文件: {file_path}")
         except Exception as e:
             print(f"无法删除文件: {file_path}, 错误: {e}")
+
+    # 如果需要递归搜索子目录，取消以下注释
+    # for file_path in glob.glob(os.path.join(root_dir, '**', pattern), recursive=True):
+    #     try:
+    #         if os.path.isfile(file_path):
+    #             os.unlink(file_path)
+    #             print(f"已删除文件(递归): {file_path}")
+    #     except Exception as e:
+    #         print(f"无法删除文件(递归): {file_path}, 错误: {e}")
 
 # 创建临时文件夹
 os.makedirs("./tmp/", exist_ok=True)
