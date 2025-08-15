@@ -1,27 +1,27 @@
-const { Engine } = require('tsurlfilter');
+// 使用绝对路径引入tsurlfilter（兼容GitHub Actions）
+const { Engine } = require('tsurlfilter/packages/tsurlfilter/dist/engine');
 const fs = require('fs');
-
-// 从命令行参数获取输入文件路径
-const inputFile = process.argv[2];
 
 function classifyRules(rules) {
     const result = { adb: [], adw: [], dns: [] };
     const engine = new Engine();
 
     rules.forEach(rule => {
-        try {
-            engine.addRule(rule);
-            result.adb.push(rule);
+        rule = rule.trim();
+        if (!rule || rule.startsWith('!')) return;
 
-            // 白名单规则
+        try {
+            // 先分类再添加（避免无效规则污染engine）
             if (rule.startsWith('@@')) {
                 result.adw.push(rule);
             }
-
-            // DNS规则（含重写）
             if (rule.includes('$dnsrewrite') || /^\d+\.\d+\.\d+\.\d+\s/.test(rule)) {
                 result.dns.push(rule);
             }
+
+            // 验证规则有效性
+            engine.addRule(rule);
+            result.adb.push(rule);
         } catch (e) {
             console.error(`[SKIPPED] Invalid rule: ${rule}`);
         }
@@ -32,13 +32,13 @@ function classifyRules(rules) {
 
 // 主流程
 try {
-    const rules = fs.readFileSync(inputFile, 'utf-8')
+    const rules = fs.readFileSync(process.argv[2], 'utf-8')
         .split('\n')
-        .filter(line => line.trim() && !line.startsWith('!'));
-    
+        .filter(line => line.trim());
+
     const classified = classifyRules(rules);
     console.log(JSON.stringify(classified));
 } catch (e) {
-    console.error(`❌ 文件读取失败: ${e.message}`);
+    console.error(`❌ 处理失败: ${e.message}`);
     process.exit(1);
 }
