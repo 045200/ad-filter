@@ -405,22 +405,6 @@ class AdblockProcessor:
                     f.writelines(unique)
                     f.truncate()
 
-    def validate_files(self):
-        """规则验证（增强版）"""
-        for file in [TARGET_DIR / 'adblock.txt', TARGET_DIR / 'allow.txt']:
-            with open(file, 'r', encoding='utf-8') as f:
-                for i, line in enumerate(f, 1):
-                    line = line.strip()
-                    if not line or line.startswith('!'):
-                        continue
-
-                    is_allow = file.name == 'allow.txt'
-                    pattern = self.allow_pattern if is_allow else self.block_pattern
-
-                    if not pattern.search(line):
-                        err_type = "白名单" if is_allow else "黑名单"
-                        print(f"警告：{err_type}规则第{i}行可能无效 - {line[:50]}...")
-
 if __name__ == '__main__':
     try:
         processor = AdblockProcessor()
