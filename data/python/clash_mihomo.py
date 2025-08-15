@@ -63,12 +63,13 @@ class BloomFilter:
 class CacheManager:
     """规则缓存管理器"""
     def __init__(self):
-        self.conn = sqlite3.connect(str(CACHE_DB))
+        self.conn = None
+        self.bloom = None
         self._init_db()
-        self.bloom = BloomFilter(BLOOM_FILTER_SIZE)
 
     def _init_db(self) -> None:
         """初始化缓存数据库"""
+        self.conn = sqlite3.connect(str(CACHE_DB))
         cursor = self.conn.cursor()
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS rule_cache (
@@ -89,6 +90,7 @@ class CacheManager:
         self.conn.commit()
 
         # 预加载Bloom filter
+        self.bloom = BloomFilter(BLOOM_FILTER_SIZE)
         cursor.execute("SELECT domain FROM rule_cache")
         for (domain,) in cursor.fetchall():
             self.bloom.add(domain)
@@ -135,7 +137,9 @@ class CacheManager:
 
     def close(self) -> None:
         """关闭数据库连接"""
-        self.conn.close()
+        if self.conn:
+            self.conn.close()
+            self.conn = None
 
 class MihomoManager:
     """Mihomo工具链全自动管理器"""
@@ -220,7 +224,7 @@ class AdRuleConverter:
     }
 
     def __init__(self):
-        self.cache = CacheManager()
+        self.cache = None
         self.stats = {'block': 0, 'allow': 0, 'cached': 0}
         # 预编译正则表达式
         self.rule_patterns: List[Tuple[Pattern, str]] = [
@@ -267,10 +271,11 @@ class AdRuleConverter:
             return None
 
         # 检查缓存
-        cached_rule = self.cache.get_cached_rule(rule['domain'])
-        if cached_rule:
-            self.stats['cached'] += 1
-            return cached_rule
+        if self.cache:
+            cached_rule = self.cache.get_cached_rule(rule['domain'])
+            if cached_rule:
+                self.stats['cached'] += 1
+                return cached_rule
 
         if rule['type'] == 'allow':
             converted = f"DOMAIN-SUFFIX,{rule['domain']},DIRECT"
@@ -282,11 +287,15 @@ class AdRuleConverter:
             self.stats['block'] += 1
 
         # 更新缓存
-        self.cache.cache_rule(rule['domain'], rule['type'], converted)
+        if self.cache:
+            self.cache.cache_rule(rule['domain'], rule['type'], converted)
         return converted
 
     def _process_chunk(self, chunk: List[str], file_hash: str) -> List[str]:
         """处理规则块(用于并行处理)"""
+        # 每个子进程创建自己的缓存连接
+        local_cache = CacheManager()
+        self.cache = local_cache
         converted = []
         for line in chunk:
             rule = self._parse_rule(line)
@@ -294,6 +303,7 @@ class AdRuleConverter:
                 converted_rule = self._convert_rule(rule)
                 if converted_rule:
                     converted.append(converted_rule)
+        local_cache.close()
         return converted
 
     def _file_has_changed(self, file_path: Path) -> bool:
@@ -309,6 +319,8 @@ class AdRuleConverter:
         current_hash = hasher.hexdigest()
 
         # 获取上次记录的文件状态
+        if not self.cache:
+            self.cache = CacheManager()
         meta = self.cache.get_file_meta(file_path)
         if not meta:
             self.cache.update_file_meta(file_path, current_hash)
@@ -365,7 +377,9 @@ class AdRuleConverter:
 
     def close(self):
         """关闭缓存连接"""
-        self.cache.close()
+        if self.cache:
+            self.cache.close()
+            self.cache = None
 
 def main():
     print(f"{datetime.now()} [INFO] 开始广告规则转换")
@@ -418,7 +432,7 @@ rules:
         result = subprocess.run([
             str(mgr.binary_path), "rulegen",
             "-i", tmp.name,
-            "-o", str(REPO_ROOT / "adblock.mrs"),
+            "-o", str(REPO_ROOT / "adb.mrs"),
             "--adblock",
             "--strict" if STRICT_MODE else "--loose"
         ], capture_output=True, text=True)
