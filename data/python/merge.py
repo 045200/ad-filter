@@ -9,7 +9,8 @@ from dataclasses import dataclass
 
 # 全局配置
 WORKING_DIR = Path('tmp')
-TARGET_DIR = Path('../')
+TARGET_DIR = Path('.')
+INPUT_DIR = Path('tmp')
 WORKING_DIR.mkdir(exist_ok=True)
 TARGET_DIR.mkdir(exist_ok=True)
 
@@ -162,8 +163,8 @@ class AdblockProcessor:
 
     def _check_input_files(self) -> bool:
         """检查输入文件是否存在"""
-        adblock_files = list(WORKING_DIR.glob('adblock*.txt'))
-        allow_files = list(WORKING_DIR.glob('allow*.txt'))
+        adblock_files = list(INPUT_DIR.glob('adblock*.txt'))
+        allow_files = list(INPUT_DIR.glob('allow*.txt'))
 
         if not adblock_files:
             print("未找到任何adblock*.txt文件")
@@ -323,12 +324,12 @@ class AdblockProcessor:
     def process_files(self):
         """处理规则文件主流程"""
         if not self._check_input_files():
-            raise FileNotFoundError("缺少输入文件")
+            return
 
         # 合并拦截规则
         print("合并拦截规则...")
         with open(WORKING_DIR / 'combined_adblock.txt', 'w', encoding='utf-8') as out:
-            for file in WORKING_DIR.glob('adblock*.txt'):
+            for file in INPUT_DIR.glob('adblock*.txt'):
                 with open(file, 'r', encoding='utf-8', errors='ignore') as f:
                     content = self.normalize_rules(f.read())
                     out.write(content + '\n')
@@ -369,7 +370,7 @@ class AdblockProcessor:
         # 合并白名单规则
         print("合并白名单规则...")
         with open(WORKING_DIR / 'combined_allow.txt', 'w', encoding='utf-8') as out:
-            for file in WORKING_DIR.glob('allow*.txt'):
+            for file in INPUT_DIR.glob('allow*.txt'):
                 with open(file, 'r', encoding='utf-8', errors='ignore') as f:
                     out.write(self.normalize_rules(f.read()) + '\n')
 
@@ -439,9 +440,6 @@ if __name__ == '__main__':
         show_conflicts=10,
         keep_whitelist_in_blacklist=True  # 确保白名单规则保留在黑名单中
     )
-
-    # 切换到工作目录
-    os.chdir(WORKING_DIR)
 
     processor = AdblockProcessor(config)
     processor.process_files()
