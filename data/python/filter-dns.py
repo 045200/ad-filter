@@ -166,13 +166,14 @@ def write_output_files(output_dir: Path, rules: List[str], allow_rules: List[str
 
 def main():
     try:
-        repo_root = Path(__file__).resolve().parent
-        input_file = repo_root / "adblock.txt"
-        output_dir = repo_root / "output"
-
-        output_dir.mkdir(exist_ok=True)
+        # 使用项目根目录作为工作目录
+        project_root = Path(__file__).resolve().parent.parent  # 项目根目录（./）
+        
+        input_file = project_root / "adblock.txt"     # ./adblock.txt
+        output_dir = project_root                    # ./ (与输入路径一致)
 
         print(f"🔍 Processing: {input_file}")
+        print(f"📁 Output directory: {output_dir}")
 
         # 内存映射读取大文件
         with input_file.open('rb') as f:
