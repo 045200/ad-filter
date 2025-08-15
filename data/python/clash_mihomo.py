@@ -61,89 +61,98 @@ class BloomFilter:
         return True
 
 class CacheManager:
-    """规则缓存管理器"""
-    def __init__(self):
-        self.conn = None
+    """规则缓存管理器(进程安全版)"""
+    def __init__(self, db_path: Path = CACHE_DB):
+        self.db_path = db_path
         self.bloom = None
-        self._init_db()
+        self._init_bloom_filter()
 
-    def _init_db(self) -> None:
-        """初始化缓存数据库"""
-        self.conn = sqlite3.connect(str(CACHE_DB))
-        cursor = self.conn.cursor()
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS rule_cache (
-            domain TEXT PRIMARY KEY,
-            rule_type TEXT,
-            converted_rule TEXT,
-            file_hash TEXT,
-            last_modified REAL
-        )
-        """)
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS file_meta (
-            path TEXT PRIMARY KEY,
-            last_hash TEXT,
-            last_modified REAL
-        )
-        """)
-        self.conn.commit()
-
-        # 预加载Bloom filter
+    def _init_bloom_filter(self) -> None:
+        """初始化Bloom filter"""
         self.bloom = BloomFilter(BLOOM_FILTER_SIZE)
-        cursor.execute("SELECT domain FROM rule_cache")
-        for (domain,) in cursor.fetchall():
-            self.bloom.add(domain)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT domain FROM rule_cache")
+            for (domain,) in cursor.fetchall():
+                self.bloom.add(domain)
+
+    def _get_connection(self) -> sqlite3.Connection:
+        """获取新的数据库连接(每个线程/进程独立)"""
+        conn = sqlite3.connect(str(self.db_path))
+        conn.execute("PRAGMA journal_mode=WAL")  # 启用WAL模式提高并发性能
+        return conn
 
     def get_file_meta(self, file_path: Path) -> Optional[Dict[str, Any]]:
         """获取文件元数据"""
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT last_hash, last_modified FROM file_meta WHERE path = ?",
-            (str(file_path),))
-        row = cursor.fetchone()
-        return {"last_hash": row[0], "last_modified": row[1]} if row else None
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT last_hash, last_modified FROM file_meta WHERE path = ?",
+                (str(file_path),))
+            row = cursor.fetchone()
+            return {"last_hash": row[0], "last_modified": row[1]} if row else None
 
     def update_file_meta(self, file_path: Path, file_hash: str) -> None:
         """更新文件元数据"""
         mtime = file_path.stat().st_mtime
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "INSERT OR REPLACE INTO file_meta VALUES (?, ?, ?)",
-            (str(file_path), file_hash, mtime))
-        self.conn.commit()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO file_meta VALUES (?, ?, ?)",
+                (str(file_path), file_hash, mtime))
+            conn.commit()
 
     def get_cached_rule(self, domain: str) -> Optional[str]:
         """获取缓存规则"""
         if domain not in self.bloom:
             return None
 
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT converted_rule FROM rule_cache WHERE domain = ?",
-            (domain,))
-        row = cursor.fetchone()
-        return row[0] if row else None
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT converted_rule FROM rule_cache WHERE domain = ?",
+                (domain,))
+            row = cursor.fetchone()
+            return row[0] if row else None
 
     def cache_rule(self, domain: str, rule_type: str, converted_rule: str) -> None:
         """缓存规则"""
         if domain not in self.bloom:
             self.bloom.add(domain)
-            cursor = self.conn.cursor()
-            cursor.execute(
-                "INSERT OR REPLACE INTO rule_cache VALUES (?, ?, ?, NULL, NULL)",
-                (domain, rule_type, converted_rule))
-            self.conn.commit()
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT OR REPLACE INTO rule_cache VALUES (?, ?, ?, NULL, NULL)",
+                    (domain, rule_type, converted_rule))
+                conn.commit()
 
-    def close(self) -> None:
-        """关闭数据库连接"""
-        if self.conn:
-            self.conn.close()
-            self.conn = None
+    @classmethod
+    def initialize_database(cls) -> None:
+        """初始化数据库结构(只应在主进程调用)"""
+        if not CACHE_DB.exists():
+            with sqlite3.connect(str(CACHE_DB)) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                CREATE TABLE rule_cache (
+                    domain TEXT PRIMARY KEY,
+                    rule_type TEXT,
+                    converted_rule TEXT,
+                    file_hash TEXT,
+                    last_modified REAL
+                )
+                """)
+                cursor.execute("""
+                CREATE TABLE file_meta (
+                    path TEXT PRIMARY KEY,
+                    last_hash TEXT,
+                    last_modified REAL
+                )
+                """)
+                conn.commit()
 
 class MihomoManager:
     """Mihomo工具链全自动管理器"""
-    
+
     def __init__(self):
         self.tool_dir = REPO_ROOT / "mihomo_tools"
         self.binary_path = None
@@ -180,24 +189,24 @@ class MihomoManager:
             platform = "linux-amd64"  # 可根据实际系统修改
             url = f"https://github.com/MetaCubeX/mihomo/releases/download/{version}/mihomo-{platform}-{version}.gz"
             gz_path = self.tool_dir / f"mihomo-{version}.gz"
-            
+
             print(f"开始下载mihomo {version}...")
             self.download_progress = 0
             urllib.request.urlretrieve(url, gz_path, reporthook=self._progress_hook)
             print("下载完成")
-            
+
             # 解压并设置权限
             print("解压文件中...")
             self.binary_path = self.tool_dir / f"mihomo-{version}"
             with gzip.open(gz_path, 'rb') as f_in:
                 with open(self.binary_path, 'wb') as f_out:
                     shutil.copyfileobj(f_in, f_out)
-            
+
             self.binary_path.chmod(0o755)
             gz_path.unlink()
             print("工具准备就绪")
             return True
-            
+
         except Exception as e:
             print(f"工具下载失败: {str(e)}", file=sys.stderr)
             return False
@@ -207,24 +216,23 @@ class MihomoManager:
         self.latest_version = self._get_latest_version()
         if not self.latest_version:
             return False
-            
+
         self.binary_path = self.tool_dir / f"mihomo-{self.latest_version}"
         if self.binary_path.exists():
             print(f"使用缓存工具: {self.latest_version}")
             return True
-            
+
         return self._download_tool(self.latest_version)
 
 class AdRuleConverter:
     """广告规则转换引擎"""
-    
+
     AD_KEYWORDS = {
         'ad', 'ads', 'advert', 'analytics', 'track', 
         'counter', 'metric', 'pixel', 'beacon'
     }
 
     def __init__(self):
-        self.cache = None
         self.stats = {'block': 0, 'allow': 0, 'cached': 0}
         # 预编译正则表达式
         self.rule_patterns: List[Tuple[Pattern, str]] = [
@@ -255,7 +263,7 @@ class AdRuleConverter:
                         'domain': match.group(1).replace('*.', ''),
                         'raw': line
                     }
-                
+
                 domain = match.group(1) if pattern_type != 'hosts' else match.group(2)
                 return {
                     'type': 'block',
@@ -265,17 +273,16 @@ class AdRuleConverter:
                 }
         return None
 
-    def _convert_rule(self, rule: Dict) -> Optional[str]:
+    def _convert_rule(self, rule: Dict, cache: CacheManager) -> Optional[str]:
         """高精度规则转换"""
         if not rule['domain'] or '*' in rule['domain']:
             return None
 
         # 检查缓存
-        if self.cache:
-            cached_rule = self.cache.get_cached_rule(rule['domain'])
-            if cached_rule:
-                self.stats['cached'] += 1
-                return cached_rule
+        cached_rule = cache.get_cached_rule(rule['domain'])
+        if cached_rule:
+            self.stats['cached'] += 1
+            return cached_rule
 
         if rule['type'] == 'allow':
             converted = f"DOMAIN-SUFFIX,{rule['domain']},DIRECT"
@@ -287,23 +294,22 @@ class AdRuleConverter:
             self.stats['block'] += 1
 
         # 更新缓存
-        if self.cache:
-            self.cache.cache_rule(rule['domain'], rule['type'], converted)
+        cache.cache_rule(rule['domain'], rule['type'], converted)
         return converted
 
-    def _process_chunk(self, chunk: List[str], file_hash: str) -> List[str]:
+    def _process_chunk(self, chunk: List[str], file_path: str) -> List[str]:
         """处理规则块(用于并行处理)"""
-        # 每个子进程创建自己的缓存连接
-        local_cache = CacheManager()
-        self.cache = local_cache
+        # 每个子进程创建自己的缓存管理器
+        cache = CacheManager()
+        converter = AdRuleConverter()
         converted = []
+        
         for line in chunk:
-            rule = self._parse_rule(line)
+            rule = converter._parse_rule(line)
             if rule:
-                converted_rule = self._convert_rule(rule)
+                converted_rule = converter._convert_rule(rule, cache)
                 if converted_rule:
                     converted.append(converted_rule)
-        local_cache.close()
         return converted
 
     def _file_has_changed(self, file_path: Path) -> bool:
@@ -319,16 +325,15 @@ class AdRuleConverter:
         current_hash = hasher.hexdigest()
 
         # 获取上次记录的文件状态
-        if not self.cache:
-            self.cache = CacheManager()
-        meta = self.cache.get_file_meta(file_path)
+        cache = CacheManager()
+        meta = cache.get_file_meta(file_path)
         if not meta:
-            self.cache.update_file_meta(file_path, current_hash)
+            cache.update_file_meta(file_path, current_hash)
             return True
 
         # 检查文件是否修改
         if meta['last_hash'] != current_hash or meta['last_modified'] < file_path.stat().st_mtime:
-            self.cache.update_file_meta(file_path, current_hash)
+            cache.update_file_meta(file_path, current_hash)
             return True
         return False
 
@@ -375,15 +380,12 @@ class AdRuleConverter:
         print(f"文件处理完成: {len(converted)}条有效规则 (缓存命中: {self.stats['cached']})")
         return converted
 
-    def close(self):
-        """关闭缓存连接"""
-        if self.cache:
-            self.cache.close()
-            self.cache = None
-
 def main():
     print(f"{datetime.now()} [INFO] 开始广告规则转换")
-    
+
+    # 初始化数据库(主进程)
+    CacheManager.initialize_database()
+
     # 1. 准备mihomo工具链
     print("准备mihomo工具链...")
     mgr = MihomoManager()
@@ -398,7 +400,7 @@ def main():
         'allow': REPO_ROOT / "allow.txt",
         'block': REPO_ROOT / "adblock.txt"
     }
-    
+
     rules = []
     for name, path in input_files.items():
         file_rules = converter.process_file(path, is_allow=(name == 'allow'))
@@ -447,8 +449,6 @@ rules:
     print(f"白名单规则: {converter.stats['allow']}条")
     print(f"缓存命中: {converter.stats['cached']}条")
     print(f"输出文件: {REPO_ROOT/'adblock.mrs'}")
-    
-    converter.close()
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()  # 确保在Windows下打包后多进程正常工作
