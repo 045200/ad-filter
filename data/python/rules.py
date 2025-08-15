@@ -11,7 +11,7 @@ except ImportError:
     ADBLOCK_AVAILABLE = False
 
 # 路径配置
-ROOT_DIR = Path(__file__).absolute().parent.parent
+ROOT_DIR = Path(__file__).absolute().parent.parent.parent
 INPUT_FILE = ROOT_DIR / 'adblock.txt'
 OUTPUT_FILES = {
     'adb': ROOT_DIR / 'adb.txt',
