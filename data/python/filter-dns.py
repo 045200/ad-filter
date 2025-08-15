@@ -9,8 +9,8 @@ from typing import List, Tuple, Optional, Dict
 import mmap
 
 class AdGuardHomeRuleValidator:
-    """AdGuard Home DNS规则验证器"""
-
+    """增强版AdGuard Home DNS规则验证器"""
+    
     @staticmethod
     def _compile_patterns() -> Dict[str, re.Pattern]:
         return {
@@ -23,18 +23,28 @@ class AdGuardHomeRuleValidator:
                 r'dnstype=[\w,]+|'
                 r'denyallow=[\w.|-]+|'
                 r'badfilter|'
-                r'important'
+                r'important|'
+                r'document|'
+                r'redirect(?:=[\w.:/-]+)?|'
+                r'removeparam(?:=[^,]+)?|'
+                r'replace=/.*/[ims]*'
                 r')(?:,~?[\w.=-]+)*$'
             ),
             'hosts': re.compile(
                 r'^((?:\d{1,3}\.){3}\d{1,3}|[\da-fA-F:]+(?:/\d{1,3})?)\s+'
                 r'([\w.-]+|xn--[\w-]+)(?:\s*#.*)?$'
             ),
-            'regex': re.compile(r'^/.*/[ims]*(?:\$[\w,=-]+)?$'),
+            'regex': re.compile(r'^/(?:\\/|[^/])+/[ims]*(?:\$[\w,=-]+)?$'),
             'allow': re.compile(
-                r'^@@\|\|([\w.*-]+|xn--[\w-]+)\^(?:\$[\w,=-]+)?|'
+                r'^@@\|\|([\w.*-]+|xn--[\w-]+)\^(?:\$[\w,=-]+)|'
                 r'^@@\d+\.\d+\.\d+\.\d+(?:/\d+)?|'
                 r'^@@/.*/[ims]*(?:\$[\w,=-]+)?'
+            ),
+            'dnsrewrite': re.compile(
+                r'^\|\|[\w.-]+\^\$dnsrewrite='
+                r'(?:NOERROR|NXDOMAIN|SERVFAIL|REFUSED);'
+                r'(?:A|AAAA|CNAME|TXT|MX|NS|SVBC|HTTPS)'
+                r'(?:;[^;]+)*$'
             )
         }
 
@@ -42,7 +52,7 @@ class AdGuardHomeRuleValidator:
         self.patterns = self._compile_patterns()
 
     def validate(self, line: str) -> Optional[str]:
-        line = line.strip()
+        line = re.sub(r'[ \t]#.*$', '', line.strip())
         if not line or line[0] in ('!', '#', '['):
             return None
 
@@ -50,6 +60,9 @@ class AdGuardHomeRuleValidator:
             if self.patterns['allow'].match(line):
                 return line
             return None
+
+        if self.patterns['dnsrewrite'].match(line):
+            return line
 
         if self.patterns['modifiers'].match(line):
             return line
@@ -123,35 +136,36 @@ def write_output_files(output_dir: Path, rules: List[str], allow_rules: List[str
         ("dnsallow.txt", sorted(allow_rules, key=sort_key))
     ]:
         with (output_dir / filename).open('w', encoding='utf-8') as f:
-            f.write(f"! Title: AdGuard Home {'DNS Rules' if filename == 'dns.txt' else 'Allowlist'}\n")
-            f.write(f"! Updated: {datetime.now().isoformat()}\n")
-            if filename == "dnsallow.txt":
-                f.write("! Contains exception rules only\n\n")
             f.write("\n".join(content))
+            f.write("\n")  # 确保文件以换行符结束
 
 def main():
     try:
-        # 使用repo变量设置路径
-        repo_path = os.getenv('REPO_PATH', os.getcwd())
-        repo = Path(repo_path).resolve()
+        # 获取脚本所在目录并计算仓库根目录
+        script_dir = Path(__file__).parent
+        repo_root = script_dir.parent.parent  # 假设脚本在/data/python/，则父目录的父目录是仓库根
         
-        input_file = repo / "adblock.txt"
-        output_dir = repo
+        # 输入文件路径 - 在仓库根目录
+        input_file = repo_root / "adblock.txt"
+        # 输出目录 - 也在仓库根目录
+        output_dir = repo_root
 
-        print(f"🏠 Repository root: {repo}")
+        print(f"🏠 Repository root: {repo_root}")
         print(f"📂 Input file: {input_file}")
         print(f"📂 Output directory: {output_dir}")
 
         if not input_file.exists():
             raise FileNotFoundError(f"Input file not found at: {input_file}")
 
+        # 创建输出目录(如果不存在)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
         with input_file.open('rb') as f:
             with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
                 lines = mm.read().decode('utf-8', errors='replace').splitlines()
 
-        valid_rules, allow_rules = process_rules_concurrently(
-            lines, AdGuardHomeRuleValidator()
-        )
+        validator = AdGuardHomeRuleValidator()
+        valid_rules, allow_rules = process_rules_concurrently(lines, validator)
 
         stats = analyze_rules(valid_rules + allow_rules)
         print("\n📊 Statistics:")
@@ -170,5 +184,6 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
-    from datetime import datetime
     main()
+
+联网搜索adguard home的语法，核实脚本中的语法是否完整全覆盖，如果未全覆盖则拓展改进验证逻辑
