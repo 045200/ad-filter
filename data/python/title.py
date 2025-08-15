@@ -1,8 +1,7 @@
 import datetime
 import pytz
 from pathlib import Path
-from typing import Dict, List, Pattern
-import re
+from typing import Dict
 
 HEADER_TEMPLATE = """[Adblock Plus 2.0]
 ! Title: ad-filter
@@ -13,87 +12,25 @@ HEADER_TEMPLATE = """[Adblock Plus 2.0]
 ! Total count: {line_count}
 """
 
-# 通用规则模式
-COMMON_PATTERNS = {
-    'comment': re.compile(r'^!'),
-    'empty': re.compile(r'^\s*$'),
-    'basic': re.compile(r'^[^/*|@"!]+$'),
-    'regex': re.compile(r'^/.*/$'),
-    'hosts': re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1)\s+'),
-    'domain': re.compile(r'^\|\|([^*^|^~^@^/]+)\^?$')
-}
-
-# 白名单特有规则模式
-ALLOWLIST_PATTERNS = {
-    'exception': re.compile(r'^@@'),
-    'element_unhide': re.compile(r'^#@#'),
-    'scriptlet_exception': re.compile(r'#@%#'),
-    'content_exception': re.compile(r'^@@\|\|'),
-    'document_exception': re.compile(r'^@@\$\$'),
-    'extension_exception': re.compile(r'^@@\$\$extension'),
-    'specific_exception': re.compile(r'^@@\|\|[^*]+\^([^*]*\*[^*]*)*$'),
-    'wildcard_exception': re.compile(r'^@@\|\|[^*]+\*[^*]+\^$')
-}
-
-# 广告拦截规则模式
-BLOCKLIST_PATTERNS = {
-    'element_hiding': re.compile(r'^##'),
-    'network': re.compile(r'^\|\|'),
-    'scriptlet': re.compile(r'#%#'),
-    'redirect': re.compile(r'\$redirect(-rule)?='),
-    'removeparam': re.compile(r'\$removeparam=')
-}
-
 def get_beijing_time() -> str:
     """获取当前北京时间"""
     utc_time = datetime.datetime.now(pytz.timezone('UTC'))
     return utc_time.astimezone(pytz.timezone('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M:%S')
 
-def is_allowlist_rule(line: str) -> bool:
-    """专门处理白名单规则识别"""
-    line = line.strip()
-    
-    # 检查白名单特有规则
-    for pattern in ALLOWLIST_PATTERNS.values():
-        if pattern.search(line):
-            return True
-    
-    # 检查通用有效规则
-    if (COMMON_PATTERNS['basic'].match(line) or 
-        COMMON_PATTERNS['regex'].match(line) or 
-        COMMON_PATTERNS['hosts'].match(line)):
-        return True
-    
-    return False
-
-def is_blocklist_rule(line: str) -> bool:
-    """广告拦截规则识别"""
-    line = line.strip()
-    
-    # 检查拦截规则
-    for pattern in BLOCKLIST_PATTERNS.values():
-        if pattern.search(line):
-            return True
-    
-    # 检查通用有效规则
-    if (COMMON_PATTERNS['basic'].match(line) or 
-        COMMON_PATTERNS['regex'].match(line) or 
-        COMMON_PATTERNS['domain'].match(line)):
-        return True
-    
-    return False
-
-def is_dns_rule(line: str) -> bool:
-    """DNS规则识别"""
-    line = line.strip()
-    return (COMMON_PATTERNS['hosts'].match(line) or 
-            COMMON_PATTERNS['domain'].match(line))
+def count_valid_lines(lines: list) -> int:
+    """统计有效行数（非空且非注释行）"""
+    count = 0
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith('!'):
+            count += 1
+    return count
 
 def process_rule_files(target_files: Dict[str, str], base_dir: Path) -> None:
-    """处理规则文件，添加标准头信息（增强版）"""
+    """处理规则文件，添加标准头信息（简化版）"""
     beijing_time = get_beijing_time()
 
-    for file_name, file_type in target_files.items():
+    for file_name in target_files:
         file_path = base_dir / file_name
 
         if not file_path.exists():
@@ -103,15 +40,7 @@ def process_rule_files(target_files: Dict[str, str], base_dir: Path) -> None:
         try:
             with file_path.open('r', encoding='utf-8') as file:
                 lines = file.readlines()
-                
-                # 根据文件类型选择验证函数
-                if file_type == 'allow':
-                    line_count = sum(1 for line in lines if is_allowlist_rule(line))
-                elif file_type == 'dns':
-                    line_count = sum(1 for line in lines if is_dns_rule(line))
-                else:
-                    line_count = sum(1 for line in lines if is_blocklist_rule(line))
-
+                line_count = count_valid_lines(lines)
                 original_content = ''.join(lines)
 
             # 生成新内容
@@ -124,7 +53,7 @@ def process_rule_files(target_files: Dict[str, str], base_dir: Path) -> None:
             with file_path.open('w', encoding='utf-8') as file:
                 file.write(new_content)
 
-            print(f"✅ 已处理 {file_name} | 规则总数: {line_count} | 文件类型: {file_type}")
+            print(f"✅ 已处理 {file_name} | 规则总数: {line_count}")
 
         except Exception as e:
             print(f"❌ 处理 {file_name} 出错: {str(e)}")
