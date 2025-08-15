@@ -45,27 +45,28 @@ jobs:
       - name: Process AdGuard Rules
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
-          # 安装 Node.js 和 Git（用于克隆仓库）
-          sudo apt-get update
-          sudo apt-get install -y nodejs npm git
+          # 使用 Node.js 官方源安装最新版本
+          curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+          sudo apt-get install -y nodejs
           
-          # 从 AdGuard 官方仓库安装 tsurlfilter
+          # 确保使用最新 npm
+          sudo npm install -g npm@latest
+          
+          # 克隆仓库并使用 yarn 安装（更可靠）
           git clone https://github.com/AdguardTeam/tsurlfilter.git
           cd tsurlfilter
-          npm install
-          npm run build
-          sudo npm link  # 全局链接包
+          sudo npm install -g yarn
+          yarn install --frozen-lockfile
+          yarn build
+          sudo npm link
           
           # 返回工作目录并运行脚本
           cd ${{ github.workspace }}
           python ./data/python/rules.py
-          
-          # 验证输出
           ls -la adb.txt adw.txt add.txt
 
       - name: Generate mihomo Rules
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
-        working-directory: ${{ github.workspace }}
         run: |
           python ./data/python/mihomo.py
 
@@ -96,7 +97,7 @@ jobs:
             git push origin master && break || sleep 5
           done
 
-      - name: Delete workflow runs 
+      - name: Clean up workflow runs 
         uses: Mattraks/delete-workflow-runs@main
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
