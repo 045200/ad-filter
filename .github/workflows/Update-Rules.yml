@@ -1,4 +1,4 @@
-name: Update Rules
+name: Update Rules (简化版)
 on: 
   workflow_dispatch:
   schedule:
@@ -43,32 +43,18 @@ jobs:
           python ./data/python/filter-dns.py
 
       - name: Setup Node.js 22.x
-        if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         uses: actions/setup-node@v4
         with:
           node-version: '22.x'
-          cache: 'yarn'
 
-      - name: Process AdGuard Rules
+      - name: Process AdGuard Rules (预构建版)
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
-          # 安装构建工具
-          sudo apt-get update
-          sudo apt-get install -y git python3-pip
-          
-          # 克隆仓库
-          git clone https://github.com/AdguardTeam/tsurlfilter.git
-          cd tsurlfilter
-          
-          # 使用 yarn 安装依赖
-          yarn install --ignore-engines
-          yarn build
-          
-          # 全局链接
-          sudo npm link
-          
-          # 返回工作目录并处理规则
-          cd ${{ github.workspace }}
+          # 安装预编译版本
+          npm install -g @adguard/tsurlfilter
+          echo "NODE_PATH=$(npm root -g)" >> $GITHUB_ENV
+
+          # 处理规则
           python ./data/python/rules.py
           ls -la adb.txt adw.txt add.txt
 
@@ -99,10 +85,8 @@ jobs:
       - name: Sync and Push Changes
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
-          for i in 1 2 3; do
-            git pull --rebase origin master
-            git push origin master && break || sleep 5
-          done
+          git pull --rebase origin master
+          git push origin master
 
       - name: Clean up workflow runs 
         uses: Mattraks/delete-workflow-runs@main
