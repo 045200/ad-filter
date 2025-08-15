@@ -45,7 +45,7 @@ jobs:
       - name: Process AdGuard Rules
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
-          pip install adblock
+          pip install pyadguard
           python ./data/python/rules.py
           ls -la adb.txt adw.txt add.txt
    
