@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
+"""
+广告规则转换终极完整版
+功能：
+1. 自动获取最新mihomo版本
+2. 支持五大拦截器规则转换
+3. 生成带广告优化参数的.mrs文件
+4. 严格/宽容模式可选
+"""
+
 import os
 import re
 import sys
+import json
 import gzip
 import shutil
 import hashlib
@@ -10,255 +20,211 @@ from pathlib import Path
 from datetime import datetime
 import tempfile
 import subprocess
+from typing import List, Set, Dict, Optional
 
-def log(message):
-    print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} [INFO] {message}")
+# 配置常量
+REPO_ROOT = Path(__file__).parent.parent.parent
+STRICT_MODE = False  # 广告规则严格模式开关
 
-def error(message):
-    print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} [ERROR] {message}", file=sys.stderr)
+class MihomoManager:
+    """Mihomo工具链全自动管理器"""
+    
+    def __init__(self):
+        self.tool_dir = REPO_ROOT / "mihomo_tools"
+        self.binary_path = None
+        self.latest_version = None
 
-def is_block_rule(line):
-    """检测所有可能的广告拦截规则格式"""
-    line = line.strip()
-    if not line or line.startswith(('!', '#', '@@')):
-        return False
+    def _get_latest_version(self) -> Optional[str]:
+        """获取GitHub最新发行版"""
+        try:
+            with urllib.request.urlopen(
+                "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest",
+                timeout=10
+            ) as response:
+                data = json.loads(response.read())
+                return data['tag_name']
+        except Exception as e:
+            print(f"获取最新版本失败: {str(e)}", file=sys.stderr)
+            return None
 
-    # 1. 标准AdBlock语法
-    if re.match(r'^\|\|[\w.-]+\^(?:\$~?[\w,=-]+)?$', line):
-        return True
-
-    # 2. Hosts语法
-    if re.match(r'^(0\.0\.0\.0|127\.0\.0\.1)\s+[\w.-]+$', line):
-        return True
-
-    # 3. 纯域名规则（确保是有效域名）
-    if re.match(r'^([\w.-]+)$', line) and '.' in line and not line.startswith(('*', '.')):
-        return True
-
-    # 4. 通配符规则（仅限广告相关）
-    if '*' in line and any(kw in line.lower() for kw in ('ad', 'track', 'analytics')):
-        return True
-
-    return False
-
-def is_allow_rule(line):
-    """检测广告白名单规则"""
-    line = line.strip()
-    if not line:
-        return False
-
-    # 1. AdGuard例外语法
-    if re.match(r'^@@\|\|[\w.-]+\^$', line):
-        return True
-
-    # 2. 纯域名白名单
-    if re.match(r'^[\w.-]+$', line) and '.' in line:
-        return True
-
-    return False
-
-def convert_rule(line, is_allow=False):
-    """精准转换为Mihomo兼容格式"""
-    line = line.strip()
-    policy = "DIRECT" if is_allow else "REJECT"
-
-    # 1. 处理纯域名规则
-    if re.match(r'^[\w.-]+$', line) and '.' in line:
-        if line.startswith('*.'):  # 通配符处理
-            return f"DOMAIN-SUFFIX,{line[2:]},{policy}"
-        return f"DOMAIN,{line},{policy}"
-
-    # 2. 标准AdBlock规则
-    if line.startswith("||") and line.endswith("^"):
-        return f"DOMAIN-SUFFIX,{line[2:-1]},{policy}"
-
-    # 3. Hosts规则
-    if match := re.match(r'^(0\.0\.0\.0|127\.0\.0\.1)\s+([\w.-]+)$', line):
-        return f"DOMAIN,{match.group(2)},{policy}"
-
-    # 4. 保留已有Mihomo语法
-    if re.match(r'^(DOMAIN|DOMAIN-SUFFIX),[\w.-]+,(REJECT|DIRECT)$', line):
-        return line
-
-    return None
-
-def process_rules(input_path, output_path, is_allow=False):
-    """带严格校验的规则处理流程"""
-    try:
-        existing_hashes = set()
-        if output_path.exists():
-            with open(output_path, 'r', encoding='utf-8') as f:
-                existing_hashes.update(hashlib.md5(line.encode()).hexdigest() for line in f)
-
-        # 尝试多种编码方式打开输入文件
-        encodings = ['utf-8', 'latin-1', 'gbk', 'utf-16']
-        input_content = None
-        
-        for encoding in encodings:
-            try:
-                with open(input_path, 'r', encoding=encoding) as f:
-                    input_content = f.readlines()
-                break
-            except UnicodeDecodeError:
-                continue
-
-        if input_content is None:
-            error(f"Failed to decode {input_path} with tried encodings: {encodings}")
+    def _download_tool(self, version: str) -> bool:
+        """下载并解压mihomo工具"""
+        try:
+            self.tool_dir.mkdir(parents=True, exist_ok=True)
+            platform = "linux-amd64"  # 可根据实际系统修改
+            url = f"https://github.com/MetaCubeX/mihomo/releases/download/{version}/mihomo-{platform}-{version}.gz"
+            gz_path = self.tool_dir / f"mihomo-{version}.gz"
+            
+            print(f"下载mihomo {version}...")
+            urllib.request.urlretrieve(url, gz_path)
+            
+            # 解压并设置权限
+            self.binary_path = self.tool_dir / f"mihomo-{version}"
+            with gzip.open(gz_path, 'rb') as f_in:
+                with open(self.binary_path, 'wb') as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+            
+            self.binary_path.chmod(0o755)
+            gz_path.unlink()
+            return True
+            
+        except Exception as e:
+            print(f"工具下载失败: {str(e)}", file=sys.stderr)
             return False
 
-        with open(output_path, 'a' if output_path.exists() else 'w', encoding='utf-8') as f_out:
-            for line in input_content:
-                line = line.strip()
-                if not line:
-                    continue
+    def prepare(self) -> bool:
+        """准备最新版mihomo工具链"""
+        if not (self.latest_version := self._get_latest_version()):
+            return False
+            
+        self.binary_path = self.tool_dir / f"mihomo-{self.latest_version}"
+        if self.binary_path.exists():
+            print(f"使用缓存工具: {self.latest_version}")
+            return True
+            
+        return self._download_tool(self.latest_version)
 
-                # 特殊处理纯域名白名单
-                if is_allow and re.match(r'^[\w.-]+$', line) and '.' in line:
-                    converted = f"DOMAIN,{line},DIRECT"
-                else:
-                    rule_check = is_allow_rule(line) if is_allow else is_block_rule(line)
-                    if not rule_check:
-                        continue
-                    converted = convert_rule(line, is_allow)
+class AdRuleConverter:
+    """广告规则转换引擎"""
+    
+    AD_KEYWORDS = {
+        'ad', 'ads', 'advert', 'analytics', 'track', 
+        'counter', 'metric', 'pixel', 'beacon'
+    }
 
-                if converted:
-                    rule_hash = hashlib.md5(converted.encode()).hexdigest()
-                    if rule_hash not in existing_hashes:
-                        f_out.write(converted + '\n')
-                        existing_hashes.add(rule_hash)
+    def __init__(self):
+        self.rule_cache: Set[str] = set()
+        self.stats = {'block': 0, 'allow': 0}
 
-        return True
-    except Exception as e:
-        error(f"Rule processing failed: {str(e)}")
-        return False
+    def _is_ad_related(self, domain: str) -> bool:
+        """宽松模式广告检测"""
+        domain = domain.lower()
+        return any(kw in domain for kw in self.AD_KEYWORDS)
 
-def download_mihomo_tool(tool_dir):
-    """带缓存校验的工具下载"""
-    try:
-        tool_dir = Path(tool_dir)
-        tool_dir.mkdir(parents=True, exist_ok=True)
+    def _parse_rule(self, line: str) -> Optional[Dict]:
+        """支持所有主流广告规则语法[citation:1][citation:6]"""
+        line = line.strip()
+        if not line or line.startswith(('!', '#')):
+            return None
 
-        # 获取最新版本
-        version_url = "https://github.com/MetaCubeX/mihomo/releases/latest/download/version.txt"
-        with urllib.request.urlopen(version_url, timeout=10) as resp:
-            version = resp.read().decode('utf-8').strip()
-
-        tool_name = f"mihomo-linux-amd64-{version}"
-        tool_path = tool_dir / tool_name
-
-        # 使用缓存文件
-        if tool_path.exists():
-            log(f"Using cached tool: {tool_name}")
-            return tool_path
-
-        # 下载工具
-        tool_url = f"https://github.com/MetaCubeX/mihomo/releases/latest/download/{tool_name}.gz"
-        log(f"Downloading {tool_name}...")
-        urllib.request.urlretrieve(tool_url, f"{tool_path}.gz")
-
-        # 解压并校验
-        with gzip.open(f"{tool_path}.gz", 'rb') as f_in:
-            with open(tool_path, 'wb') as f_out:
-                shutil.copyfileobj(f_in, f_out)
-
-        tool_path.chmod(0o755)
-        os.remove(f"{tool_path}.gz")
-        return tool_path
-
-    except Exception as e:
-        error(f"Tool download failed: {str(e)}")
-        return None
-
-def convert_to_mrs(input_file, output_file, tool_path):
-    """生成严格校验的MRS文件"""
-    try:
-        # 添加广告规则专用参数
-        with open(input_file, 'r+', encoding='utf-8') as f:
-            content = f.read()
-            if "params:" not in content:
-                content = """params:
-  enable-adblock: true
-  adblock-speedup: true
-  strict-mode: true
-rules:
-""" + content
-            f.seek(0)
-            f.write(content)
-            f.truncate()
-
-        # 执行转换（启用严格模式）
-        result = subprocess.run(
-            [str(tool_path), "convert-ruleset", "domain", "text",
-             str(input_file), str(output_file), "--strict"],
-            check=True,
-            timeout=120,
-            capture_output=True,
-            text=True
-        )
-
-        # 验证输出
-        if not output_file.exists() or os.path.getsize(output_file) == 0:
-            raise ValueError("Empty output file")
-        if "error" in result.stderr.lower():
-            raise ValueError(result.stderr)
-
-        return True
-    except subprocess.TimeoutExpired:
-        error("Conversion timed out after 120 seconds")
-        return False
-    except Exception as e:
-        error(f"MRS generation failed: {str(e)}")
-        return False
-
-def main():
-    try:
-        # 配置文件路径
-        base_dir = Path(__file__).parent.parent.parent
-        config = {
-            "input_files": {
-                "block": base_dir / "adblock.txt",
-                "allow": base_dir / "allow.txt"
-            },
-            "temp_files": {
-                "merged": Path(tempfile.gettempdir()) / "merged_rules.tmp"
-            },
-            "output": base_dir / "adb.mrs",
-            "tool_dir": base_dir / "mihomo_tools"
-        }
-
-        # 初始化临时文件
-        config["temp_files"]["merged"].unlink(missing_ok=True)
-
-        # 优先处理白名单规则
-        if config["input_files"]["allow"].exists():
-            if not process_rules(config["input_files"]["allow"], config["temp_files"]["merged"], is_allow=True):
-                sys.exit(1)
-        else:
-            log("No allow rules found, skipping")
+        # 处理白名单规则
+        if line.startswith('@@'):
+            if match := re.match(r'^@@\|\|?([\w*.-]+)\^?', line):
+                return {
+                    'type': 'allow',
+                    'domain': match.group(1).replace('*.', ''),
+                    'raw': line
+                }
+            return None
 
         # 处理拦截规则
-        if not process_rules(config["input_files"]["block"], config["temp_files"]["merged"]):
+        rule_patterns = [
+            (r'^\|\|([\w*.-]+)\^', 'domain'),      # AdBlock语法
+            (r'^\|?https?://([\w*.-]+)/?', 'url'),  # URL规则
+            (r'^(0\.0\.0\.0|127\.0\.0\.1)\s+([\w.-]+)', 'hosts'),  # Hosts
+            (r'^([\w*.-]+)$', 'plain')              # 纯域名
+        ]
+
+        for pattern, _ in rule_patterns:
+            if match := re.match(pattern, line):
+                domain = match.group(1) if 'hosts' not in pattern else match.group(2)
+                return {
+                    'type': 'block',
+                    'domain': domain.replace('*.', ''),
+                    'raw': line,
+                    'is_ad': True if STRICT_MODE else self._is_ad_related(domain)
+                }
+        return None
+
+    def _convert_rule(self, rule: Dict) -> Optional[str]:
+        """高精度规则转换[citation:7]"""
+        if not rule['domain'] or '*' in rule['domain']:
+            return None
+
+        if rule['type'] == 'allow':
+            self.stats['allow'] += 1
+            return f"DOMAIN-SUFFIX,{rule['domain']},DIRECT"
+        
+        if not rule.get('is_ad', True):
+            return None
+
+        self.stats['block'] += 1
+        return f"DOMAIN-SUFFIX,{rule['domain']},REJECT,adblock"
+
+    def process_file(self, input_path: Path, is_allow: bool = False) -> List[str]:
+        """处理规则文件"""
+        converted = []
+        if not input_path.exists():
+            return converted
+
+        with open(input_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                if rule := self._parse_rule(line):
+                    if converted_rule := self._convert_rule(rule):
+                        if converted_rule not in self.rule_cache:
+                            self.rule_cache.add(converted_rule)
+                            converted.append(converted_rule)
+        return converted
+
+def main():
+    print(f"{datetime.now()} [INFO] 开始广告规则转换")
+    
+    # 1. 准备mihomo工具链
+    mgr = MihomoManager()
+    if not mgr.prepare():
+        print(f"{datetime.now()} [ERROR] 无法准备mihomo工具链", file=sys.stderr)
+        sys.exit(1)
+
+    # 2. 处理规则文件
+    converter = AdRuleConverter()
+    input_files = {
+        'allow': REPO_ROOT / "allow.txt",
+        'block': REPO_ROOT / "adblock.txt"
+    }
+    
+    rules = []
+    for name, path in input_files.items():
+        if file_rules := converter.process_file(path, is_allow=(name == 'allow')):
+            rules.extend(file_rules)
+
+    # 3. 添加系统必要规则[citation:2][citation:8]
+    essential_rules = [
+        "GEOSITE,ads,REJECT",  # 广告域名分类
+        "GEOIP,CN,DIRECT",     # 中国IP直连
+        "MATCH,PROXY"          # 默认策略
+    ]
+    rules.extend(essential_rules)
+
+    # 4. 生成临时规则文件（带广告参数）
+    with tempfile.NamedTemporaryFile(mode='w+') as tmp:
+        tmp.write(f"""params:
+  enable-adblock: true
+  adblock-speedup: true
+  strict-mode: {str(STRICT_MODE).lower()}
+  disable-geoip: false
+rules:
+""")
+        tmp.write("\n".join(rules))
+        tmp.flush()
+
+        # 5. 转换为.mrs格式[citation:6]
+        result = subprocess.run([
+            str(mgr.binary_path), "rulegen",
+            "-i", tmp.name,
+            "-o", str(REPO_ROOT / "adblock.mrs"),
+            "--adblock",
+            "--strict" if STRICT_MODE else "--loose"
+        ], capture_output=True, text=True)
+
+        if result.returncode != 0:
+            print(f"{datetime.now()} [ERROR] 规则生成失败: {result.stderr}", file=sys.stderr)
             sys.exit(1)
 
-        # 转换为MRS格式
-        if not (tool := download_mihomo_tool(config["tool_dir"])):
-            sys.exit(1)
-
-        if not convert_to_mrs(config["temp_files"]["merged"], config["output"], tool):
-            sys.exit(1)
-
-        log(f"Successfully generated: {config['output'].name}")
-        log(f"Final rules count: {sum(1 for _ in open(config['output'], 'rb'))} lines")
-        return 0
-
-    except Exception as e:
-        error(f"Fatal error: {str(e)}")
-        return 1
-    finally:
-        # 清理临时文件
-        config["temp_files"]["merged"].unlink(missing_ok=True)
-        if 'tool' in locals():
-            shutil.rmtree(config["tool_dir"], ignore_errors=True)
+    # 输出统计
+    print(f"{datetime.now()} [INFO] 转换成功！")
+    print(f"拦截规则: {converter.stats['block']}条")
+    print(f"白名单规则: {converter.stats['allow']}条")
+    print(f"输出文件: {REPO_ROOT/'adblock.mrs'}")
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
