@@ -10,7 +10,7 @@ import mmap
 
 class AdGuardHomeRuleValidator:
     """增强版AdGuard Home DNS规则验证器"""
-    
+
     @staticmethod
     def _compile_patterns() -> Dict[str, re.Pattern]:
         return {
@@ -144,7 +144,7 @@ def main():
         # 获取脚本所在目录并计算仓库根目录
         script_dir = Path(__file__).parent
         repo_root = script_dir.parent.parent  # 假设脚本在/data/python/，则父目录的父目录是仓库根
-        
+
         # 输入文件路径 - 在仓库根目录
         input_file = repo_root / "adblock.txt"
         # 输出目录 - 也在仓库根目录
@@ -157,19 +157,22 @@ def main():
         if not input_file.exists():
             raise FileNotFoundError(f"Input file not found at: {input_file}")
 
-        # 创建输出目录(如果不存在)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # 检查文件是否为空
+        if input_file.stat().st_size == 0:
+            print("⚠️ Input file is empty. Creating empty output files.")
+            valid_rules = []
+            allow_rules = []
+        else:
+            # 使用常规文件读取方式代替mmap
+            with input_file.open('r', encoding='utf-8', errors='replace') as f:
+                lines = f.read().splitlines()
 
-        with input_file.open('rb') as f:
-            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-                lines = mm.read().decode('utf-8', errors='replace').splitlines()
-
-        validator = AdGuardHomeRuleValidator()
-        valid_rules, allow_rules = process_rules_concurrently(lines, validator)
+            validator = AdGuardHomeRuleValidator()
+            valid_rules, allow_rules = process_rules_concurrently(lines, validator)
 
         stats = analyze_rules(valid_rules + allow_rules)
         print("\n📊 Statistics:")
-        print(f"• Total rules: {len(lines)}")
+        print(f"• Total rules: {len(valid_rules) + len(allow_rules)}")
         print(f"• Valid rules: {len(valid_rules)}")
         print(f"• Allow rules: {len(allow_rules)}")
         print(f"• Domain rules: {stats['domains']}")
