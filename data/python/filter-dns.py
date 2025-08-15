@@ -46,7 +46,7 @@ def filter_adblock_rules(input_path, output_dns_path, output_allow_path):
 
 if __name__ == "__main__":
     # Get repository root directory (assuming script is in scripts/ directory)
-    repo_root = Path(__file__).parent.parent
+    repo_root = Path(__file__).parent.parent.parent
     
     input_file = repo_root / "adblock.txt"
     output_dns_file = repo_root / "dns.txt"
