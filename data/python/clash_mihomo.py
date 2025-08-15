@@ -98,7 +98,7 @@ class CacheManager:
         cursor = self.conn.cursor()
         cursor.execute(
             "SELECT last_hash, last_modified FROM file_meta WHERE path = ?",
-            (str(file_path),)
+            (str(file_path),))
         row = cursor.fetchone()
         return {"last_hash": row[0], "last_modified": row[1]} if row else None
 
