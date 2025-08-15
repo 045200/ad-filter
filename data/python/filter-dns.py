@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 from collections import OrderedDict
-from typing import Dict, Pattern
+from typing import Dict, Pattern, Optional
 
 class DNSRuleProcessor:
     """支持5类拦截器的DNS规则转换器"""
