@@ -5,19 +5,7 @@ from pathlib import Path
 from typing import List, Set, Pattern, Tuple, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
-import logging
 from dataclasses import dataclass
-
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('adblock_processor.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
 
 # 全局配置
 WORKING_DIR = Path('tmp')
@@ -38,7 +26,7 @@ class RuleValidator:
 
     BASE_PATTERNS = {
         # 基础规则模式
-        'domain': r'^\|\|[\w*.-]+\^(?:\$[\w-]+(?:=[\w.-]*)?(?:,~?[\w-]+(?:=[\w.-]*)?)*$',
+        'domain': r'^\|\|[\w*.-]+\^(?:\$[\w-]+(?:=[\w.-]*)?(?:,~?[\w-]+(?:=[\w.-]*)?)*)?$',
         'domain_suffix': r'^\|\|\*\.?[\w*.-]+\^',
         'exact_domain': r'^\|https?://[\w*.-]+/',
         'regex_domain': r'^/@\|\|[\w*.-]+\^/',
@@ -55,7 +43,7 @@ class RuleValidator:
 
         # 修饰符（增强版）
         'modifiers': {
-            'basic': r'\$(~?[\w-]+(?:=[\w.-]*)?(?:,~?[\w-]+(?:=[\w.-]*)?)*)$',
+            'basic': r'\$(~?[\w-]+(?:=[\w.-]*)?(?:,~?[\w-]+(?:=[\w.-]*)?)*$',
             'document': r'document',
             'script': r'script',
             'image': r'image',
@@ -120,76 +108,68 @@ class RuleValidator:
     @classmethod
     def compile_patterns(cls) -> Tuple[Pattern, Pattern]:
         """编译完整的正则表达式模式（增强版）"""
-        try:
-            # 黑名单模式（包含所有拦截器特有规则）
-            block_parts = [
-                cls.BASE_PATTERNS['domain'],
-                cls.BASE_PATTERNS['domain_suffix'],
-                cls.BASE_PATTERNS['exact_domain'],
-                cls.BASE_PATTERNS['regex_domain'],
-                cls.BASE_PATTERNS['element_hiding'],
-                cls.BASE_PATTERNS['extended_css'],
-                cls.BASE_PATTERNS['exception_hiding'],
-                cls.BASE_PATTERNS['hosts'],
-                cls.BASE_PATTERNS['regex'],
-                cls.BASE_PATTERNS['pihole'],
-                rf'^\|\|[\w.-]+\^{cls.BASE_PATTERNS["modifiers"]["basic"]}',
-                *[rf'^\|\|[\w.-]+\^\${mod}' 
-                  for mod in cls.BASE_PATTERNS['modifiers'].values() 
-                  if isinstance(mod, str)],
-                *[rf'^\|\|[\w.-]+\^{pattern}' 
-                  for pattern in cls.BASE_PATTERNS['special'].values()],
-                cls.BASE_PATTERNS['modifiers']['adguard_script'],
-                cls.BASE_PATTERNS['modifiers']['ublock_js'],
-            ]
-            block_pattern = '|'.join(block_parts)
+        # 黑名单模式（包含所有拦截器特有规则）
+        block_parts = [
+            cls.BASE_PATTERNS['domain'],
+            cls.BASE_PATTERNS['domain_suffix'],
+            cls.BASE_PATTERNS['exact_domain'],
+            cls.BASE_PATTERNS['regex_domain'],
+            cls.BASE_PATTERNS['element_hiding'],
+            cls.BASE_PATTERNS['extended_css'],
+            cls.BASE_PATTERNS['exception_hiding'],
+            cls.BASE_PATTERNS['hosts'],
+            cls.BASE_PATTERNS['regex'],
+            cls.BASE_PATTERNS['pihole'],
+            rf'^\|\|[\w.-]+\^{cls.BASE_PATTERNS["modifiers"]["basic"]}',
+            *[rf'^\|\|[\w.-]+\^\${mod}' 
+              for mod in cls.BASE_PATTERNS['modifiers'].values() 
+              if isinstance(mod, str)],
+            *[rf'^\|\|[\w.-]+\^{pattern}' 
+              for pattern in cls.BASE_PATTERNS['special'].values()],
+            cls.BASE_PATTERNS['modifiers']['adguard_script'],
+            cls.BASE_PATTERNS['modifiers']['ublock_js'],
+        ]
+        block_pattern = '|'.join(block_parts)
 
-            # 白名单模式（增强版）
-            allow_parts = [
-                cls.BASE_PATTERNS['whitelist']['domain'],
-                cls.BASE_PATTERNS['whitelist']['element'],
-                cls.BASE_PATTERNS['whitelist']['regex'],
-                cls.BASE_PATTERNS['whitelist']['modifiers'],
-                cls.BASE_PATTERNS['whitelist']['document'],
-                r'^@@\d+\.\d+\.\d+\.\d+',
-                r'^@@\|\*\.',
-                r'^@@[\w.-]+\^',
-                rf'^@@\|\|[\w.-]+\^{cls.BASE_PATTERNS["modifiers"]["basic"]}',
-                *[rf'^@@\|\|[\w.-]+\^\${mod}' 
-                  for mod in cls.BASE_PATTERNS['modifiers'].values() 
-                  if isinstance(mod, str)],
-            ]
-            allow_pattern = '|'.join(allow_parts)
+        # 白名单模式（增强版）
+        allow_parts = [
+            cls.BASE_PATTERNS['whitelist']['domain'],
+            cls.BASE_PATTERNS['whitelist']['element'],
+            cls.BASE_PATTERNS['whitelist']['regex'],
+            cls.BASE_PATTERNS['whitelist']['modifiers'],
+            cls.BASE_PATTERNS['whitelist']['document'],
+            r'^@@\d+\.\d+\.\d+\.\d+',
+            r'^@@\|\*\.',
+            r'^@@[\w.-]+\^',
+            rf'^@@\|\|[\w.-]+\^{cls.BASE_PATTERNS["modifiers"]["basic"]}',
+            *[rf'^@@\|\|[\w.-]+\^\${mod}' 
+              for mod in cls.BASE_PATTERNS['modifiers'].values() 
+              if isinstance(mod, str)],
+        ]
+        allow_pattern = '|'.join(allow_parts)
 
-            return re.compile(block_pattern), re.compile(allow_pattern)
-        except re.error as e:
-            logger.error(f"正则表达式编译错误: {e}")
-            raise ValueError(f"正则表达式编译错误: {e}") from e
+        return re.compile(block_pattern), re.compile(allow_pattern)
 
 class AdblockProcessor:
     """广告拦截规则处理器（增强版）"""
 
     def __init__(self, config: ProcessingConfig = ProcessingConfig()):
         self.config = config
-        try:
-            self.block_pattern, self.allow_pattern = RuleValidator.compile_patterns()
-            self.seen_rules = set()  # 用于去重的规则集合
-            self.domain_map = {}  # 域名到规则的映射（用于模糊去重）
-            logger.info("AdblockProcessor初始化成功")
-        except ValueError as e:
-            logger.error(f"初始化失败: {e}")
-            raise
+        self.block_pattern, self.allow_pattern = RuleValidator.compile_patterns()
+        self.seen_rules = set()  # 用于去重的规则集合
+        self.domain_map = {}  # 域名到规则的映射（用于模糊去重）
+        print("AdblockProcessor初始化成功")
 
     def _check_input_files(self) -> bool:
         """检查输入文件是否存在"""
         adblock_files = list(WORKING_DIR.glob('adblock*.txt'))
         allow_files = list(WORKING_DIR.glob('allow*.txt'))
-        
+
         if not adblock_files:
-            logger.error("未找到任何adblock*.txt文件")
+            print("未找到任何adblock*.txt文件")
             return False
-            
-        logger.info(f"找到{len(adblock_files)}个黑名单文件，{len(allow_files)}个白名单文件")
+
+        print(f"找到{len(adblock_files)}个黑名单文件，{len(allow_files)}个白名单文件")
         return True
 
     def normalize_rule(self, rule: str) -> str:
@@ -237,10 +217,9 @@ class AdblockProcessor:
                     )
                 else:
                     normalized = self.normalize_rule(line)
-                
+
                 normalized_lines.append(normalized)
-            except Exception as e:
-                logger.warning(f"规则标准化失败: {line[:50]}... 错误: {e}")
+            except Exception:
                 continue
 
         return '\n'.join(normalized_lines)
@@ -289,8 +268,7 @@ class AdblockProcessor:
                     if domain:
                         self.domain_map[domain] = line
                     lines.append(line)
-            except Exception as e:
-                logger.warning(f"规则清理失败: {line[:50]}... 错误: {e}")
+            except Exception:
                 continue
 
         return '\n'.join(lines)
@@ -364,28 +342,27 @@ class AdblockProcessor:
 
         try:
             # 合并拦截规则
-            logger.info("合并拦截规则...")
+            print("合并拦截规则...")
             with open(WORKING_DIR / 'combined_adblock.txt', 'w', encoding='utf-8') as out:
                 for file in WORKING_DIR.glob('adblock*.txt'):
                     try:
                         with open(file, 'r', encoding='utf-8', errors='ignore') as f:
                             content = self.normalize_rules(f.read())
                             out.write(content + '\n')
-                    except Exception as e:
-                        logger.error(f"处理文件{file}失败: {e}")
+                    except Exception:
                         continue
 
             # 处理黑名单规则
-            logger.info("处理黑名单规则...")
+            print("处理黑名单规则...")
             with open(WORKING_DIR / 'combined_adblock.txt', 'r', encoding='utf-8') as f:
                 content = f.read()
-                
+
                 # 提取白名单规则
                 allow_rules = []
                 for line in content.splitlines():
                     if line.startswith('@@') and self.allow_pattern.search(line):
                         allow_rules.append(line)
-                
+
                 # 处理黑名单规则（并行处理）
                 block_results = []
                 with ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
@@ -396,12 +373,11 @@ class AdblockProcessor:
                             chunk, 
                             self.block_pattern
                         ))
-                    
+
                     for future in as_completed(futures):
                         try:
                             block_results.append(future.result())
-                        except Exception as e:
-                            logger.error(f"并行处理失败: {e}")
+                        except Exception:
                             continue
 
                 block_rules = '\n'.join(block_results)
@@ -413,18 +389,17 @@ class AdblockProcessor:
                     f.write('\n' + '\n'.join(allow_rules))
 
             # 合并白名单规则
-            logger.info("合并白名单规则...")
+            print("合并白名单规则...")
             with open(WORKING_DIR / 'combined_allow.txt', 'w', encoding='utf-8') as out:
                 for file in WORKING_DIR.glob('allow*.txt'):
                     try:
                         with open(file, 'r', encoding='utf-8', errors='ignore') as f:
                             out.write(self.normalize_rules(f.read()) + '\n')
-                    except Exception as e:
-                        logger.error(f"处理白名单文件{file}失败: {e}")
+                    except Exception:
                         continue
 
             # 处理白名单规则
-            logger.info("处理白名单规则...")
+            print("处理白名单规则...")
             with open(WORKING_DIR / 'combined_allow.txt', 'r', encoding='utf-8') as f:
                 content = f.read() + '\n' + '\n'.join(allow_rules)
                 allow_rules = self.clean_rules(content, self.allow_pattern)
@@ -436,19 +411,19 @@ class AdblockProcessor:
             self.detect_conflicts(block_rules, allow_rules)
 
             # 生成最终文件
-            logger.info("生成最终规则集...")
+            print("生成最终规则集...")
             Path(WORKING_DIR / 'cleaned_adblock.txt').rename(TARGET_DIR / 'adblock.txt')
             Path(WORKING_DIR / 'allow.txt').rename(TARGET_DIR / 'allow.txt')
 
             # 文件去重
             self.deduplicate_files()
 
-            logger.info("处理完成！生成文件：")
-            logger.info(f"- {TARGET_DIR / 'adblock.txt'}")
-            logger.info(f"- {TARGET_DIR / 'allow.txt'}")
+            print("处理完成！生成文件：")
+            print(f"- {TARGET_DIR / 'adblock.txt'}")
+            print(f"- {TARGET_DIR / 'allow.txt'}")
 
         except Exception as e:
-            logger.error(f"处理过程中发生错误: {e}")
+            print(f"处理过程中发生错误: {e}")
             raise
 
     def split_content(self, content: str, chunk_size: int) -> List[str]:
@@ -464,13 +439,13 @@ class AdblockProcessor:
             conflicts = black_domains & white_domains
 
             if conflicts:
-                logger.warning(f"发现{len(conflicts)}个冲突域名（同时在黑名单和白名单中）")
+                print(f"发现{len(conflicts)}个冲突域名（同时在黑名单和白名单中）")
                 for domain in sorted(conflicts)[:self.config.show_conflicts]:
-                    logger.warning(f"- {domain}")
+                    print(f"- {domain}")
                 if len(conflicts) > self.config.show_conflicts:
-                    logger.warning(f"- ...共{len(conflicts)}个冲突（仅显示前{self.config.show_conflicts}个）")
-        except Exception as e:
-            logger.error(f"冲突检测失败: {e}")
+                    print(f"- ...共{len(conflicts)}个冲突（仅显示前{self.config.show_conflicts}个）")
+        except Exception:
+            pass
 
     def deduplicate_files(self):
         """文件去重（增强版）"""
@@ -488,8 +463,7 @@ class AdblockProcessor:
                         f.seek(0)
                         f.writelines(unique)
                         f.truncate()
-            except Exception as e:
-                logger.error(f"文件去重失败 {file}: {e}")
+            except Exception:
                 continue
 
 if __name__ == '__main__':
@@ -501,12 +475,12 @@ if __name__ == '__main__':
             show_conflicts=10,
             keep_whitelist_in_blacklist=True  # 确保白名单规则保留在黑名单中
         )
-        
+
         # 切换到工作目录
         os.chdir(WORKING_DIR)
-        
+
         processor = AdblockProcessor(config)
         processor.process_files()
     except Exception as e:
-        logger.critical(f"处理失败: {e}")
+        print(f"处理失败: {e}")
         exit(1)
