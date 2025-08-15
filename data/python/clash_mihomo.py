@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 广告规则转换终极完整版-并行优化版
-重点优化了adblock.txt的并行处理稳定性
+包含所有必要的类定义和错误修复
 """
 
 import os
@@ -103,7 +103,6 @@ class CacheManager:
         conn.execute("PRAGMA synchronous=NORMAL")
         return conn
 
-    # 其他方法保持不变...
     def get_file_meta(self, file_path: Path) -> Optional[Dict[str, Any]]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -142,8 +141,81 @@ class CacheManager:
                     (domain, rule_type, converted_rule))
                 conn.commit()
 
+class MihomoManager:
+    """Mihomo工具链管理器"""
+    def __init__(self):
+        self.tool_dir = REPO_ROOT / "mihomo_tools"
+        self.binary_path = None
+        self.latest_version = None
+        self.download_progress = 0
+
+    def _progress_hook(self, count, block_size, total_size):
+        """下载进度回调"""
+        percent = int(count * block_size * 100 / total_size)
+        if percent > self.download_progress and percent % 10 == 0:
+            self.download_progress = percent
+            print(f"下载进度: {percent}%")
+
+    def _get_latest_version(self) -> Optional[str]:
+        """获取最新版本号"""
+        try:
+            print("获取最新版本信息...")
+            with urllib.request.urlopen(
+                "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest",
+                timeout=10
+            ) as response:
+                data = json.loads(response.read())
+                version = data['tag_name']
+                print(f"最新版本: {version}")
+                return version
+        except Exception as e:
+            print(f"获取版本失败: {str(e)}", file=sys.stderr)
+            return None
+
+    def _download_tool(self, version: str) -> bool:
+        """下载工具链"""
+        try:
+            self.tool_dir.mkdir(parents=True, exist_ok=True)
+            platform = "linux-amd64"  # 根据实际系统调整
+            url = f"https://github.com/MetaCubeX/mihomo/releases/download/{version}/mihomo-{platform}-{version}.gz"
+            gz_path = self.tool_dir / f"mihomo-{version}.gz"
+
+            print(f"开始下载mihomo {version}...")
+            self.download_progress = 0
+            urllib.request.urlretrieve(url, gz_path, reporthook=self._progress_hook)
+            print("下载完成")
+
+            # 解压文件
+            print("解压文件中...")
+            self.binary_path = self.tool_dir / f"mihomo-{version}"
+            with gzip.open(gz_path, 'rb') as f_in:
+                with open(self.binary_path, 'wb') as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+
+            self.binary_path.chmod(0o755)
+            gz_path.unlink()
+            print("工具准备就绪")
+            return True
+
+        except Exception as e:
+            print(f"工具下载失败: {str(e)}", file=sys.stderr)
+            return False
+
+    def prepare(self) -> bool:
+        """准备工具链"""
+        self.latest_version = self._get_latest_version()
+        if not self.latest_version:
+            return False
+
+        self.binary_path = self.tool_dir / f"mihomo-{self.latest_version}"
+        if self.binary_path.exists():
+            print(f"使用缓存工具: {self.latest_version}")
+            return True
+
+        return self._download_tool(self.latest_version)
+
 class AdRuleConverter:
-    """广告规则转换引擎（并行优化版）"""
+    """广告规则转换引擎"""
     
     AD_KEYWORDS = {
         'ad', 'ads', 'advert', 'analytics', 'track', 
@@ -212,7 +284,6 @@ class AdRuleConverter:
 
     def _process_chunk(self, chunk: List[str]) -> List[str]:
         """独立进程处理函数"""
-        # 每个进程创建自己的转换器实例
         local_converter = AdRuleConverter()
         converted = []
         for line in chunk:
@@ -254,16 +325,13 @@ class AdRuleConverter:
 
         print(f"开始处理文件: {input_path.name}")
         
-        # 读取文件内容到内存
         with open(input_path, 'r', encoding='utf-8', errors='ignore') as f:
             lines = f.readlines()
 
-        # 动态调整块大小
         cpu_count = multiprocessing.cpu_count()
         chunk_size = max(1000, len(lines) // (cpu_count * 2))
         
-        # 特别处理大文件（如adblock.txt）
-        if len(lines) > 50000:  # 超过5万行
+        if len(lines) > 50000:
             chunk_size = max(5000, len(lines) // cpu_count)
             print(f"大文件检测，调整块大小为: {chunk_size}")
 
@@ -271,7 +339,6 @@ class AdRuleConverter:
         
         print(f"使用 {cpu_count} 个进程处理 {len(chunks)} 个数据块...")
         
-        # 使用进程池处理
         with ProcessPoolExecutor(max_workers=cpu_count) as executor:
             futures = [executor.submit(self._process_chunk, chunk) for chunk in chunks]
             
@@ -286,10 +353,8 @@ class AdRuleConverter:
         print(f"处理完成: 生成 {len(converted)} 条规则 (缓存命中: {self.stats['cached']})")
         return converted
 
-# MihomoManager 类保持不变...
-
 def main():
-    print(f"{datetime.now()} [INFO] 开始广告规则转换（并行优化版）")
+    print(f"{datetime.now()} [INFO] 开始广告规则转换")
 
     # 初始化缓存
     CacheManager.get_instance()
