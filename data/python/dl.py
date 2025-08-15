@@ -7,8 +7,8 @@ import glob
 # 定义要删除的文件扩展名模式
 patterns = ['*.txt', '*.mrs']
 
-# 获取脚本所在目录的父目录（即仓库根目录）
-root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+# 获取脚本所在目录的父目录的父目录（即仓库根目录）
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 print(f"搜索根目录: {root_dir}")  # 调试用，确认路径是否正确
 
