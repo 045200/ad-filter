@@ -77,9 +77,9 @@ def main():
     for key, path in OUTPUT_FILES.items():
         save_rules(classified[key], path)
 
-    print(f"Total rules: {len(classified['adb']}")
+    print(f"Total rules: {len(classified['adb'])}")
     print(f"Whitelist: {len(classified['adw'])}")
-    print(f"DNS blacklist: {len(classified['dns']}")
+    print(f"DNS blacklist: {len(classified['dns'])}")
 
 if __name__ == "__main__":
     main()
