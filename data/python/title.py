@@ -134,7 +134,7 @@ if __name__ == "__main__":
     TARGET_FILES = {
         'adblock.txt': 'adblock',
         'allow.txt': 'allow',
-        'dns.txt': 'dns'
+        'dns.txt': 'dns',
         'adb.txt': 'adb',
         'adw.txt': 'adw',
         'add.txt': 'add'
