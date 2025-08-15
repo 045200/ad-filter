@@ -52,7 +52,7 @@ def save_outputs(classified_rules: dict):
     """保存分类后的规则到文件"""
     for key, path in OUTPUT_FILES.items():
         with open(path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(classified_rules.get(key, []))
+            f.write('\n'.join(classified_rules.get(key, [])))  # 这里需要两个闭合括号
             print(f"📁 已保存 {key} 规则到 {path}")
 
 def main():
