@@ -364,9 +364,6 @@ class AdblockProcessor:
         print("规则去重处理...")
         self.deduplicate_files()
 
-        print("验证规则有效性...")
-        self.validate_files()
-
         print("处理完成！生成文件：")
         print(f"- {TARGET_DIR / 'adblock.txt'}")
         print(f"- {TARGET_DIR / 'allow.txt'}")
