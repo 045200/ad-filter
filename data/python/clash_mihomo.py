@@ -90,10 +90,24 @@ def process_rules(input_path, output_path, is_allow=False):
             with open(output_path, 'r', encoding='utf-8') as f:
                 existing_hashes.update(hashlib.md5(line.encode()).hexdigest() for line in f)
 
-        with open(input_path, 'r', encoding='utf-8', errors='replace') as f_in, \
-             open(output_path, 'a' if output_path.exists() else 'w', encoding='utf-8') as f_out:
+        # 尝试多种编码方式打开输入文件
+        encodings = ['utf-8', 'latin-1', 'gbk', 'utf-16']
+        input_content = None
+        
+        for encoding in encodings:
+            try:
+                with open(input_path, 'r', encoding=encoding) as f:
+                    input_content = f.readlines()
+                break
+            except UnicodeDecodeError:
+                continue
 
-            for line in f_in:
+        if input_content is None:
+            error(f"Failed to decode {input_path} with tried encodings: {encodings}")
+            return False
+
+        with open(output_path, 'a' if output_path.exists() else 'w', encoding='utf-8') as f_out:
+            for line in input_content:
                 line = line.strip()
                 if not line:
                     continue
@@ -234,7 +248,7 @@ def main():
             sys.exit(1)
 
         log(f"Successfully generated: {config['output'].name}")
-        log(f"Final rules count: {sum(1 for _ in open(config['output']))} lines")
+        log(f"Final rules count: {sum(1 for _ in open(config['output'], 'rb'))} lines")
         return 0
 
     except Exception as e:
