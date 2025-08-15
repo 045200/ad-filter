@@ -121,10 +121,10 @@ class RuleValidator:
             cls.BASE_PATTERNS['regex'],
             cls.BASE_PATTERNS['pihole'],
             rf'^\|\|[\w.-]+\^{cls.BASE_PATTERNS["modifiers"]["basic"]}',
-            *[rf'^\|\|[\w.-]+\^\${mod}' 
-              for mod in cls.BASE_PATTERNS['modifiers'].values() 
+            *[rf'^\|\|[\w.-]+\^\${mod}'
+              for mod in cls.BASE_PATTERNS['modifiers'].values()
               if isinstance(mod, str)],
-            *[rf'^\|\|[\w.-]+\^{pattern}' 
+            *[rf'^\|\|[\w.-]+\^{pattern}'
               for pattern in cls.BASE_PATTERNS['special'].values()],
             cls.BASE_PATTERNS['modifiers']['adguard_script'],
             cls.BASE_PATTERNS['modifiers']['ublock_js'],
@@ -142,8 +142,8 @@ class RuleValidator:
             r'^@@\|\*\.',
             r'^@@[\w.-]+\^',
             rf'^@@\|\|[\w.-]+\^{cls.BASE_PATTERNS["modifiers"]["basic"]}',
-            *[rf'^@@\|\|[\w.-]+\^\${mod}' 
-              for mod in cls.BASE_PATTERNS['modifiers'].values() 
+            *[rf'^@@\|\|[\w.-]+\^\${mod}'
+              for mod in cls.BASE_PATTERNS['modifiers'].values()
               if isinstance(mod, str)],
         ]
         allow_pattern = '|'.join(allow_parts)
@@ -369,8 +369,8 @@ class AdblockProcessor:
                     futures = []
                     for chunk in self.split_content(content, self.config.chunk_size):
                         futures.append(executor.submit(
-                            self.clean_rules, 
-                            chunk, 
+                            self.clean_rules,
+                            chunk,
                             self.block_pattern
                         ))
 
