@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 import re
 import sys
-import os
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict
-import mmap
+from typing import List, Tuple, Optional, Dict, Any
+
 
 class AdGuardHomeRuleValidator:
-    """增强版AdGuard Home DNS规则验证器"""
+    """Enhanced AdGuard Home DNS rule validator"""
 
     @staticmethod
     def _compile_patterns() -> Dict[str, re.Pattern]:
@@ -52,6 +51,7 @@ class AdGuardHomeRuleValidator:
         self.patterns = self._compile_patterns()
 
     def validate(self, line: str) -> Optional[str]:
+        """Validate and normalize a single rule line"""
         line = re.sub(r'[ \t]#.*$', '', line.strip())
         if not line or line[0] in ('!', '#', '['):
             return None
@@ -82,17 +82,21 @@ class AdGuardHomeRuleValidator:
 
         return None
 
+
 def process_rules_concurrently(lines: List[str], validator: AdGuardHomeRuleValidator) -> Tuple[List[str], List[str]]:
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    """Process rules in parallel using ThreadPoolExecutor"""
+    with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 1)) as executor:
         results = list(executor.map(validator.validate, lines))
 
-    return (
-        [rule for rule in filter(None, results) if not rule.startswith('@@')],
-        [rule for rule in filter(None, results) if rule.startswith('@@')]
-    )
+    valid_rules = [rule for rule in results if rule is not None and not rule.startswith('@@')]
+    allow_rules = [rule for rule in results if rule is not None and rule.startswith('@@')]
+    return valid_rules, allow_rules
 
-def analyze_rules(rules: List[str]) -> Dict:
-    stats = {
+
+def analyze_rules(rules: List[str]) -> Dict[str, Any]:
+    """Analyze rule statistics and find conflicts"""
+    stats: Dict[str, Any] = {
+        'total': len(rules),
         'domains': 0,
         'hosts': 0,
         'regex': 0,
@@ -121,70 +125,95 @@ def analyze_rules(rules: List[str]) -> Dict:
                 stats['conflicts'].append({
                     'domain': domain,
                     'count': len(rules),
-                    'suggestion': allowing[-1]
+                    'blocking': len(blocking),
+                    'allowing': len(allowing),
+                    'suggestion': allowing[-1] if allowing else None
                 })
     return stats
 
+
 def write_output_files(output_dir: Path, rules: List[str], allow_rules: List[str]) -> None:
+    """Write output files with sorted rules"""
     def sort_key(r: str) -> tuple:
-        if r.startswith('||'): return (0, len(r), r)
-        if re.match(r'^[\d:]', r): return (1, len(r), r)
+        if r.startswith('||'):
+            return (0, len(r), r)
+        if re.match(r'^[\d:]', r):
+            return (1, len(r), r)
         return (2, len(r), r)
 
     for filename, content in [
         ("dns.txt", sorted(rules, key=sort_key)),
         ("dnsallow.txt", sorted(allow_rules, key=sort_key))
     ]:
-        with (output_dir / filename).open('w', encoding='utf-8') as f:
-            f.write("\n".join(content))
-            f.write("\n")  # 确保文件以换行符结束
+        try:
+            with (output_dir / filename).open('w', encoding='utf-8') as f:
+                f.write("\n".join(content))
+                f.write("\n")  # Ensure file ends with newline
+        except IOError as e:
+            print(f"⚠️ Failed to write {filename}: {e}", file=sys.stderr)
 
-def main():
+
+def main() -> None:
+    """Main function to process rules"""
     try:
-        # 获取脚本所在目录并计算仓库根目录
+        # Get script directory and repository root
         script_dir = Path(__file__).parent
-        repo_root = script_dir.parent.parent  # 假设脚本在/data/python/，则父目录的父目录是仓库根
+        repo_root = script_dir.parent.parent
 
-        # 输入文件路径 - 在仓库根目录
+        # Set input/output paths
         input_file = repo_root / "adblock.txt"
-        # 输出目录 - 也在仓库根目录
         output_dir = repo_root
 
         print(f"🏠 Repository root: {repo_root}")
         print(f"📂 Input file: {input_file}")
         print(f"📂 Output directory: {output_dir}")
 
+        # Check input file
         if not input_file.exists():
             raise FileNotFoundError(f"Input file not found at: {input_file}")
 
-        # 检查文件是否为空
-        if input_file.stat().st_size == 0:
-            print("⚠️ Input file is empty. Creating empty output files.")
-            valid_rules = []
-            allow_rules = []
-        else:
-            # 使用常规文件读取方式代替mmap
-            with input_file.open('r', encoding='utf-8', errors='replace') as f:
-                lines = f.read().splitlines()
+        # Initialize empty rules
+        valid_rules: List[str] = []
+        allow_rules: List[str] = []
 
-            validator = AdGuardHomeRuleValidator()
-            valid_rules, allow_rules = process_rules_concurrently(lines, validator)
+        # Process file if not empty
+        if input_file.stat().st_size > 0:
+            try:
+                with input_file.open('r', encoding='utf-8', errors='replace') as f:
+                    lines = [line.strip() for line in f if line.strip()]
+                
+                validator = AdGuardHomeRuleValidator()
+                valid_rules, allow_rules = process_rules_concurrently(lines, validator)
+            except UnicodeDecodeError:
+                print("⚠️ File encoding issue, trying with fallback encoding", file=sys.stderr)
+                with input_file.open('r', encoding='latin-1', errors='replace') as f:
+                    lines = [line.strip() for line in f if line.strip()]
+                validator = AdGuardHomeRuleValidator()
+                valid_rules, allow_rules = process_rules_concurrently(lines, validator)
 
+        # Analyze and output results
         stats = analyze_rules(valid_rules + allow_rules)
         print("\n📊 Statistics:")
-        print(f"• Total rules: {len(valid_rules) + len(allow_rules)}")
-        print(f"• Valid rules: {len(valid_rules)}")
+        print(f"• Total rules processed: {stats['total']}")
+        print(f"• Valid blocking rules: {len(valid_rules)}")
         print(f"• Allow rules: {len(allow_rules)}")
         print(f"• Domain rules: {stats['domains']}")
         print(f"• Hosts rules: {stats['hosts']}")
         print(f"• Regex rules: {stats['regex']}")
+        print(f"• Rules with modifiers: {stats['modified']}")
+        if stats['conflicts']:
+            print("\n⚠️ Found rule conflicts:")
+            for conflict in stats['conflicts']:
+                print(f"  - {conflict['domain']}: {conflict['blocking']} blocking vs {conflict['allowing']} allowing")
 
+        # Write output files
         write_output_files(output_dir, valid_rules, allow_rules)
-        print(f"\n✅ Output files created in: {output_dir}")
+        print(f"\n✅ Successfully created output files in: {output_dir}")
 
     except Exception as e:
         print(f"\n❌ Error: {type(e).__name__} - {e}", file=sys.stderr)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
