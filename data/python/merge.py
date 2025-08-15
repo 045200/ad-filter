@@ -2,124 +2,155 @@ import os
 import glob
 import re
 from pathlib import Path
-from collections import OrderedDict
 
 os.chdir('tmp')
 
-# AdGuard/AdGuard Home完整语法正则（包含DNS重写和客户端规则）
-ADG_ALLOW_PATTERN = re.compile(
-    r'^@@\|\|[\w.-]+\^(\$~?[\w,;=-]+)?|'      # 基础白名单
-    r'^@@##.+|'                               # 元素隐藏例外
-    r'^@@/[^/]+/[ims]*(?:\$~?[\w,;=-]+)?|'   # 正则白名单
-    r'^@@\d+\.\d+\.\d+\.\d+(?:\/\d+)?\s+[\w.-]+|'  # IP/CIDR白名单(Hosts格式)
-    r'^@@\$\$.+|'                             # JS/CSS注入例外
-    r'^@@\|\|[\w.-]+\^\$document(?:,~?[\w,=-]+)?|'  # 文档级例外
-    r'^@@\|\|[\w.-]+\^\$app=~?[\w-]+|'       # 应用例外
-    r'^@@\|\|[\w.-]+\^\$client=~?[\w,.-]+|'  # 客户端例外
-    r'^@@\|\|[\w.-]+\^\$dnstype=[\w,]+|'     # DNS类型例外
-    r'^@@\|\|[\w.-]+\^\$dnsrewrite=.*|'      # DNS重写例外
-    r'^@@/[\w/-]+/|'                         # 正则表达式白名单
-    r'^@@\|\|[\w.-]+\^\$removeparam=.*|'     # 参数移除例外
-    r'^@@\|\|[\w.-]+\^\$cookie=.*'           # Cookie规则例外
+# AdGuard/AdGuard Home完整语法规则（2024最新版）
+ALLOW_PATTERN = re.compile(
+    r'^@@\|\|[\w.-]+\^(\$~?[\w,=-]+)?|'  # 基础域名例外
+    r'^@@##.+|'                          # 元素隐藏例外
+    r'^@@\|\|[\w.-]+\^\$document|'       # 文档级例外
+    r'^@@\|\|[\w.-]+\^\$generichide|'    # 通用隐藏例外
+    r'^@@\|\|[\w.-]+\^\$elemhide|'       # 元素隐藏例外
+    r'^@@\d+\.\d+\.\d+\.\d+|'            # IP例外
+    r'^@@/[^/]+/\$important|'            # 重要正则例外
+    r'^@@\|\|[\w.-]+\^\$ctag|'           # 内容类型例外
+    r'^@@\|\|[\w.-]+\^\$client=\S+|'     # 客户端白名单
+    r'^@@\|\|[\w.-]+\^\$app=\w+|'        # 应用例外
+    r'^@@\|\|[\w.-]+\^\$denyallow|'      # 部分放行
+    r'^@@\|\|[\w.-]+\^\$redirect=nooptext|'  # 重定向例外
+    r'^@@\|\|[\w.-]+\^\$removeparam=\w+' # 参数保留
 )
 
-ADG_BLOCK_PATTERN = re.compile(
-    r'^\|\|[\w.-]+\^(\$~?[\w,;=-]+)?|'       # 基础拦截
-    r'^/[\w/-]+/[ims]*(?:\$~?[\w,;=-]+)?|'   # 正则拦截
-    r'^##.+|'                                # 元素隐藏
-    r'^\d+\.\d+\.\d+\.\d+(?:\/\d+)?\s+[\w.-]+|'  # Hosts拦截
-    r'^\$\$.+|'                              # JS/CSS注入
-    r'^\|\|[\w.-]+\^\$document(?:,~?[\w,=-]+)?|'  # 文档级拦截
-    r'^\|\|[\w.-]+\^\$popup|'                # 弹窗拦截
-    r'^\|\|[\w.-]+\^\$app=~?[\w-]+|'         # 应用拦截
-    r'^\|\|[\w.-]+\^\$client=~?[\w,.-]+|'    # 客户端拦截
-    r'^\|\|[\w.-]+\^\$dnstype=[\w,]+|'       # DNS类型拦截
-    r'^\|\|[\w.-]+\^\$dnsrewrite=.*|'        # DNS重写
-    r'^/[\w/-]+/|'                           # 正则表达式拦截
-    r'^\|\|[\w.-]+\^\$removeparam=.*|'       # 参数移除
-    r'^\|\|[\w.-]+\^\$cookie=.*|'            # Cookie规则
-    r'^\|\|[\w.-]+\^\$important|'            # 重要规则
-    r'^\|\|[\w.-]+\^\$all|'                  # 所有请求拦截
-    r'^\|\|[\w.-]+\^\$third-party'           # 第三方请求拦截
+BLOCK_PATTERN = re.compile(
+    r'^\|\|[\w.-]+\^(\$~?[\w,=-]+)?|'    # 基础域名规则
+    r'^\|\|[\w.-]+\^\$document|'         # 文档级拦截
+    r'^\|\|[\w.-]+\^\$generichide|'      # 通用隐藏
+    r'^\|\|[\w.-]+\^\$elemhide|'         # 元素隐藏
+    r'^##.+|'                            # 基础元素隐藏
+    r'^#\?#.+|'                          # 扩展CSS选择器
+    r'^#@#.+|'                           # 旧版元素隐藏例外
+    r'^\d+\.\d+\.\d+\.\d+\s+[\w.-]+|'   # Hosts格式
+    r'^\|\|[\w.-]+\^\$important|'        # 重要规则
+    r'^\|\|[\w.-]+\^\$badfilter|'        # 坏过滤器
+    r'^\|\|[\w.-]+\^\$ctag|'             # 内容类型过滤
+    r'^/[\w/-]+/|'                       # 正则规则
+    r'^\|\|[\w.-]+\^\$client=\S+|'       # 客户端限定
+    r'^\|\|[\w.-]+\^\$app=\w+|'          # 应用限定
+    r'^\|\|[\w.-]+\^\$redirect=\w+|'     # 重定向规则
+    r'^\|\|[\w.-]+\^\$removeparam=\w+|'  # 参数移除
+    r'^\|\|[\w.-]+\^\$all|'              # 全协议规则
+    r'^\|\|[\w.-]+\^\$cookie|'           # Cookie规则
+    r'^\|\|[\w.-]+\^\$csp|'              # CSP规则
+    r'^\|\|[\w.-]+\^\$replace=\w+|'      # 内容替换
+    r'^\|\|[\w.-]+\^\$hls'               # HLS规则
 )
 
-def strict_clean(line):
-    """严格清理非规则内容（支持所有注释类型）"""
-    line = line.lstrip('\ufeff').strip()
-    line = re.sub(r'^\s*[!#].*$', '', line)       # 标准注释
-    line = re.sub(r'\s+[!#].*$', '', line)        # 行尾注释
-    line = re.sub(r'^\s*//.*$', '', line)         # 双斜线注释
-    line = re.sub(r'/\*.*?\*/', '', line)         # 多行注释
-    line = re.sub(r'^\s*;.*$', '', line)          # 分号注释
-    line = re.sub(r'^\[Adblock.*\]$', '', line)   # 元信息
-    return re.sub(r'\s+', ' ', line).strip()
+def normalize_rules(content):
+    """规则标准化处理"""
+    # 统一域名大小写
+    content = re.sub(r'(\|\|[\w.-]+\^)', lambda m: m.group(1).lower(), content)
+    # 标准化修饰符格式
+    content = re.sub(r'\$(~?domain)=([\w.-]+)', 
+                    lambda m: f'${m.group(1)}={m.group(2).lower()}', content)
+    return content
 
-def is_adguard_rule(line):
-    """检查是否为AdGuard/AdGuard Home规则"""
-    # 基本语法检查
-    if re.match(r'^(\|\||##|@@\|\|)[\w.-]+[\^\s]', line):
-        return True
-    # 修饰符检查
-    if re.search(r'\$(app|client|dnstype|dnsrewrite|document|popup|removeparam|cookie)=', line):
-        return True
-    # 正则表达式规则
-    if re.match(r'^/[\w/-]+/|^@@/[\w/-]+/', line):
-        return True
-    # Hosts格式规则
-    if re.match(r'^\d+\.\d+\.\d+\.\d+\s+[\w.-]+', line):
-        return True
-    # 特殊规则类型
-    if re.match(r'^\$\$|^@@\$\$', line):
-        return True
-    return False
-
-def advanced_deduplicate(rules):
-    """增强去重（标准化+保留顺序）"""
-    seen = OrderedDict()
-    for rule in rules:
-        # 标准化：忽略大小写、多余空格和修饰符顺序
-        norm = re.sub(r'[\s]', '', rule).lower()
-        norm = re.sub(r'\$([^,]+)(,|$)', lambda m: ''.join(sorted(m.group(1).split(',')) + (m.group(2) if m.group(2) else ''), norm)
-        if norm not in seen:
-            seen[norm] = rule
-    return list(seen.values())
-
-def process_rules(content, pattern):
-    """处理规则内容"""
-    rules = []
+def clean_rules(content, pattern):
+    """增强版规则清理函数"""
+    # 保留AdGuard配置注释（!开头）和有效规则
+    lines = []
     for line in content.splitlines():
-        cleaned = strict_clean(line)
-        if not cleaned or not pattern.search(cleaned):
+        line = line.strip()
+        if not line:
             continue
-        if is_adguard_rule(cleaned):
-            rules.append(cleaned)
-    return rules
+        # 保留注释和空行
+        if line.startswith('!') or pattern.search(line):
+            lines.append(line)
+    return '\n'.join(lines)
 
-# ▼▼▼ 主处理流程 ▼▼▼
+def extract_allow_rules(content):
+    """精确提取白名单规则"""
+    return '\n'.join(line for line in content.splitlines() 
+                   if line.startswith('@@') and ALLOW_PATTERN.search(line))
+
 print("合并拦截规则...")
-block_content = ''
-for file in glob.glob('adblock*.txt'):
-    with open(file, 'r', encoding='utf-8-sig', errors='replace') as f:
-        block_content += f.read() + '\n'
+with open('combined_adblock.txt', 'w', encoding='utf-8') as outfile:
+    for file in glob.glob('adblock*.txt'):
+        with open(file, 'r', encoding='utf-8', errors='ignore') as infile:
+            content = infile.read()
+            outfile.write(normalize_rules(content) + '\n')
 
-print("提取白名单规则...")
-extracted_allow = []
-for line in block_content.splitlines():
-    cleaned = strict_clean(line)
-    if cleaned.startswith('@@') and ADG_ALLOW_PATTERN.search(cleaned):
-        extracted_allow.append(cleaned)
+print("处理黑名单规则...")
+with open('combined_adblock.txt', 'r', encoding='utf-8') as f:
+    block_content = f.read()
+    extracted_allow = extract_allow_rules(block_content)
+    cleaned_block = clean_rules(block_content, BLOCK_PATTERN)
 
-print("筛选AdGuard/AdGuard Home规则...")
-adg_block = process_rules(block_content, ADG_BLOCK_PATTERN)
-adg_allow = process_rules('\n'.join(extracted_allow), ADG_ALLOW_PATTERN)
+with open('cleaned_adblock.txt', 'w', encoding='utf-8') as f:
+    f.write(cleaned_block)
 
-print("生成最终文件...")
-with open('../adblock.txt', 'w', encoding='utf-8') as f:
-    f.write('\n'.join(advanced_deduplicate(adg_block + adg_allow)))
+print("合并白名单规则...")
+with open('combined_allow.txt', 'w', encoding='utf-8') as outfile:
+    for file in glob.glob('allow*.txt'):
+        with open(file, 'r', encoding='utf-8', errors='ignore') as infile:
+            content = infile.read()
+            outfile.write(normalize_rules(content) + '\n')
 
-with open('../allow.txt', 'w', encoding='utf-8') as f:
-    f.write('\n'.join(advanced_deduplicate(extracted_allow)))
+print("处理白名单规则...")
+with open('combined_allow.txt', 'r', encoding='utf-8') as f:
+    allow_content = f.read() + '\n' + extracted_allow
+    cleaned_allow = clean_rules(allow_content, ALLOW_PATTERN)
 
-print("处理完成！输出文件：")
-print("- adblock.txt (AdGuard/AdGuard Home全功能规则)")
-print("- allow.txt (AdGuard/AdGuard Home白名单规则)")
+with open('cleaned_allow.txt', 'w', encoding='utf-8') as f:
+    f.write(cleaned_allow)
+
+print("生成最终规则集...")
+with open('cleaned_adblock.txt', 'a', encoding='utf-8') as f:
+    f.write('\n' + cleaned_allow)
+
+with open('allow.txt', 'w', encoding='utf-8') as f:
+    f.write(cleaned_allow)
+
+# 文件处理
+target_dir = Path('../')
+target_dir.mkdir(exist_ok=True)
+
+def deduplicate_file(filepath):
+    """增强版去重函数（保留顺序+注释）"""
+    with open(filepath, 'r+', encoding='utf-8') as f:
+        seen = set()
+        unique_lines = []
+        for line in f:
+            norm_line = line.lower().strip() if not line.startswith('!') else line
+            if norm_line not in seen:
+                seen.add(norm_line)
+                unique_lines.append(line)
+        f.seek(0)
+        f.writelines(unique_lines)
+        f.truncate()
+
+Path('cleaned_adblock.txt').rename(target_dir / 'adblock.txt')
+Path('allow.txt').rename(target_dir / 'allow.txt')
+
+print("规则去重处理...")
+for file in [target_dir / 'adblock.txt', target_dir / 'allow.txt']:
+    if file.exists():
+        deduplicate_file(file)
+
+print("验证规则有效性...")
+def validate_rules(filepath):
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for i, line in enumerate(f, 1):
+            line = line.strip()
+            if line and not line.startswith('!'):
+                if filepath.name == 'adblock.txt' and not BLOCK_PATTERN.search(line):
+                    print(f"警告：第{i}行可能无效 - {line[:50]}...")
+                elif filepath.name == 'allow.txt' and not ALLOW_PATTERN.search(line):
+                    print(f"警告：第{i}行可能无效 - {line[:50]}...")
+
+for file in [target_dir / 'adblock.txt', target_dir / 'allow.txt']:
+    validate_rules(file)
+
+print("处理完成！生成文件：")
+print(f"- {target_dir / 'adblock.txt'}")
+print(f"- {target_dir / 'allow.txt'}")
