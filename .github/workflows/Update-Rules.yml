@@ -42,25 +42,32 @@ jobs:
         run: |
           python ./data/python/filter-dns.py
 
+      - name: Setup Node.js 22.x
+        if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'yarn'
+
       - name: Process AdGuard Rules
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
-          # 使用 Node.js 官方源安装最新版本
-          curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-          sudo apt-get install -y nodejs
+          # 安装构建工具
+          sudo apt-get update
+          sudo apt-get install -y git python3-pip
           
-          # 确保使用最新 npm
-          sudo npm install -g npm@latest
-          
-          # 克隆仓库并使用 yarn 安装（更可靠）
+          # 克隆仓库
           git clone https://github.com/AdguardTeam/tsurlfilter.git
           cd tsurlfilter
-          sudo npm install -g yarn
-          yarn install --frozen-lockfile
+          
+          # 使用 yarn 安装依赖
+          yarn install --ignore-engines
           yarn build
+          
+          # 全局链接
           sudo npm link
           
-          # 返回工作目录并运行脚本
+          # 返回工作目录并处理规则
           cd ${{ github.workspace }}
           python ./data/python/rules.py
           ls -la adb.txt adw.txt add.txt
