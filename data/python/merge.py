@@ -5,45 +5,30 @@ from pathlib import Path
 
 os.chdir('tmp')
 
-# AdGuard/AdGuard Home完整语法规则（2024最新版）
+# 增强版AdGuard/AdGuard Home规则匹配模式
 ALLOW_PATTERN = re.compile(
     r'^@@\|\|[\w.-]+\^(\$~?[\w,=-]+)?|'  # 基础域名例外
     r'^@@##.+|'                          # 元素隐藏例外
-    r'^@@\|\|[\w.-]+\^\$document|'       # 文档级例外
-    r'^@@\|\|[\w.-]+\^\$generichide|'    # 通用隐藏例外
-    r'^@@\|\|[\w.-]+\^\$elemhide|'       # 元素隐藏例外
-    r'^@@\d+\.\d+\.\d+\.\d+|'            # IP例外
-    r'^@@/[^/]+/\$important|'            # 重要正则例外
-    r'^@@\|\|[\w.-]+\^\$ctag|'           # 内容类型例外
-    r'^@@\|\|[\w.-]+\^\$client=\S+|'     # 客户端白名单
-    r'^@@\|\|[\w.-]+\^\$app=\w+|'        # 应用例外
-    r'^@@\|\|[\w.-]+\^\$denyallow|'      # 部分放行
-    r'^@@\|\|[\w.-]+\^\$redirect=nooptext|'  # 重定向例外
-    r'^@@\|\|[\w.-]+\^\$removeparam=\w+' # 参数保留
+    r'^@@\|\|[\w.-]+\^\$[a-z]+|'        # 各种修饰符例外
+    r'^@@\d+\.\d+\.\d+\.\d+|'           # IP例外
+    r'^@@/[^/]+/|'                       # 正则例外
+    r'^@@\|https?://|'                   # URL例外
+    r'^@@\|\*\.'                         # 通配符例外
 )
 
 BLOCK_PATTERN = re.compile(
-    r'^\|\|[\w.-]+\^(\$~?[\w,=-]+)?|'    # 基础域名规则
-    r'^\|\|[\w.-]+\^\$document|'         # 文档级拦截
-    r'^\|\|[\w.-]+\^\$generichide|'      # 通用隐藏
-    r'^\|\|[\w.-]+\^\$elemhide|'         # 元素隐藏
-    r'^##.+|'                            # 基础元素隐藏
+    r'^\|\|[\w.-]+\^(\$~?[\w,=-]+)?|'   # 基础域名规则
+    r'^\|\|[\w.-]+\^\$[a-z]+|'          # 各种修饰符
+    r'^##.+|'                            # 元素隐藏
     r'^#\?#.+|'                          # 扩展CSS选择器
     r'^#@#.+|'                           # 旧版元素隐藏例外
     r'^\d+\.\d+\.\d+\.\d+\s+[\w.-]+|'   # Hosts格式
-    r'^\|\|[\w.-]+\^\$important|'        # 重要规则
-    r'^\|\|[\w.-]+\^\$badfilter|'        # 坏过滤器
-    r'^\|\|[\w.-]+\^\$ctag|'             # 内容类型过滤
     r'^/[\w/-]+/|'                       # 正则规则
-    r'^\|\|[\w.-]+\^\$client=\S+|'       # 客户端限定
-    r'^\|\|[\w.-]+\^\$app=\w+|'          # 应用限定
-    r'^\|\|[\w.-]+\^\$redirect=\w+|'     # 重定向规则
-    r'^\|\|[\w.-]+\^\$removeparam=\w+|'  # 参数移除
-    r'^\|\|[\w.-]+\^\$all|'              # 全协议规则
-    r'^\|\|[\w.-]+\^\$cookie|'           # Cookie规则
-    r'^\|\|[\w.-]+\^\$csp|'              # CSP规则
-    r'^\|\|[\w.-]+\^\$replace=\w+|'      # 内容替换
-    r'^\|\|[\w.-]+\^\$hls'               # HLS规则
+    r'^\|\|[\w.-]+\^\$[a-z]+=\w+|'       # 带值的修饰符
+    r'^\|\|\*\.'                         # 通配符规则
+    r'^\|\|[\w.-]+\^?\*|'                # 通配符变体
+    r'^\|\|[\w.-]+\.\*|'                 # 另一种通配符
+    r'^\|\|[\w.-]+$'                     # 简单域名规则
 )
 
 def normalize_rules(content):
@@ -57,7 +42,6 @@ def normalize_rules(content):
 
 def clean_rules(content, pattern):
     """增强版规则清理函数"""
-    # 保留AdGuard配置注释（!开头）和有效规则
     lines = []
     for line in content.splitlines():
         line = line.strip()
