@@ -74,7 +74,8 @@ class MihomoManager:
 
     def prepare(self) -> bool:
         """准备最新版mihomo工具链"""
-        if not (self.latest_version := self._get_latest_version()):
+        self.latest_version = self._get_latest_version()
+        if not self.latest_version:
             return False
             
         self.binary_path = self.tool_dir / f"mihomo-{self.latest_version}"
@@ -102,14 +103,15 @@ class AdRuleConverter:
         return any(kw in domain for kw in self.AD_KEYWORDS)
 
     def _parse_rule(self, line: str) -> Optional[Dict]:
-        """支持所有主流广告规则语法[citation:1][citation:6]"""
+        """支持所有主流广告规则语法"""
         line = line.strip()
         if not line or line.startswith(('!', '#')):
             return None
 
         # 处理白名单规则
         if line.startswith('@@'):
-            if match := re.match(r'^@@\|\|?([\w*.-]+)\^?', line):
+            match = re.match(r'^@@\|\|?([\w*.-]+)\^?', line)
+            if match:
                 return {
                     'type': 'allow',
                     'domain': match.group(1).replace('*.', ''),
@@ -126,7 +128,8 @@ class AdRuleConverter:
         ]
 
         for pattern, _ in rule_patterns:
-            if match := re.match(pattern, line):
+            match = re.match(pattern, line)
+            if match:
                 domain = match.group(1) if 'hosts' not in pattern else match.group(2)
                 return {
                     'type': 'block',
@@ -137,7 +140,7 @@ class AdRuleConverter:
         return None
 
     def _convert_rule(self, rule: Dict) -> Optional[str]:
-        """高精度规则转换[citation:7]"""
+        """高精度规则转换"""
         if not rule['domain'] or '*' in rule['domain']:
             return None
 
@@ -159,11 +162,12 @@ class AdRuleConverter:
 
         with open(input_path, 'r', encoding='utf-8', errors='ignore') as f:
             for line in f:
-                if rule := self._parse_rule(line):
-                    if converted_rule := self._convert_rule(rule):
-                        if converted_rule not in self.rule_cache:
-                            self.rule_cache.add(converted_rule)
-                            converted.append(converted_rule)
+                rule = self._parse_rule(line)
+                if rule:
+                    converted_rule = self._convert_rule(rule)
+                    if converted_rule and converted_rule not in self.rule_cache:
+                        self.rule_cache.add(converted_rule)
+                        converted.append(converted_rule)
         return converted
 
 def main():
@@ -184,10 +188,11 @@ def main():
     
     rules = []
     for name, path in input_files.items():
-        if file_rules := converter.process_file(path, is_allow=(name == 'allow')):
+        file_rules = converter.process_file(path, is_allow=(name == 'allow'))
+        if file_rules:
             rules.extend(file_rules)
 
-    # 3. 添加系统必要规则[citation:2][citation:8]
+    # 3. 添加系统必要规则
     essential_rules = [
         "GEOSITE,ads,REJECT",  # 广告域名分类
         "GEOIP,CN,DIRECT",     # 中国IP直连
@@ -207,7 +212,7 @@ rules:
         tmp.write("\n".join(rules))
         tmp.flush()
 
-        # 5. 转换为.mrs格式[citation:6]
+        # 5. 转换为.mrs格式
         result = subprocess.run([
             str(mgr.binary_path), "rulegen",
             "-i", tmp.name,
