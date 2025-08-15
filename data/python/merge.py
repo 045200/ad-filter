@@ -6,33 +6,33 @@ from collections import OrderedDict
 
 os.chdir('tmp')
 
-# 全覆盖规则正则（整合四大拦截器语法）
-ALLOW_PATTERN = re.compile(
-    r'^@@\|\|[\w.-]+\^?(\$~?[\w,=-]+)?|'      # 基础白名单（全兼容）
-    r'^@@##.+|'                               # 元素隐藏例外（AdGuard/uBO）
-    r'^@@/[^/]+/[ims]*(?:\$~?[\w,;=-]+)?|'    # 正则白名单（AdGuard/uBO）
-    r'^@@\d+\.\d+\.\d+\.\d+(?:\/\d+)?|'      # IP/CIDR白名单（全兼容）
-    r'^@@\$\$.+|'                             # JS/CSS注入例外（AdGuard）
-    r'^@@\|\|[\w.-]+\^\$document(?:,~?[\w,=-]+)?|'  # 文档级例外（AdGuard/uBO）
-    r'^@@\|\|[\w.-]+\^\$app=~?[\w-]+|'       # 应用例外（AdGuard）
-    r'^\|\|[\w.-]+\^\$dnstype=[\w,]+|'       # DNS类型例外（AdGuard Home）
-    r'^@@\|\|[\w.-]+\^\$client=~?[\w,.-]+'   # 客户端例外（AdGuard）
+# AdGuard/AdGuard Home 白名单规则正则（仅支持AdGuard语法）
+ADG_ALLOW_PATTERN = re.compile(
+    r'^@@\|\|[\w.-]+\^(\$~?[\w,=-]+)?|'      # 基础白名单
+    r'^@@##.+|'                               # 元素隐藏例外
+    r'^@@/[^/]+/[ims]*(?:\$~?[\w,;=-]+)?|'   # 正则白名单
+    r'^@@\d+\.\d+\.\d+\.\d+(?:\/\d+)?\s+[\w.-]+|'  # IP/CIDR白名单（Hosts格式）
+    r'^@@\$\$.+|'                             # JS/CSS注入例外
+    r'^@@\|\|[\w.-]+\^\$document(?:,~?[\w,=-]+)?|'  # 文档级例外
+    r'^@@\|\|[\w.-]+\^\$app=~?[\w-]+|'       # 应用例外
+    r'^@@\|\|[\w.-]+\^\$client=~?[\w,.-]+|'  # 客户端例外
+    r'^@@\|\|[\w.-]+\^\$dnstype=[\w,]+|'     # DNS类型例外（AdGuard Home特有）
+    r'^@@/REGEX/'                             # 正则表达式白名单（AdGuard Home）
 )
 
-BLOCK_PATTERN = re.compile(
-    r'^\|\|[\w.-]+\^(\$~?[\w,=-]+)?|'        # 基础拦截（全兼容）
-    r'^/[\w/-]+/[ims]*(?:\$~?[\w,;=-]+)?|'   # 正则拦截（AdGuard/uBO）
-    r'^##.+|'                                # 元素隐藏（全兼容）
-    r'^\d+\.\d+\.\d+\.\d+(?:\/\d+)?\s+[\w.-]+|'  # Hosts拦截（全兼容）
-    r'^\$\$.+|'                              # JS/CSS注入（AdGuard）
-    r'^\|\|[\w.-]+\^\$document(?:,~?[\w,=-]+)?|'  # 文档级拦截（AdGuard/uBO）
-    r'^\|\|[\w.-]+\^\$popup|'                # 弹窗拦截（AdGuard）
-    r'^\|\|[\w.-]+\^\$app=~?[\w-]+|'         # 应用拦截（AdGuard）
-    r'^\|\|[\w.-]+\^\$client=~?[\w,.-]+|'    # 客户端拦截（AdGuard）
-    r'^#@#.+|'                               # 元素隐藏例外（uBO）
-    r'^\*\$[^\s,]+(?:,[^\s]+)*|'             # uBlock通用规则
-    r'^\|\|[\w.-]+\^\$important|'            # 重要规则（uBO）
-    r'^\.\./[\w/-]+'                         # 路径匹配（Brave/adblock-rust）
+# AdGuard/AdGuard Home 拦截规则正则（仅支持AdGuard语法）
+ADG_BLOCK_PATTERN = re.compile(
+    r'^\|\|[\w.-]+\^(\$~?[\w,=-]+)?|'        # 基础拦截
+    r'^/[\w/-]+/[ims]*(?:\$~?[\w,;=-]+)?|'   # 正则拦截
+    r'^##.+|'                                # 元素隐藏
+    r'^\d+\.\d+\.\d+\.\d+(?:\/\d+)?\s+[\w.-]+|'  # Hosts拦截
+    r'^\$\$.+|'                              # JS/CSS注入
+    r'^\|\|[\w.-]+\^\$document(?:,~?[\w,=-]+)?|'  # 文档级拦截
+    r'^\|\|[\w.-]+\^\$popup|'                # 弹窗拦截
+    r'^\|\|[\w.-]+\^\$app=~?[\w-]+|'         # 应用拦截
+    r'^\|\|[\w.-]+\^\$client=~?[\w,.-]+|'    # 客户端拦截
+    r'^\|\|[\w.-]+\^\$dnstype=[\w,]+|'       # DNS类型拦截（AdGuard Home特有）
+    r'^/REGEX/'                              # 正则表达式拦截（AdGuard Home）
 )
 
 def strict_clean(line):
@@ -46,24 +46,21 @@ def strict_clean(line):
     line = re.sub(r'^\[Adblock.*\]$', '', line)   # 元信息
     return re.sub(r'\s+', ' ', line).strip()
 
-def categorize_rules(content, pattern):
-    """规则分类（ABP/uBO/AdGuard）"""
-    abp_rules, ub_rules, adg_rules = [], [], []
-    for line in content.splitlines():
-        cleaned = strict_clean(line)
-        if not cleaned or not pattern.search(cleaned):
-            continue
-        # ABP兼容规则（基础语法）
-        if re.match(r'^(\|\||##|#@#|@@\|\|)[\w.-]+[\^\s]', cleaned):
-            abp_rules.append(cleaned)
-        # uBO扩展语法
-        if re.search(r'\$(document|popup|important|~?\w+=)', cleaned) or \
-           re.match(r'^\*\$|\.\./', cleaned):
-            ub_rules.append(cleaned)
-        # AdGuard扩展语法
-        if re.search(r'\$(app|client|dnstype)=|@@\$\$', cleaned):
-            adg_rules.append(cleaned)
-    return abp_rules, ub_rules, adg_rules
+def is_adguard_rule(line):
+    """检查是否为AdGuard/AdGuard Home规则"""
+    # AdGuard基本语法检查
+    if re.match(r'^(\|\||##|@@\|\|)[\w.-]+[\^\s]', line):
+        return True
+    # AdGuard扩展语法检查
+    if re.search(r'\$(app|client|dnstype|document|popup)=', line):
+        return True
+    # AdGuard Home正则表达式规则
+    if re.match(r'^/[\w/-]+/|^@@/[\w/-]+/', line):
+        return True
+    # Hosts格式规则
+    if re.match(r'^\d+\.\d+\.\d+\.\d+\s+[\w.-]+', line):
+        return True
+    return False
 
 def advanced_deduplicate(rules):
     """增强去重（标准化+保留顺序）"""
@@ -86,20 +83,27 @@ print("提取白名单规则...")
 extracted_allow = []
 for line in block_content.splitlines():
     cleaned = strict_clean(line)
-    if cleaned.startswith('@@') and ALLOW_PATTERN.search(cleaned):
+    if cleaned.startswith('@@') and ADG_ALLOW_PATTERN.search(cleaned):
         extracted_allow.append(cleaned)
 
-print("分类处理规则...")
-abp_block, ub_block, adg_block = categorize_rules(block_content, BLOCK_PATTERN)
-abp_allow, ub_allow, adg_allow = categorize_rules('\n'.join(extracted_allow), ALLOW_PATTERN)
+print("筛选AdGuard/AdGuard Home规则...")
+adg_block = []
+adg_allow = []
+for line in block_content.splitlines():
+    cleaned = strict_clean(line)
+    if not cleaned:
+        continue
+        
+    # 处理拦截规则
+    if not cleaned.startswith('@@') and ADG_BLOCK_PATTERN.search(cleaned):
+        if is_adguard_rule(cleaned):
+            adg_block.append(cleaned)
+    
+    # 处理白名单规则（已在前面提取）
+    if cleaned in extracted_allow and is_adguard_rule(cleaned):
+        adg_allow.append(cleaned)
 
 print("生成最终文件...")
-with open('../abp.txt', 'w', encoding='utf-8') as f:
-    f.write('\n'.join(advanced_deduplicate(abp_block + abp_allow)))
-
-with open('../ub.txt', 'w', encoding='utf-8') as f:
-    f.write('\n'.join(advanced_deduplicate(ub_block + ub_allow)))
-
 with open('../adblock.txt', 'w', encoding='utf-8') as f:
     f.write('\n'.join(advanced_deduplicate(adg_block + adg_allow)))
 
@@ -107,7 +111,5 @@ with open('../allow.txt', 'w', encoding='utf-8') as f:
     f.write('\n'.join(advanced_deduplicate(extracted_allow)))
 
 print("处理完成！输出文件：")
-print("- abp.txt (Adblock Plus兼容规则)")
-print("- ub.txt (uBlock Origin优化规则)")
-print("- adblock.txt (AdGuard/AdGuardHome全功能规则)")
-print("- allow.txt (跨拦截器白名单规则)")
+print("- adblock.txt (AdGuard/AdGuard Home全功能规则)")
+print("- allow.txt (AdGuard/AdGuard Home白名单规则)")
