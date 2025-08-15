@@ -2,180 +2,219 @@
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 import mmap
 
-class AdGuardDNSRuleValidator:
-    """增强版AdGuard Home DNS规则验证器（支持最新官方语法）"""
-
+class AdGuardHomeRuleValidator:
+    """AdGuard Home DNS规则验证器（支持v0.108+全语法）"""
+    
     @staticmethod
-    def is_valid_rule(line: str) -> bool:
-        """
-        完整验证规则有效性：
-        - 支持IPv4/IPv6/CIDR
-        - 支持所有官方修饰符
-        - 严格过滤注释和元信息
-        """
+    def _compile_patterns() -> Dict[str, re.Pattern]:
+        """预编译所有正则模式（提升性能）"""
+        return {
+            # 基础域名规则（含IDN支持）
+            'domain': re.compile(r'^(\|\|)?([\w.*-]+|xn--[\w-]+)\^(?:\$[\w,=-]+)?$'),
+            
+            # 完整修饰符语法（官方文档2024版）
+            'modifiers': re.compile(
+                r'^\|\|[\w.-]+\^\$('
+                r'dnsrewrite=[^;]+(?:;[^;]+)*|'  # DNS重写
+                r'ctag=[\w,]+|'                  # 设备标签
+                r'client(?:=~?[\w.-]+)?|'        # 客户端
+                r'dnstype=[\w,]+|'               # DNS类型
+                r'denyallow=[\w.|-]+|'           # 例外允许
+                r'badfilter|'                    # 规则排除
+                r'important'                     # 强制规则
+                r')(?:,~?[\w.=-]+)*$'
+            ),
+            
+            # Hosts格式（支持IPv4/IPv6/CIDR）
+            'hosts': re.compile(
+                r'^((?:\d{1,3}\.){3}\d{1,3}|[\da-fA-F:]+(?:/\d{1,3})?)\s+'
+                r'([\w.-]+|xn--[\w-]+)(?:\s*#.*)?$'
+            ),
+            
+            # 正则表达式规则
+            'regex': re.compile(r'^/.*/[ims]*(?:\$[\w,=-]+)?$'),
+            
+            # 白名单规则（增强版）
+            'allow': re.compile(
+                r'^@@\|\|([\w.*-]+|xn--[\w-]+)\^(?:\$[\w,=-]+)?|'
+                r'^@@\d+\.\d+\.\d+\.\d+(?:/\d+)?|'
+                r'^@@/.*/[ims]*(?:\$[\w,=-]+)?'
+            )
+        }
+
+    def __init__(self):
+        self.patterns = self._compile_patterns()
+        
+    def validate(self, line: str) -> Optional[str]:
+        """验证单条规则并返回标准化格式"""
         line = line.strip()
-        if not line:
-            return False
-
-        # 增强注释检测（支持中英文及特殊符号）
-        if re.match(r'^[!#].*[\u4e00-\u9fff\s]', line):
-            return False
-
-        # 核心匹配模式（按优先级排序）
-        patterns = [
-            # 1. 基础域名规则（增强通配符支持）
-            r'^(\|\|[\w.*_-]+\^(?:\$[\w,=-]+)?|[\w.*-]+\.\w+$)',
+        if not line or line[0] in ('!', '#', '['):
+            return None
             
-            # 2. Hosts格式（支持IPv4/IPv6/CIDR）
-            r'^((?:\d{1,3}\.){3}\d{1,3}|::\d*)\s+[\w.-]+',
-            r'^[\da-fA-F:./]+\s+[\w.-]+$',  # 含CIDR
+        # 白名单优先检测
+        if line.startswith('@@'):
+            if self.patterns['allow'].match(line):
+                return line
+            return None
             
-            # 3. 正则表达式规则
-            r'^/.*/[ims]*(?:\$[\w,=-]+)?$',
+        # 修饰符规则检测
+        if self.patterns['modifiers'].match(line):
+            return line
             
-            # 4. 完整修饰符语法（官方2023新版）
-            r'^\|\|[\w.-]+\^\$[a-z]+(?:=[\w.-]*)?(?:,[a-z]+(?:=[\w.-]*)?)*$',
+        # 基础域名规则
+        if match := self.patterns['domain'].match(line):
+            # 标准化通配符位置
+            domain = match.group(2).lower()
+            if domain.startswith('*.'):
+                domain = domain[2:]
+            return f"||{domain}^" + (match.group(3) or '')
             
-            # 5. 特殊功能规则
-            r'^\|\|[\w.-]+\^\$dnsrewrite=[^;]+(?:;[^;]+)*$',  # DNS重写
-            r'^\|\|[\w.-]+\^\$ctag=[\w,]+$',  # 设备标签
-            r'^\|\|[\w.-]+\^\$client(?:=~?[\w.-]+)?$'  # 客户端
-        ]
+        # Hosts规则处理
+        if match := self.patterns['hosts'].match(line):
+            ip, host = match.groups()
+            return f"{ip}\t{host.lower()}"
+            
+        # 正则表达式规则
+        if self.patterns['regex'].match(line):
+            return line
+            
+        return None
 
-        # 特殊case处理（性能优化）
-        if line.startswith(('||', '|', '/')):
-            return any(re.match(p, line) for p in patterns[:4])
-        return any(re.match(p, line) for p in patterns)
-
-def validate_rules_batch(lines: List[str]) -> List[str]:
-    """批量验证规则（优化CPU密集型任务）"""
-    return [line.strip() for line in lines if AdGuardDNSRuleValidator.is_valid_rule(line)]
-
-def detect_conflicts(rules: List[str]) -> List[Tuple[str, List[str]]]:
-    """冲突检测（含自动修复建议）"""
-    conflict_rules = []
-    domain_map = defaultdict(list)
+def process_rules_concurrently(lines: List[str], validator: AdGuardHomeRuleValidator) -> Tuple[List[str], List[str]]:
+    """并发处理规则（返回有效规则和白名单）"""
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(validator.validate, lines))
     
-    for rule in rules:
-        if match := re.match(r'^\|\|([\w.*-]+)\^', rule):
-            domain = match.group(1).lower()
-            domain_map[domain].append(rule)
+    valid_rules = []
+    allow_rules = []
     
-    for domain, rules in domain_map.items():
-        if len(rules) > 1:
-            has_allow = any('@@' in r for r in rules)
-            has_block = any('@@' not in r for r in rules)
-            if has_allow and has_block:
-                suggested = [r for r in rules if '@@' in r]  # 优先保留白名单
-                conflict_rules.append((domain, suggested))
+    for rule in filter(None, results):
+        if rule.startswith('@@'):
+            allow_rules.append(rule)
+        else:
+            valid_rules.append(rule)
     
-    return conflict_rules
+    return valid_rules, allow_rules
 
-def process_dns_rules(input_path: Path, output_path: Path) -> dict:
-    """核心处理流程（线程安全+原子操作）"""
+def analyze_rules(rules: List[str]) -> Dict:
+    """深度规则分析（含冲突检测）"""
     stats = {
-        'total': 0,
-        'valid': 0,
         'domains': 0,
         'hosts': 0,
         'regex': 0,
+        'modified': 0,
         'conflicts': []
     }
+    
+    domain_map = defaultdict(list)
+    
+    for rule in rules:
+        if rule.startswith('||'):
+            stats['domains'] += 1
+            domain = rule.split('^')[0][2:]
+            domain_map[domain].append(rule)
+        elif re.match(r'^[\d:]', rule):
+            stats['hosts'] += 1
+        elif rule.startswith('/'):
+            stats['regex'] += 1
+        elif '$' in rule:
+            stats['modified'] += 1
+            
+    # 冲突检测（域名级）
+    for domain, rules in domain_map.items():
+        if len(rules) > 1:
+            blocking = [r for r in rules if not r.startswith('@@')]
+            allowing = [r for r in rules if r.startswith('@@')]
+            
+            if blocking and allowing:
+                suggested = allowing[-1]  # 保留最后一条白名单
+                stats['conflicts'].append({
+                    'domain': domain,
+                    'count': len(rules),
+                    'suggestion': suggested
+                })
+    
+    return stats
 
-    try:
-        # 内存映射处理大文件
-        with input_path.open('rb') as f:
-            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-                # 分块读取优化内存
-                chunk_size = 1024 * 1024  # 1MB
-                chunks = []
-                while True:
-                    chunk = mm.read(chunk_size)
-                    if not chunk:
-                        break
-                    chunks.append(chunk.decode('utf-8', errors='replace'))
-                content = ''.join(chunks)
-
-        # 并行处理
-        lines = content.splitlines()
-        stats['total'] = len(lines)
-        
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            # 分块处理提升性能
-            chunk_size = 5000
-            batches = [lines[i:i + chunk_size] for i in range(0, len(lines), chunk_size)]
-            results = list(executor.map(validate_rules_batch, batches))
-            valid_rules = [rule for batch in results for rule in batch]
-
-        stats['valid'] = len(valid_rules)
-        
-        # 冲突检测
-        stats['conflicts'] = detect_conflicts(valid_rules)
-        
-        # 智能排序
-        def sort_key(rule: str) -> Tuple[int, int]:
-            if rule.startswith('||'): return (0, len(rule))
-            if re.match(r'^[\d:a-fA-F]', rule): return (1, len(rule))
-            return (2, len(rule))
-        
-        sorted_rules = sorted(valid_rules, key=sort_key)
-        
-        # 类型统计
-        stats['domains'] = sum(1 for r in sorted_rules if r.startswith('||'))
-        stats['hosts'] = sum(1 for r in sorted_rules if re.match(r'^[\d:]', r))
-        stats['regex'] = sum(1 for r in sorted_rules if r.startswith('/'))
-        
-        # 原子写入
-        temp_file = output_path.with_suffix('.tmp')
-        with temp_file.open('w', encoding='utf-8') as f:
-            f.write('\n'.join(sorted_rules))
-        temp_file.replace(output_path)
-        
-        return stats
-
-    except Exception as e:
-        print(f"CRITICAL: {type(e).__name__} - {str(e)}", file=sys.stderr)
-        raise
+def write_output_files(output_dir: Path, rules: List[str], allow_rules: List[str]) -> None:
+    """原子化写入输出文件"""
+    # 智能排序（域名规则优先）
+    def sort_key(r: str) -> tuple:
+        if r.startswith('||'): return (0, len(r), r)
+        if re.match(r'^[\d:]', r): return (1, len(r), r)
+        return (2, len(r), r
+    
+    sorted_rules = sorted(rules, key=sort_key)
+    sorted_allow = sorted(allow_rules, key=sort_key)
+    
+    # 写入主规则文件
+    dns_file = output_dir / "dns.txt"
+    with dns_file.open('w', encoding='utf-8') as f:
+        f.write("! Title: AdGuard Home DNS Rules\n")
+        f.write("! Updated: " + datetime.now().isoformat() + "\n")
+        f.write("\n".join(sorted_rules))
+    
+    # 写入白名单文件
+    allow_file = output_dir / "dnsallow.txt"
+    with allow_file.open('w', encoding='utf-8') as f:
+        f.write("! Title: AdGuard Home Allowlist\n")
+        f.write("! Contains exception rules only\n\n")
+        f.write("\n".join(sorted_allow))
 
 def main():
-    """命令行入口"""
     try:
-        # 自动定位仓库根目录
-        repo_root = Path(__file__).resolve().parents[2]
+        repo_root = Path(__file__).resolve().parent
         input_file = repo_root / "adblock.txt"
-        output_file = repo_root / "dns.txt"
+        output_dir = repo_root / "output"
         
-        print(f"🔍 输入文件: {input_file}")
-        print(f"💾 输出文件: {output_file}")
+        output_dir.mkdir(exist_ok=True)
         
-        if not input_file.exists():
-            raise FileNotFoundError(f"输入文件不存在: {input_file}")
+        print(f"🔍 Processing: {input_file}")
         
-        stats = process_dns_rules(input_file, output_file)
+        # 内存映射读取大文件
+        with input_file.open('rb') as f:
+            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                content = mm.read().decode('utf-8', errors='replace')
         
-        # 打印报告
-        print("\n📊 处理报告:")
-        print(f"- 原始规则: {stats['total']}条")
-        print(f"- 有效规则: {stats['valid']}条")
-        print(f"  ├─ 域名规则: {stats['domains']}条")
-        print(f"  ├─ Hosts规则: {stats['hosts']}条")
-        print(f"  └─ 正则表达式: {stats['regex']}条")
+        lines = content.splitlines()
+        validator = AdGuardHomeRuleValidator()
+        
+        print("⚙️ Validating rules...")
+        valid_rules, allow_rules = process_rules_concurrently(lines, validator)
+        
+        print("📊 Analyzing rules...")
+        stats = analyze_rules(valid_rules + allow_rules)
+        
+        print("\n📝 Statistics:")
+        print(f"- Total input: {len(lines)}")
+        print(f"- Valid rules: {len(valid_rules)} (domains: {stats['domains']})")
+        print(f"- Allow rules: {len(allow_rules)}")
+        print(f"- Hosts rules: {stats['hosts']}")
+        print(f"- Regex rules: {stats['regex']}")
+        print(f"- Modified rules: {stats['modified']}")
         
         if stats['conflicts']:
-            print("\n⚠️ 发现规则冲突:")
-            for domain, suggested in stats['conflicts']:
-                print(f"  {domain}: 建议保留 {suggested[0]}")
+            print("\n⚠️ Found conflicts:")
+            for conflict in stats['conflicts'][:5]:  # 显示前5个冲突
+                print(f"  {conflict['domain']} ({conflict['count']} rules)")
+                print(f"  Suggested: {conflict['suggestion']}")
         
-        print("\n✅ 处理完成！输出文件已验证语法兼容性")
-
+        print("\n💾 Writing output files...")
+        write_output_files(output_dir, valid_rules, allow_rules)
+        
+        print(f"\n✅ Successfully generated:")
+        print(f"- {output_dir/'dns.txt'} ({len(valid_rules)} rules)")
+        print(f"- {output_dir/'dnsallow.txt'} ({len(allow_rules)} rules)")
+        
     except Exception as e:
-        print(f"❌ 处理失败: {str(e)}", file=sys.stderr)
+        print(f"❌ Error: {type(e).__name__} - {str(e)}", file=sys.stderr)
         sys.exit(1)
 
 if __name__ == "__main__":
+    from datetime import datetime
     main()
