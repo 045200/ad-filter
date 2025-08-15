@@ -13,7 +13,13 @@ ALLOW_PATTERN = re.compile(
     r'^@@\d+\.\d+\.\d+\.\d+|'           # IP例外
     r'^@@/[^/]+/|'                       # 正则例外
     r'^@@\|https?://|'                   # URL例外
-    r'^@@\|\*\.'                         # 通配符例外
+    r'^@@\|\*\.|'                        # 通配符例外
+    r'^@@\|\|[\w.-]+$|'                  # 简单域名例外(无^结尾)
+    r'^@@[\w.-]+\^|'                     # 简化的域名例外
+    r'^@@\|\|[\w.-]+\^\$[a-z]+=[\w.-]+|' # 带值的修饰符
+    r'^@@\|\|[\w.-]+\*?\^|'              # 带通配符的域名
+    r'^@@\|\|[\w.-]+\.\*\|'              # 子域名通配
+    r'^@@\|\|[\w*.-]+\^?[\w*.-]*'        # 更宽松的匹配
 )
 
 BLOCK_PATTERN = re.compile(
@@ -127,10 +133,16 @@ def validate_rules(filepath):
         for i, line in enumerate(f, 1):
             line = line.strip()
             if line and not line.startswith('!'):
-                if filepath.name == 'adblock.txt' and not BLOCK_PATTERN.search(line):
-                    print(f"警告：第{i}行可能无效 - {line[:50]}...")
-                elif filepath.name == 'allow.txt' and not ALLOW_PATTERN.search(line):
-                    print(f"警告：第{i}行可能无效 - {line[:50]}...")
+                if filepath.name == 'adblock.txt':
+                    if not line.startswith('@@') and not BLOCK_PATTERN.search(line):
+                        print(f"警告：第{i}行可能无效 - {line[:50]}...")
+                elif filepath.name == 'allow.txt':
+                    if not line.startswith('@@'):
+                        print(f"警告：第{i}行不是白名单规则 - {line[:50]}...")
+                    elif not ALLOW_PATTERN.search(line):
+                        # 对白名单规则验证更宽松
+                        if not re.match(r'^@@\|\|?[\w*.-]+[\^*]?', line):
+                            print(f"警告：第{i}行可能无效 - {line[:50]}...")
 
 for file in [target_dir / 'adblock.txt', target_dir / 'allow.txt']:
     validate_rules(file)
