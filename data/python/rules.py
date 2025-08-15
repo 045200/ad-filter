@@ -6,7 +6,7 @@ from pathlib import Path
 
 # 路径配置
 SCRIPT_DIR = Path(__file__).parent                  # ./data/python/
-ROOT_DIR = SCRIPT_DIR.parent.parent.parent          # 根目录
+ROOT_DIR = SCRIPT_DIR.parent.parent          # 根目录
 TSURLFILTER_MODULE_PATH = ROOT_DIR / "tsurlfilter" / "packages" / "tsurlfilter"
 
 # 输入输出路径
