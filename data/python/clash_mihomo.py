@@ -8,6 +8,7 @@ Clash/Mihomo 广告规则转换工具 (最终版)
 3. 优化mihomo-tool调用参数验证
 4. 支持GEOSITE规则类型
 5. 改进的下载逻辑（自动获取最新版本）
+6. 添加自动配置文件生成
 """
 
 import os
@@ -94,17 +95,33 @@ class FileProcessor:
                 temp_path.unlink()
             raise e
 
-# ==================== Mihomo工具 (改进下载逻辑) ====================
+# ==================== Mihomo工具 (改进下载逻辑和配置处理) ====================
 class MihomoTool:
     def __init__(self, work_dir):
         self.tool_dir = TOOL_DIR
         self.tool_path = TOOL_DIR / TOOL_NAME
+        self.config_path = TOOL_DIR / "config.yaml"
         self._setup()
 
     def _setup(self):
+        # 创建工具目录
+        self.tool_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 创建基本配置文件
+        if not self.config_path.exists():
+            with open(self.config_path, "w") as f:
+                f.write("""\
+port: 7890
+socks-port: 7891
+allow-lan: false
+mode: rule
+log-level: info
+external-controller: 127.0.0.1:9090
+""")
+
         if not self.tool_path.exists():
             self._download_tool()
-        
+
         # 验证工具可用性
         try:
             result = subprocess.run([str(self.tool_path), "-v"], 
@@ -117,7 +134,6 @@ class MihomoTool:
 
     def _download_tool(self):
         try:
-            self.tool_dir.mkdir(parents=True, exist_ok=True)
             version_url = "https://github.com/MetaCubeX/mihomo/releases/latest/download/version.txt"
             version_file = self.tool_dir / "version.txt"
 
@@ -138,14 +154,14 @@ class MihomoTool:
             with gzip.open(tool_gz_path, 'rb') as f_in:
                 with open(self.tool_path, 'wb') as f_out:
                     shutil.copyfileobj(f_in, f_out)
-            
+
             # 设置可执行权限
             self.tool_path.chmod(0o755)
-            
+
             # 清理临时文件
             tool_gz_path.unlink(missing_ok=True)
             version_file.unlink(missing_ok=True)
-            
+
         except Exception as e:
             error(f"下载工具失败: {str(e)}")
             raise RuntimeError("无法下载mihomo-tool")
@@ -153,6 +169,7 @@ class MihomoTool:
     def generate_mrs(self, input_file, output_file, behavior_mode):
         cmd = [
             str(self.tool_path), "rule-set",
+            "--config", str(self.config_path),
             "--strict" if STRICT_MODE else "",
             "--behavior", behavior_mode,
             "--out-format", "binary",
@@ -160,7 +177,7 @@ class MihomoTool:
             str(input_file)
         ]
         cmd = [arg for arg in cmd if arg]  # 移除空参数
-        
+
         try:
             subprocess.run(cmd, check=True)
             return True
