@@ -127,8 +127,8 @@ def get_adblock_urls():
         #"https://anti-ad.net/easylist.txt",
         # Cats-Team广告规则
         #"https://raw.githubusercontent.com/Cats-Team/AdRules/main/adblock.txt",
-        # 挡广告hosts规则
-        #"https://raw.githubusercontent.com/qq5460168/666/master/rules.txt",
+        # 那个谁520广告hosts规则
+        #"https://raw.githubusercontent.com/qq5460168/EasyAds/refs/heads/main/adblock.txt",
         # 10007自动规则
         #"https://lingeringsound.github.io/10007_auto/adb.txt",
         # 晴雅去广告规则
@@ -149,8 +149,8 @@ def get_adblock_urls():
 def get_allow_urls():
     """白名单规则列表 (完整保留原始所有条目)"""
     return [
-        # 挡广告白名单
-        "https://raw.githubusercontent.com/qq5460168/dangchu/main/white.txt",
+        # 那个谁520广告白名单
+        "https://raw.githubusercontent.com/qq5460168/EasyAds/refs/heads/main/allow.txt",
         # AdGuardHome通用白名单
         "https://raw.githubusercontent.com/mphin/AdGuardHomeRules/main/Allowlist.txt",
         # 冷漠域名白名单
