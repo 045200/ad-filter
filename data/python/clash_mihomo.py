@@ -7,12 +7,13 @@ Clash/Mihomo 广告规则转换工具 (最终版)
 2. 增强严格模式过滤
 3. 优化mihomo-tool调用参数验证
 4. 支持GEOSITE规则类型
+5. 改进的下载逻辑（自动获取最新版本）
 """
 
 import os
 import re
 import sys
-import argparse  # [新增] 用于命令行参数解析
+import argparse
 import urllib.request
 import subprocess
 from pathlib import Path
@@ -20,43 +21,35 @@ from datetime import datetime
 import tempfile
 import shutil
 import atexit
+import gzip
 
 # ==================== 配置项 ====================
-# [新增] 可通过命令行覆盖这些配置
 DEFAULT_STRICT_MODE = True          # 默认严格模式
 DEFAULT_BEHAVIOR_MODE = "domain"    # 默认行为模式（domain/classical）
 
-# 其他配置保持不变
 WORK_DIR = Path(tempfile.mkdtemp(prefix="clash_rule_"))
-MIHOMO_TOOL_VERSION = "v1.18.0"   
-PLATFORM = "linux-amd64"          
-TOOL_URL = f"https://github.com/MetaCubeX/mihomo/releases/download/{MIHOMO_TOOL_VERSION}/mihomo-tool-{PLATFORM}"
+TOOL_DIR = WORK_DIR / "tools"
+TOOL_NAME = "mihomo-tool"
 
-# ==================== 日志系统 (不变) ====================
+# ==================== 日志系统 ====================
 def log(message):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
 
 def error(message):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] [ERROR] {message}", file=sys.stderr)
 
-# ==================== Clash规则处理器 (仅添加GEOSITE支持) ====================
+# ==================== Clash规则处理器 ====================
 class ClashRuleConverter:
     SUPPORTED_RULES = {
-        # 原始规则类型保持不变
         'DOMAIN': (r'^\|\|([\w.-]+)\^?$', 'DOMAIN,{},REJECT'),
         'DOMAIN-SUFFIX': (r'^\|\|(\*\.[\w.-]+)\^?$', 'DOMAIN-SUFFIX,{},REJECT'),
         'DOMAIN-KEYWORD': (r'^\$([a-z-]+)$', 'DOMAIN-KEYWORD,{},REJECT'),
         'IP-CIDR': (r'^block:\/\/(\d+\.\d+\.\d+\.\d+)$', 'IP-CIDR,{}/32,REJECT'),
         'IP-CIDR6': (r'^block:\/\/([\da-fA-F:]+)$', 'IP-CIDR6,{}/128,REJECT'),
-        
-        # [新增] GEOSITE支持
         'GEOSITE': (r'^geosite:([\w-]+)$', 'GEOSITE,{},REJECT'),
-        
-        # 原始白名单规则保持不变
         'WHITELIST': (r'^@@\|\|([\w.-]+)\^?$', 'DOMAIN,{},DIRECT')
     }
 
-    # 保持原始方法不变
     @classmethod
     def convert_rule(cls, line):
         line = line.strip()
@@ -75,7 +68,7 @@ class ClashRuleConverter:
         line = line.strip()
         return any(re.match(pattern, line) for _, (pattern, _) in cls.SUPPORTED_RULES.items())
 
-# ==================== 文件处理器 (不变) ====================
+# ==================== 文件处理器 ====================
 class FileProcessor:
     @staticmethod
     def read_lines(file_path):
@@ -101,27 +94,67 @@ class FileProcessor:
                 temp_path.unlink()
             raise e
 
-# ==================== Mihomo工具 (关键改进点) ====================
+# ==================== Mihomo工具 (改进下载逻辑) ====================
 class MihomoTool:
     def __init__(self, work_dir):
-        self.tool_path = work_dir / "mihomo-tool"
+        self.tool_dir = TOOL_DIR
+        self.tool_path = TOOL_DIR / TOOL_NAME
         self._setup()
 
     def _setup(self):
         if not self.tool_path.exists():
-            log(f"下载mihomo-tool {MIHOMO_TOOL_VERSION}...")
-            urllib.request.urlretrieve(TOOL_URL, str(self.tool_path))
+            self._download_tool()
+        
+        # 验证工具可用性
+        try:
+            result = subprocess.run([str(self.tool_path), "--version"], 
+                                  capture_output=True, 
+                                  text=True,
+                                  check=True)
+            log(f"工具版本: {result.stdout.strip()}")
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"工具验证失败: {e.stderr}")
+
+    def _download_tool(self):
+        try:
+            self.tool_dir.mkdir(parents=True, exist_ok=True)
+            version_url = "https://github.com/MetaCubeX/mihomo/releases/latest/download/version.txt"
+            version_file = self.tool_dir / "version.txt"
+
+            log(f"获取 Mihomo 最新版本 ({version_url})...")
+            urllib.request.urlretrieve(version_url, version_file)
+
+            with open(version_file, 'r') as f:
+                version = f.read().strip()
+
+            tool_name = f"mihomo-linux-amd64-{version}"
+            tool_url = f"https://github.com/MetaCubeX/mihomo/releases/latest/download/{tool_name}.gz"
+            tool_gz_path = self.tool_dir / f"{tool_name}.gz"
+
+            log(f"下载 Mihomo 工具 v{version} ({tool_url})...")
+            urllib.request.urlretrieve(tool_url, tool_gz_path)
+
+            # 解压.gz文件
+            with gzip.open(tool_gz_path, 'rb') as f_in:
+                with open(self.tool_path, 'wb') as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+            
+            # 设置可执行权限
             self.tool_path.chmod(0o755)
-        result = subprocess.run([str(self.tool_path), "--version"], capture_output=True, text=True)
-        if MIHOMO_TOOL_VERSION not in result.stdout:
-            raise RuntimeError("工具版本不匹配")
+            
+            # 清理临时文件
+            tool_gz_path.unlink(missing_ok=True)
+            version_file.unlink(missing_ok=True)
+            
+        except Exception as e:
+            error(f"下载工具失败: {str(e)}")
+            raise RuntimeError("无法下载mihomo-tool")
 
     def generate_mrs(self, input_file, output_file, behavior_mode):
-        """[改进] 添加behavior_mode参数控制"""
         cmd = [
             str(self.tool_path), "rule-set",
             "--strict" if STRICT_MODE else "",
-            "--behavior", behavior_mode,  # [核心改进] 动态传入行为模式
+            "--behavior", behavior_mode,
             "--out-format", "binary",
             "--output", str(output_file),
             str(input_file)
@@ -133,11 +166,11 @@ class MihomoTool:
             return True
         except subprocess.CalledProcessError as e:
             error(f"命令执行失败: {' '.join(cmd)}")
+            error(f"错误输出: {e.stderr}")
             raise
 
-# ==================== 主流程 (添加命令行参数) ====================
+# ==================== 主流程 ====================
 def parse_args():
-    """[新增] 命令行参数解析"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--strict", 
                        action="store_true",
@@ -150,16 +183,15 @@ def parse_args():
     return parser.parse_args()
 
 def main():
-    args = parse_args()  # [新增] 获取命令行参数
+    args = parse_args()
     global STRICT_MODE
-    STRICT_MODE = args.strict  # [新增] 覆盖配置
-    
+    STRICT_MODE = args.strict
+
     atexit.register(lambda: shutil.rmtree(WORK_DIR, ignore_errors=True))
     log(f"工作目录: {WORK_DIR}")
-    log(f"当前模式: strict={STRICT_MODE}, behavior={args.behavior}")  # [新增] 显示当前配置
+    log(f"当前模式: strict={STRICT_MODE}, behavior={args.behavior}")
 
     try:
-        # 文件定位逻辑不变
         script_dir = Path(__file__).parent
         repo_root = script_dir.parent.parent
         input_files = {
@@ -170,7 +202,6 @@ def main():
 
         tool = MihomoTool(WORK_DIR)
 
-        # 规则处理逻辑不变
         merged_rules = []
         for name, path in input_files.items():
             if path.exists():
@@ -186,8 +217,8 @@ def main():
         merged_path = WORK_DIR / 'merged.txt'
         FileProcessor.write_temp(merged_path, merged_rules)
 
-        log(f"生成.mrs文件 (behavior={args.behavior})...")  # [改进] 显示当前行为模式
-        tool.generate_mrs(merged_path, output_mrs, args.behavior)  # [改进] 传入behavior参数
+        log(f"生成.mrs文件 (behavior={args.behavior})...")
+        tool.generate_mrs(merged_path, output_mrs, args.behavior)
 
         log(f"✅ 处理完成，生成文件: {output_mrs}")
         log(f"规则总数: {len(merged_rules)}条")
@@ -198,4 +229,4 @@ def main():
         return 1
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(m
