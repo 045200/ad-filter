@@ -8,15 +8,6 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 import logging
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('adblock_processor.log')
-    ]
-)
 
 # 全局配置
 WORKING_DIR = Path('tmp')
