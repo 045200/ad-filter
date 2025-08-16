@@ -128,7 +128,7 @@ def get_adblock_urls():
         # Cats-Team广告规则
         #"https://raw.githubusercontent.com/Cats-Team/AdRules/main/adblock.txt",
         # 挡广告hosts规则
-        "https://raw.githubusercontent.com/qq5460168/dangchu/main/adhosts.txt",
+        #"https://raw.githubusercontent.com/qq5460168/dangchu/main/adhosts.txt",
         # 10007自动规则
         #"https://lingeringsound.github.io/10007_auto/adb.txt",
         # 晴雅去广告规则
@@ -141,7 +141,7 @@ def get_adblock_urls():
         "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt",
 
         # SMAdHosts规则
-        "https://raw.githubusercontent.com/2Gardon/SM-Ad-FuckU-hosts/master/SMAdHosts",
+        #"https://raw.githubusercontent.com/2Gardon/SM-Ad-FuckU-hosts/master/SMAdHosts",
         # 茯苓拦截规则
         "https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingBlockList.txt"
     ]
