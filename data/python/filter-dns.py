@@ -237,7 +237,7 @@ def main():
     """命令行入口"""
     # 路径解析（适配GitHub目录结构）
     script_path = Path(__file__).absolute()
-    repo_root = script_path.parent.parent if script_path.parent.name == 'python' else script_path.parent
+    repo_root = script_path.parent.parent.parent if script_path.parent.name == 'python' else script_path.parent
     
     input_file = repo_root / "adblock.txt"
     output_file = repo_root / "dns.txt"
