@@ -28,7 +28,7 @@ MIHOMO_RELEASE_URL = "https://github.com/MetaCubeX/mihomo/releases/latest/downlo
 DEFAULT_HEADER = """#TITLE=Generated Clash Rules
 #VER={date}
 #URL=https://github.com/045200/ad-filter
-#RULE-SET,AntiAd,REJECT
+#RULE-SET,Ad-filter,REJECT
 payload:
 """
 
