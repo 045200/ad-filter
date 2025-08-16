@@ -144,7 +144,13 @@ def get_adblock_urls():
         # SMAdHosts规则
         "https://raw.githubusercontent.com/2Gardon/SM-Ad-FuckU-hosts/master/SMAdHosts",
         # 茯苓拦截规则
-        "https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingBlockList.txt"
+        "https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingBlockList.txt",
+
+        # adguard mobile ads
+"https://filters.adtidy.org/android/filters/11.txt",
+
+        #国内广告拦截规则
+"https://easylist-downloads.adblockplus.org/easylistchina.txt"
     ]
 
 def get_allow_urls():
