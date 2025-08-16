@@ -139,7 +139,7 @@ if __name__ == "__main__":
     processor = DNSRuleProcessor()
 
     # 文件路径处理（适配Github CI）
-    repo_root = Path(__file__).parent.parent
+    repo_root = Path(__file__).parent.parent.parent
     input_file = repo_root / "adblock.txt"
     output_file = repo_root / "dns.txt"
 
