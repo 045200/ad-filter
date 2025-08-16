@@ -1,14 +1,7 @@
 #!/usr/bin/env python3
 """
-Clash/Mihomo 广告规则转换工具 (最终版)
-功能：将文本规则转换为.mrs二进制规则集
-改进点：
-1. 可配置behavior参数（domain/classical）
-2. 增强严格模式过滤
-3. 优化mihomo-tool调用参数验证
-4. 支持GEOSITE规则类型
-5. 改进的下载逻辑（自动获取最新版本）
-6. 添加自动配置文件生成
+Clash/Mihomo 广告规则转换工具 (精简版)
+功能：仅使用 mihomo-tool 将文本规则转换为.mrs二进制规则集
 """
 
 import os
@@ -95,34 +88,20 @@ class FileProcessor:
                 temp_path.unlink()
             raise e
 
-# ==================== Mihomo工具 (改进下载逻辑和配置处理) ====================
+# ==================== Mihomo工具 (仅下载工具) ====================
 class MihomoTool:
     def __init__(self, work_dir):
         self.tool_dir = TOOL_DIR
         self.tool_path = TOOL_DIR / TOOL_NAME
-        self.config_path = TOOL_DIR / "config.yaml"
         self._setup()
 
     def _setup(self):
-        # 创建工具目录
         self.tool_dir.mkdir(parents=True, exist_ok=True)
         
-        # 创建基本配置文件
-        if not self.config_path.exists():
-            with open(self.config_path, "w") as f:
-                f.write("""\
-port: 7890
-socks-port: 7891
-allow-lan: false
-mode: rule
-log-level: info
-external-controller: 127.0.0.1:9090
-""")
-
         if not self.tool_path.exists():
             self._download_tool()
 
-        # 验证工具可用性
+        # 仅验证工具版本
         try:
             result = subprocess.run([str(self.tool_path), "-v"], 
                                   capture_output=True, 
@@ -169,7 +148,6 @@ external-controller: 127.0.0.1:9090
     def generate_mrs(self, input_file, output_file, behavior_mode):
         cmd = [
             str(self.tool_path), "rule-set",
-            "--config", str(self.config_path),
             "--strict" if STRICT_MODE else "",
             "--behavior", behavior_mode,
             "--out-format", "binary",
