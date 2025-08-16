@@ -139,18 +139,11 @@ def get_adblock_urls():
         "https://github.com/entr0pia/fcm-hosts/raw/fcm/fcm-hosts",
         # 秋风广告规则
         "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt",
-        # 秋风广告补充规则
-        "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/Filters/AWAvenue-Ads-Rule-Replenish.txt",
+
         # SMAdHosts规则
         "https://raw.githubusercontent.com/2Gardon/SM-Ad-FuckU-hosts/master/SMAdHosts",
         # 茯苓拦截规则
-        "https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingBlockList.txt",
-
-        # adguard mobile ads
-"https://filters.adtidy.org/android/filters/11.txt",
-
-        #国内广告拦截规则
-"https://easylist-downloads.adblockplus.org/easylistchina.txt"
+        "https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingBlockList.txt"
     ]
 
 def get_allow_urls():
