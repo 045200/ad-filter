@@ -152,7 +152,7 @@ class MihomoTool:
 
     def generate_mrs(self, input_file, output_file, behavior_mode):
         cmd = [
-            str(self.tool_path), "rule-set",
+            str(self.tool_path), "convert-ruleset",
             "--strict" if STRICT_MODE else "",
             "--behavior", behavior_mode,
             "--out-format", "binary",
