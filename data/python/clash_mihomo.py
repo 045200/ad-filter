@@ -107,7 +107,7 @@ class MihomoTool:
         
         # 验证工具可用性
         try:
-            result = subprocess.run([str(self.tool_path), "--version"], 
+            result = subprocess.run([str(self.tool_path), "-v"], 
                                   capture_output=True, 
                                   text=True,
                                   check=True)
