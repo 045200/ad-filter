@@ -161,7 +161,7 @@ class MihomoCompiler:
             str(self.tool_path),
             "convert-ruleset",
             behavior,
-            "text",
+            "yaml",
             str(yaml_path),
             str(output_path)
         ]
