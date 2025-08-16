@@ -2,13 +2,16 @@ import os
 import re
 from pathlib import Path
 from typing import List, Set, Pattern, Tuple, Optional, Dict, Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
 import hashlib
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 import logging
 import ipaddress
 import socket
+import time
+import multiprocessing
+from tqdm import tqdm  # 用于进度显示
 
 
 # 全局配置
@@ -22,11 +25,14 @@ TARGET_DIR.mkdir(exist_ok=True)
 class ProcessingConfig:
     """处理配置参数"""
     chunk_size: int = 10000
-    max_workers: int = 4
+    max_workers: int = min(4, multiprocessing.cpu_count())  # 根据CPU核心数自动调整
     show_conflicts: int = 10
     keep_whitelist_in_blacklist: bool = True
     ci_mode: bool = os.getenv('GITHUB_ACTIONS') == 'true'
-    validate_dns: bool = True  # 是否验证DNS规则
+    validate_dns: bool = True
+    timeout: int = 300  # 处理超时设置(秒)
+    max_retries: int = 3  # 最大重试次数
+    progress_update_interval: int = 1000  # 进度更新间隔(行数)
 
 class RuleValidator:
     """广告拦截规则验证器（支持多源格式）"""
@@ -125,7 +131,7 @@ class RuleValidator:
 
 class DNSValidator:
     """DNS规则验证器"""
-    
+
     @staticmethod
     def is_valid_ip(ip_str: str) -> bool:
         """验证IP地址格式"""
@@ -134,31 +140,31 @@ class DNSValidator:
             return True
         except ValueError:
             return False
-    
+
     @staticmethod
     def is_valid_domain(domain: str) -> bool:
         """验证域名格式"""
         if not domain or len(domain) > 253:
             return False
-        
+
         # 检查标签
         labels = domain.split('.')
         for label in labels:
             if not re.match(r'^[a-zA-Z0-9-]{1,63}$', label) or label.startswith('-') or label.endswith('-'):
                 return False
         return True
-    
+
     @staticmethod
     def validate_dns_rewrite(rule: str) -> bool:
         """验证DNS重写规则"""
         if '$dnsrewrite=' not in rule:
             return False
-            
+
         try:
             parts = rule.split('$dnsrewrite=')[1].split(',')
             if len(parts) < 2:
                 return False
-                
+
             # 验证重写类型
             rewrite_type = parts[0].lower()
             if rewrite_type == 'a' or rewrite_type == 'aaaa':
@@ -188,6 +194,15 @@ class AdblockProcessor:
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
         self.logger.info("AdblockProcessor初始化完成")
+        self.logger.info(f"使用配置: {config}")
+        self.processed_counts = {
+            'black_total': 0,
+            'black_valid': 0,
+            'black_skipped': 0,
+            'white_total': 0,
+            'white_valid': 0,
+            'white_skipped': 0
+        }
 
     def _check_input_files(self) -> bool:
         """检查输入文件是否存在"""
@@ -252,24 +267,44 @@ class AdblockProcessor:
 
         return rule
 
-    def normalize_rules(self, content: str) -> str:
+    def normalize_rules(self, content: str, rule_type: str = 'black') -> str:
         """规则标准化（批量处理）"""
         normalized = []
-        for line in content.splitlines():
+        lines = content.splitlines()
+        total_lines = len(lines)
+        
+        for i, line in enumerate(lines):
             try:
                 norm_line = self.normalize_rule(line)
                 if norm_line:  # 跳过空行（如无效DNS规则）
                     normalized.append(norm_line)
+                    self.processed_counts[f'{rule_type}_valid'] += 1
+                else:
+                    self.processed_counts[f'{rule_type}_skipped'] += 1
+                
+                # 定期更新进度
+                if i > 0 and i % self.config.progress_update_interval == 0:
+                    self.logger.info(
+                        f"处理{rule_type}规则: {i}/{total_lines} "
+                        f"(有效: {self.processed_counts[f'{rule_type}_valid']}, "
+                        f"跳过: {self.processed_counts[f'{rule_type}_skipped']})"
+                    )
+                    
             except Exception as e:
                 self.logger.warning(f"规则标准化失败: {line[:50]}... 错误: {str(e)}")
                 normalized.append(line)  # 保留原始规则
+                self.processed_counts[f'{rule_type}_valid'] += 1
 
+        self.processed_counts[f'{rule_type}_total'] += total_lines
         return '\n'.join(normalized)
 
-    def clean_rules(self, content: str, pattern: Pattern) -> str:
+    def clean_rules(self, content: str, pattern: Pattern, rule_type: str = 'black') -> str:
         """智能规则清理（多格式支持）"""
         lines = []
-        for line in content.splitlines():
+        input_lines = content.splitlines()
+        total_lines = len(input_lines)
+        
+        for i, line in enumerate(input_lines):
             line = line.strip()
             if not line or line.startswith(('!', '#')):
                 lines.append(line)
@@ -277,7 +312,8 @@ class AdblockProcessor:
 
             # 跳过无效规则
             if not pattern.search(line):
-                self.logger.debug(f"跳过无效规则: {line[:50]}...")
+                self.logger.debug(f"跳过无效{rule_type}规则: {line[:50]}...")
+                self.processed_counts[f'{rule_type}_skipped'] += 1
                 continue
 
             # 提取关键信息用于去重
@@ -300,6 +336,15 @@ class AdblockProcessor:
                 if domain:
                     self.domain_map[domain] = line
                 lines.append(line)
+                self.processed_counts[f'{rule_type}_valid'] += 1
+
+            # 定期更新进度
+            if i > 0 and i % self.config.progress_update_interval == 0:
+                self.logger.info(
+                    f"清理{rule_type}规则: {i}/{total_lines} "
+                    f"(有效: {self.processed_counts[f'{rule_type}_valid']}, "
+                    f"跳过: {self.processed_counts[f'{rule_type}_skipped']})"
+                )
 
         return '\n'.join(lines)
 
@@ -388,12 +433,12 @@ class AdblockProcessor:
                         if self.config.ci_mode:
                             # CI环境下分块读取
                             while chunk := f.read(1024*1024):  # 1MB chunks
-                                normalized = self.normalize_rules(chunk)
+                                normalized = self.normalize_rules(chunk, 'black')
                                 if normalized:
                                     out.write(normalized + '\n')
                         else:
                             content = f.read()
-                            normalized = self.normalize_rules(content)
+                            normalized = self.normalize_rules(content, 'black')
                             if normalized:
                                 out.write(normalized + '\n')
 
@@ -408,22 +453,30 @@ class AdblockProcessor:
 
                 # 并行处理黑名单规则
                 block_results = []
+                chunks = self.split_content(content, self.config.chunk_size)
+                total_chunks = len(chunks)
+                
                 with ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
-                    futures = []
-                    for chunk in self.split_content(content, self.config.chunk_size):
-                        futures.append(executor.submit(
+                    futures = {}
+                    for i, chunk in enumerate(chunks):
+                        future = executor.submit(
                             self.clean_rules, 
                             chunk, 
-                            self.block_pattern
-                        ))
+                            self.block_pattern,
+                            'black'
+                        )
+                        futures[future] = i
+                        self.logger.info(f"提交黑名单处理块 {i+1}/{total_chunks}")
 
                     for future in as_completed(futures):
+                        chunk_num = futures[future]
                         try:
-                            result = future.result()
+                            result = future.result(timeout=self.config.timeout)
                             if result:
                                 block_results.append(result)
+                                self.logger.info(f"完成黑名单处理块 {chunk_num+1}/{total_chunks}")
                         except Exception as e:
-                            self.logger.error(f"处理块时出错: {str(e)}")
+                            self.logger.error(f"处理黑名单块 {chunk_num+1} 时出错: {str(e)}")
 
                 block_rules = '\n'.join(block_results)
 
@@ -443,12 +496,12 @@ class AdblockProcessor:
                     with open(file, 'r', encoding='utf-8', errors='ignore') as f:
                         if self.config.ci_mode:
                             while chunk := f.read(1024*1024):
-                                normalized = self.normalize_rules(chunk)
+                                normalized = self.normalize_rules(chunk, 'white')
                                 if normalized:
                                     out.write(normalized + '\n')
                         else:
                             content = f.read()
-                            normalized = self.normalize_rules(content)
+                            normalized = self.normalize_rules(content, 'white')
                             if normalized:
                                 out.write(normalized + '\n')
 
@@ -458,7 +511,35 @@ class AdblockProcessor:
                 content = f.read()
                 if allow_rules:
                     content += '\n' + '\n'.join(allow_rules)
-                allow_rules = self.clean_rules(content, self.allow_pattern)
+                
+                # 并行处理白名单规则
+                allow_results = []
+                chunks = self.split_content(content, self.config.chunk_size)
+                total_chunks = len(chunks)
+                
+                with ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
+                    futures = {}
+                    for i, chunk in enumerate(chunks):
+                        future = executor.submit(
+                            self.clean_rules, 
+                            chunk, 
+                            self.allow_pattern,
+                            'white'
+                        )
+                        futures[future] = i
+                        self.logger.info(f"提交白名单处理块 {i+1}/{total_chunks}")
+
+                    for future in as_completed(futures):
+                        chunk_num = futures[future]
+                        try:
+                            result = future.result(timeout=self.config.timeout)
+                            if result:
+                                allow_results.append(result)
+                                self.logger.info(f"完成白名单处理块 {chunk_num+1}/{total_chunks}")
+                        except Exception as e:
+                            self.logger.error(f"处理白名单块 {chunk_num+1} 时出错: {str(e)}")
+
+                allow_rules = '\n'.join(allow_results)
 
             with open(WORKING_DIR / 'allow.txt', 'w', encoding='utf-8') as f:
                 f.write(allow_rules)
@@ -541,6 +622,7 @@ class AdblockProcessor:
         element_block = sum(1 for line in block_lines if line.startswith('##'))
         dns_block = sum(1 for line in block_lines if '$dns' in line.lower())
         regex_block = sum(1 for line in block_lines if line.startswith('/') and line.endswith('/'))
+        hosts_block = sum(1 for line in block_lines if re.match(r'^\d+\.\d+\.\d+\.\d+', line))
 
         # 白名单统计
         allow_lines = allow_rules.splitlines()
@@ -549,34 +631,50 @@ class AdblockProcessor:
         element_allow = sum(1 for line in allow_lines if line.startswith('@@##'))
         dns_allow = sum(1 for line in allow_lines if '$dns' in line.lower())
 
-        self.logger.info("\n规则统计:")
+        self.logger.info("\n详细规则统计:")
         self.logger.info(f"黑名单总数: {total_block}")
         self.logger.info(f"  ├─ 域名规则: {domain_block}")
         self.logger.info(f"  ├─ 元素规则: {element_block}")
         self.logger.info(f"  ├─ DNS规则: {dns_block}")
-        self.logger.info(f"  └─ 正则规则: {regex_block}")
-        
+        self.logger.info(f"  ├─ 正则规则: {regex_block}")
+        self.logger.info(f"  └─ Hosts规则: {hosts_block}")
+
         self.logger.info(f"白名单总数: {total_allow}")
         self.logger.info(f"  ├─ 域名规则: {domain_allow}")
         self.logger.info(f"  ├─ 元素规则: {element_allow}")
         self.logger.info(f"  └─ DNS规则: {dns_allow}")
 
+        # 处理过程统计
+        self.logger.info("\n处理过程统计:")
+        self.logger.info(f"处理的黑名单规则总数: {self.processed_counts['black_total']}")
+        self.logger.info(f"  ├─ 有效规则: {self.processed_counts['black_valid']}")
+        self.logger.info(f"  └─ 跳过规则: {self.processed_counts['black_skipped']}")
+        
+        self.logger.info(f"处理的白名单规则总数: {self.processed_counts['white_total']}")
+        self.logger.info(f"  ├─ 有效规则: {self.processed_counts['white_valid']}")
+        self.logger.info(f"  └─ 跳过规则: {self.processed_counts['white_skipped']}")
+
 if __name__ == '__main__':
     # 配置处理参数
     config = ProcessingConfig(
         chunk_size=10000,
-        max_workers=2 if os.getenv('CI') else 4,
+        max_workers=min(4, multiprocessing.cpu_count()),
         show_conflicts=10,
         keep_whitelist_in_blacklist=True,
-        validate_dns=True
+        validate_dns=True,
+        timeout=300,
+        max_retries=3
     )
 
     # 初始化处理器
     processor = AdblockProcessor(config)
-    
+
     # 处理文件
     try:
+        start_time = time.time()
         processor.process_files()
+        end_time = time.time()
+        processor.logger.info(f"总处理时间: {end_time - start_time:.2f}秒")
     except Exception as e:
         processor.logger.error(f"处理失败: {str(e)}")
         exit(1)
