@@ -3,15 +3,15 @@
 Clash/Mihomo 广告规则转换工具 (优化版)
 功能：使用 mihomo-tool 将文本规则转换为二进制规则集(.mrs)
 特点：
-1. 支持 strict 和 behavior 模式参数
-2. 自动下载最新版 mihomo-tool
-3. 完善的错误处理和临时文件清理
-4. 支持多种规则格式转换
+1. 内置 strict 模式过滤
+2. 支持 behavior 模式参数
+3. 自动下载最新版 mihomo-tool
 """
 
 import argparse
 import atexit
 import gzip
+import os
 import re
 import shutil
 import subprocess
@@ -23,13 +23,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # ==================== 全局配置 ====================
-DEFAULT_STRICT_MODE = True
 DEFAULT_BEHAVIOR_MODE = "domain"
+INTERNAL_STRICT_MODE = True  # 内部严格模式开关
 MIHOMO_RELEASE_URL = "https://github.com/MetaCubeX/mihomo/releases/latest/download/"
 
-# ==================== 工具类 ====================
 class Logger:
-    """标准化日志输出"""
     @staticmethod
     def info(message: str) -> None:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] INFO: {message}")
@@ -44,10 +42,8 @@ class Logger:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] DEBUG: {message}")
 
 class FileHandler:
-    """安全的文件操作"""
     @staticmethod
     def read_lines(file_path: Path) -> List[str]:
-        """自动检测编码读取文件"""
         encodings = ['utf-8', 'gbk', 'latin-1']
         for enc in encodings:
             try:
@@ -59,7 +55,6 @@ class FileHandler:
 
     @staticmethod
     def safe_write(output_path: Path, content: str) -> bool:
-        """原子化写入文件"""
         temp_path = output_path.with_suffix('.tmp')
         try:
             with open(temp_path, 'w', encoding='utf-8') as f:
@@ -72,7 +67,6 @@ class FileHandler:
             raise RuntimeError(f"文件写入失败: {str(e)}")
 
 class RuleConverter:
-    """规则转换处理器"""
     RULE_PATTERNS = {
         'DOMAIN': (r'^\|\|([\w.-]+)\^?$', 'DOMAIN,{},REJECT'),
         'DOMAIN-SUFFIX': (r'^\|\|(\*\.[\w.-]+)\^?$', 'DOMAIN-SUFFIX,{},REJECT'),
@@ -84,10 +78,13 @@ class RuleConverter:
     }
 
     @classmethod
-    def convert_line(cls, line: str) -> Optional[str]:
-        """单行规则转换"""
+    def convert_line(cls, line: str, strict: bool = INTERNAL_STRICT_MODE) -> Optional[str]:
         line = line.strip()
         if not line or line.startswith(('!', '#')):
+            return None
+            
+        if strict and not cls.is_supported_rule(line):
+            Logger.debug(f"跳过不支持的规则（严格模式）: {line}")
             return None
             
         for rule_type, (pattern, template) in cls.RULE_PATTERNS.items():
@@ -100,12 +97,10 @@ class RuleConverter:
 
     @classmethod
     def is_supported_rule(cls, line: str) -> bool:
-        """检查是否支持该规则格式"""
         line = line.strip()
         return any(re.match(pattern, line) for _, (pattern, _) in cls.RULE_PATTERNS.items())
 
 class MihomoToolManager:
-    """mihomo-tool 管理类"""
     def __init__(self, work_dir: Path):
         self.work_dir = work_dir
         self.tool_dir = work_dir / "tools"
@@ -113,44 +108,30 @@ class MihomoToolManager:
         self._setup()
 
     def _setup(self) -> None:
-        """初始化工具环境"""
         self.tool_dir.mkdir(parents=True, exist_ok=True)
-        
         if not self.tool_path.exists():
             self._download_tool()
-
         self._validate_tool()
 
     def _download_tool(self) -> None:
-        """下载最新版 mihomo-tool"""
         try:
-            # 获取版本信息
             version_file = self.tool_dir / "version.txt"
-            urllib.request.urlretrieve(
-                f"{MIHOMO_RELEASE_URL}version.txt", 
-                version_file
-            )
-
+            urllib.request.urlretrieve(f"{MIHOMO_RELEASE_URL}version.txt", version_file)
+            
             with open(version_file, 'r') as f:
                 version = f.read().strip()
 
-            # 下载工具
             tool_name = f"mihomo-linux-amd64-{version}"
             tool_gz_path = self.tool_dir / f"{tool_name}.gz"
             
             Logger.info(f"下载 mihomo-tool v{version}...")
-            urllib.request.urlretrieve(
-                f"{MIHOMO_RELEASE_URL}{tool_name}.gz",
-                tool_gz_path
-            )
+            urllib.request.urlretrieve(f"{MIHOMO_RELEASE_URL}{tool_name}.gz", tool_gz_path)
 
-            # 解压并设置权限
             with gzip.open(tool_gz_path, 'rb') as f_in:
                 with open(self.tool_path, 'wb') as f_out:
                     shutil.copyfileobj(f_in, f_out)
             self.tool_path.chmod(0o755)
 
-            # 清理临时文件
             version_file.unlink(missing_ok=True)
             tool_gz_path.unlink(missing_ok=True)
 
@@ -158,20 +139,13 @@ class MihomoToolManager:
             raise RuntimeError(f"工具下载失败: {str(e)}")
 
     def _validate_tool(self) -> None:
-        """验证工具可用性"""
         try:
-            result = subprocess.run(
-                [str(self.tool_path), "-v"],
-                capture_output=True,
-                text=True,
-                check=True
-            )
+            result = subprocess.run([str(self.tool_path), "-v"], capture_output=True, text=True, check=True)
             Logger.info(f"工具版本: {result.stdout.strip()}")
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"工具验证失败: {e.stderr}")
 
     def convert_ruleset(self, input_file: Path, output_file: Path, behavior: str) -> bool:
-        """执行规则转换"""
         cmd = [
             str(self.tool_path),
             "convert-ruleset",
@@ -180,26 +154,15 @@ class MihomoToolManager:
             str(input_file),
             str(output_file)
         ]
-
-        Logger.debug(f"执行命令: {' '.join(cmd)}")
         try:
             subprocess.run(cmd, check=True)
             return True
         except subprocess.CalledProcessError as e:
-            Logger.error(f"命令执行失败: {' '.join(cmd)}")
-            Logger.error(f"错误输出: {e.stderr}")
+            Logger.error(f"转换失败: {e.stderr}")
             return False
 
-# ==================== 主流程 ====================
 def parse_args() -> argparse.Namespace:
-    """解析命令行参数"""
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--strict",
-        action="store_true",
-        default=DEFAULT_STRICT_MODE,
-        help=f"严格模式 (默认: {DEFAULT_STRICT_MODE})"
-    )
     parser.add_argument(
         "--behavior",
         choices=["domain", "classical"],
@@ -209,14 +172,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 def setup_workdir() -> Path:
-    """设置工作目录并注册清理"""
     work_dir = Path(tempfile.mkdtemp(prefix="clash_rule_"))
     atexit.register(lambda: shutil.rmtree(work_dir, ignore_errors=True))
     Logger.info(f"工作目录: {work_dir}")
     return work_dir
 
-def process_rules(input_files: Dict[str, Path], strict_mode: bool) -> List[str]:
-    """处理所有输入规则文件"""
+def process_rules(input_files: Dict[str, Path]) -> List[str]:
     merged_rules = []
     for name, path in input_files.items():
         if path.exists():
@@ -224,9 +185,8 @@ def process_rules(input_files: Dict[str, Path], strict_mode: bool) -> List[str]:
             try:
                 lines = FileHandler.read_lines(path)
                 converted = filter(None, [
-                    RuleConverter.convert_line(line)
+                    RuleConverter.convert_line(line, strict=INTERNAL_STRICT_MODE)
                     for line in lines
-                    if not strict_mode or RuleConverter.is_supported_rule(line)
                 ])
                 merged_rules.extend(converted)
             except Exception as e:
@@ -235,14 +195,12 @@ def process_rules(input_files: Dict[str, Path], strict_mode: bool) -> List[str]:
     return merged_rules
 
 def main() -> int:
-    """主入口函数"""
     args = parse_args()
     work_dir = setup_workdir()
     
-    Logger.info(f"当前模式: strict={args.strict}, behavior={args.behavior}")
+    Logger.info(f"当前配置: behavior={args.behavior}, strict_mode={INTERNAL_STRICT_MODE}")
 
     try:
-        # 初始化路径
         script_dir = Path(__file__).parent
         repo_root = script_dir.parent.parent
         input_files = {
@@ -251,19 +209,16 @@ def main() -> int:
         }
         output_mrs = repo_root / 'adb.mrs'
 
-        # 处理规则
-        merged_rules = process_rules(input_files, args.strict)
+        merged_rules = process_rules(input_files)
         merged_path = work_dir / 'merged.txt'
         FileHandler.safe_write(merged_path, '\n'.join(merged_rules))
 
-        # 执行转换
         tool = MihomoToolManager(work_dir)
         Logger.info(f"开始转换规则 (behavior={args.behavior})...")
         if tool.convert_ruleset(merged_path, output_mrs, args.behavior):
             Logger.info(f"✅ 转换完成: {output_mrs}")
             Logger.info(f"规则总数: {len(merged_rules)}条")
             return 0
-
         return 1
 
     except Exception as e:
