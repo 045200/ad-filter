@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Clash/Mihomo 广告规则转换工具 (优化版)
-功能：使用 mihomo-tool 将文本规则转换为二进制规则集(.mrs)
+Clash/Mihomo 广告规则转换工具 (专用版)
+功能：将AdGuard/AdBlock Plus/uBO规则转换为二进制规则集(.mrs)
 特点：
-1. 内置 strict 模式过滤
-2. 支持 behavior 模式参数
-3. 自动下载最新版 mihomo-tool
+1. 完全兼容三大广告规则语法
+2. 严格预处理为Clash格式
+3. 详细的转换日志
 """
 
 import argparse
@@ -24,7 +24,6 @@ from typing import Dict, List, Optional, Tuple
 
 # ==================== 全局配置 ====================
 DEFAULT_BEHAVIOR_MODE = "domain"
-INTERNAL_STRICT_MODE = True  # 内部严格模式开关
 MIHOMO_RELEASE_URL = "https://github.com/MetaCubeX/mihomo/releases/latest/download/"
 
 class Logger:
@@ -66,41 +65,59 @@ class FileHandler:
                 temp_path.unlink()
             raise RuntimeError(f"文件写入失败: {str(e)}")
 
-class RuleConverter:
-    RULE_PATTERNS = {
-        'DOMAIN': (r'^\|\|([\w.-]+)\^?$', 'DOMAIN,{},REJECT'),
-        'DOMAIN-SUFFIX': (r'^\|\|(\*\.[\w.-]+)\^?$', 'DOMAIN-SUFFIX,{},REJECT'),
-        'DOMAIN-KEYWORD': (r'^\$([a-z-]+)$', 'DOMAIN-KEYWORD,{},REJECT'),
-        'IP-CIDR': (r'^block:\/\/(\d+\.\d+\.\d+\.\d+)$', 'IP-CIDR,{}/32,REJECT'),
-        'IP-CIDR6': (r'^block:\/\/([\da-fA-F:]+)$', 'IP-CIDR6,{}/128,REJECT'),
-        'GEOSITE': (r'^geosite:([\w-]+)$', 'GEOSITE,{},REJECT'),
-        'WHITELIST': (r'^@@\|\|([\w.-]+)\^?$', 'DOMAIN,{},DIRECT')
-    }
-
-    @classmethod
-    def convert_line(cls, line: str, strict: bool = INTERNAL_STRICT_MODE) -> Optional[str]:
+class RulePreprocessor:
+    """专用规则转换器（AdGuard/ABP/uBO → Clash）"""
+    @staticmethod
+    def convert_line(line: str) -> Optional[str]:
         line = line.strip()
         if not line or line.startswith(('!', '#')):
             return None
-            
-        if strict and not cls.is_supported_rule(line):
-            Logger.debug(f"跳过不支持的规则（严格模式）: {line}")
-            return None
-            
-        for rule_type, (pattern, template) in cls.RULE_PATTERNS.items():
-            if match := re.match(pattern, line):
-                content = match.group(1)
-                if rule_type == 'DOMAIN-SUFFIX' and content.startswith('*.'):
-                    content = content[2:]
-                return template.format(content)
+
+        # 1. 处理AdGuard/ABP域名规则 (||example.com^)
+        if line.startswith('||') and line.endswith('^'):
+            domain = line[2:-1]
+            if domain.startswith('*.'):
+                return f"DOMAIN-SUFFIX,{domain[2:]},REJECT"
+            return f"DOMAIN,{domain},REJECT"
+
+        # 2. 处理HOSTS规则 (0.0.0.0 example.com)
+        if match := re.match(r'^(?:\d+\.\d+\.\d+\.\d+|::)\s+([\w.-]+)$', line):
+            return f"DOMAIN,{match.group(1)},REJECT"
+
+        # 3. 处理uBO通配规则 (*://*.example.com/*)
+        if match := re.match(r'^\*:\/\/(\*\.)?([\w.-]+)\/', line):
+            return f"DOMAIN-SUFFIX,{match.group(2)},REJECT"
+
+        # 4. 处理白名单规则 (@@||example.com^)
+        if line.startswith('@@||') and line.endswith('^'):
+            return f"DOMAIN,{line[4:-1]},DIRECT"
+
+        # 5. 基础正则支持 (/ads?[0-9]+\.com/)
+        if line.startswith('/') and line.endswith('/'):
+            return f"REGEX,{line[1:-1]},REJECT"
+
+        Logger.debug(f"跳过不支持的规则格式: {line}")
         return None
 
     @classmethod
-    def is_supported_rule(cls, line: str) -> bool:
-        line = line.strip()
-        return any(re.match(pattern, line) for _, (pattern, _) in cls.RULE_PATTERNS.items())
+    def convert_file(cls, input_path: Path, output_path: Path) -> bool:
+        """转换整个规则文件"""
+        try:
+            lines = FileHandler.read_lines(input_path)
+            converted_rules = []
+            for line in lines:
+                if converted := cls.convert_line(line):
+                    converted_rules.append(converted)
+
+            FileHandler.safe_write(output_path, '\n'.join(converted_rules))
+            Logger.info(f"转换完成: {len(converted_rules)} 条规则来自 {input_path.name}")
+            return True
+        except Exception as e:
+            Logger.error(f"文件转换失败 {input_path}: {str(e)}")
+            return False
 
 class MihomoToolManager:
+    """mihomo-tool 封装类"""
     def __init__(self, work_dir: Path):
         self.work_dir = work_dir
         self.tool_dir = work_dir / "tools"
@@ -115,15 +132,16 @@ class MihomoToolManager:
 
     def _download_tool(self) -> None:
         try:
+            # 下载逻辑保持不变
             version_file = self.tool_dir / "version.txt"
             urllib.request.urlretrieve(f"{MIHOMO_RELEASE_URL}version.txt", version_file)
-            
+
             with open(version_file, 'r') as f:
                 version = f.read().strip()
 
             tool_name = f"mihomo-linux-amd64-{version}"
             tool_gz_path = self.tool_dir / f"{tool_name}.gz"
-            
+
             Logger.info(f"下载 mihomo-tool v{version}...")
             urllib.request.urlretrieve(f"{MIHOMO_RELEASE_URL}{tool_name}.gz", tool_gz_path)
 
@@ -146,6 +164,10 @@ class MihomoToolManager:
             raise RuntimeError(f"工具验证失败: {e.stderr}")
 
     def convert_ruleset(self, input_file: Path, output_file: Path, behavior: str) -> bool:
+        if behavior not in ("domain", "classical"):
+            Logger.error(f"无效的behavior模式: {behavior}")
+            return False
+
         cmd = [
             str(self.tool_path),
             "convert-ruleset",
@@ -155,10 +177,20 @@ class MihomoToolManager:
             str(output_file)
         ]
         try:
-            subprocess.run(cmd, check=True)
+            result = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            Logger.debug(f"工具输出: {result.stdout.strip()}")
             return True
+        except subprocess.TimeoutExpired:
+            Logger.error("转换超时（超过30秒）")
+            return False
         except subprocess.CalledProcessError as e:
-            Logger.error(f"转换失败: {e.stderr}")
+            Logger.error(f"转换失败: {e.stderr if e.stderr else '无错误详情'}")
             return False
 
 def parse_args() -> argparse.Namespace:
@@ -177,47 +209,46 @@ def setup_workdir() -> Path:
     Logger.info(f"工作目录: {work_dir}")
     return work_dir
 
-def process_rules(input_files: Dict[str, Path]) -> List[str]:
-    merged_rules = []
-    for name, path in input_files.items():
-        if path.exists():
-            Logger.info(f"处理文件: {path.name}")
-            try:
-                lines = FileHandler.read_lines(path)
-                converted = filter(None, [
-                    RuleConverter.convert_line(line, strict=INTERNAL_STRICT_MODE)
-                    for line in lines
-                ])
-                merged_rules.extend(converted)
-            except Exception as e:
-                Logger.error(f"处理文件 {path} 失败: {str(e)}")
-                raise
-    return merged_rules
-
 def main() -> int:
     args = parse_args()
     work_dir = setup_workdir()
-    
-    Logger.info(f"当前配置: behavior={args.behavior}, strict_mode={INTERNAL_STRICT_MODE}")
 
     try:
         script_dir = Path(__file__).parent
         repo_root = script_dir.parent.parent
+        
+        # 输入文件配置（必须是AdGuard/ABP/uBO格式）
         input_files = {
-            'block': repo_root / 'dns.txt',
+            'block': repo_root / 'adblock.txt',
             'allow': repo_root / 'allow.txt'
         }
-        output_mrs = repo_root / 'adb.mrs'
+        
+        # 预处理后的临时文件
+        preprocessed_files = {
+            'block': work_dir / 'converted_block.txt',
+            'allow': work_dir / 'converted_allow.txt'
+        }
 
-        merged_rules = process_rules(input_files)
+        # 强制转换所有输入规则
+        Logger.info("开始转换广告规则格式...")
+        for name in input_files:
+            if not RulePreprocessor.convert_file(input_files[name], preprocessed_files[name]):
+                return 1
+
+        # 合并规则
+        merged_rules = []
+        for path in preprocessed_files.values():
+            merged_rules.extend(FileHandler.read_lines(path))
+        
         merged_path = work_dir / 'merged.txt'
         FileHandler.safe_write(merged_path, '\n'.join(merged_rules))
 
+        # 生成.mrs文件
         tool = MihomoToolManager(work_dir)
-        Logger.info(f"开始转换规则 (behavior={args.behavior})...")
+        output_mrs = repo_root / 'adb.mrs'
         if tool.convert_ruleset(merged_path, output_mrs, args.behavior):
             Logger.info(f"✅ 转换完成: {output_mrs}")
-            Logger.info(f"规则总数: {len(merged_rules)}条")
+            Logger.info(f"总规则数: {len(merged_rules)}")
             return 0
         return 1
 
