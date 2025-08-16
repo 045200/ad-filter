@@ -204,7 +204,7 @@ def main() -> int:
         script_dir = Path(__file__).parent
         repo_root = script_dir.parent.parent
         input_files = {
-            'block': repo_root / 'adblock.txt',
+            'block': repo_root / 'dns.txt',
             'allow': repo_root / 'allow.txt'
         }
         output_mrs = repo_root / 'adb.mrs'
