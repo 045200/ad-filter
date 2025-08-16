@@ -165,7 +165,7 @@ def get_allow_urls():
         # 茯苓白名单
         "https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingAllowList.txt",
         # Cats-Team白名单
-        "https://raw.githubusercontent.com/Cats-Team/AdRules/script/allowlist.txt",
+        "https://raw.githubusercontent.com/Cats-Team/AdRules/script/script/allowlist.txt",
         # 浅笑白名单
         "https://raw.githubusercontent.com/user001235/112/main/white.txt",
         # 酷安cocieto白名单
