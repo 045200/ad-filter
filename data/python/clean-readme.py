@@ -22,24 +22,18 @@ def update_readme():
         counts = {}
         for name, path in rule_files.items():
             try:
-                # 方法1: 先尝试使用sed提取
-                result = subprocess.run(
-                    ["sed", "-n", r"s/^! Total count: \([0-9]\+\)$/\1/p", str(path)],
-                    capture_output=True, text=True
-                )
-                count = result.stdout.strip()
-                
-                # 方法2: 如果sed失败，尝试直接读取文件查找
-                if not count.isdigit():
-                    with open(path, 'r') as f:
-                        content = f.read()
-                        match = re.search(r'^! Total count: (\d+)$', content, re.MULTILINE)
-                        if match:
-                            count = match.group(1)
-                        else:
-                            raise ValueError(f"无法从 {path} 中提取有效计数")
-                
-                counts[name] = count
+                with open(path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith('! Total count:'):
+                            # 精确提取数字部分
+                            count = line.split(':')[1].strip()
+                            if count.isdigit():
+                                counts[name] = count
+                                break
+                    else:
+                        raise ValueError(f"未找到有效的 '! Total count:' 行")
+
                 print(f"✅ 已处理 {path.name} | 规则总数: {counts[name]}")
 
             except Exception as e:
@@ -86,7 +80,7 @@ if __name__ == "__main__":
     print(f"📁 仓库根目录: {Path.cwd()}")
     print(f"🔍 正在查找以下文件: {', '.join(['dns.txt', 'adblock.txt', 'allow.txt'])}")
     print("="*50)
-    
+
     if update_readme():
         print("✨ 所有文件处理完成")
     else:
