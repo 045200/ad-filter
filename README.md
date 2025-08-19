@@ -27,6 +27,7 @@
 <p align="center">
   <a href="#-规则订阅">规则订阅</a> •
   <a href="#-拦截效果">拦截效果</a> •
+  <a href="#-上游规则来源">上游规则来源</a> •
   <a href="#-完善项目">完善项目</a>
 </p>
 
@@ -37,43 +38,58 @@
 ## 📊 项目统计
 
 ```
-更新时间: 2025-08-19 20:39:29 （北京时间）
+更新时间: 2025-08-19 20:09:01 （北京时间）
 
-📈 拦截规则数量: 17957
-🛡️ DNS拦截规则数量: 9337
-✅ 白名单规则数量: 4560
+Adblock Plus 拦截规则数量: 0
+Adblock Plus 白名单规则数量: 0
+uBlock Origin 拦截规则数量: 0
+uBlock Origin 白名单规则数量: 0
+AdGuard 拦截规则数量: 0
+AdGuard 白名单规则数量: 0
+AdGuard Home 拦截规则数量: 0
+AdGuard Home 白名单规则数量: 0
+Clash 拦截规则数量: 0
+Clash 白名单规则数量: 0
+Surge 拦截规则数量: 0
+Surge 白名单规则数量: 0
+Pi-hole 拦截规则数量: 0
+Pi-hole 白名单规则数量: 0
+Hosts规则数量: 0
 ```
 
 ## 📥 规则订阅
 
 <details open>
-<summary><b>🚫 广告拦截规则</b></summary>
+<summary><b>🌐 广告拦截规则（按拦截器分类）</b></summary>
 <br>
 
-| 规则类型 | 📥 GitHub直链 | 🚀 国内加速链接 |
-| :---- | :---- | :---- |
-| AdGuard 拦截规则 | [adblock.txt](https://raw.githubusercontent.com/045200/ad-filter/master/adblock.txt) | [adblock.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/master/adblock.txt) |
-| AdGuard Home DNS拦截规则 | [dns.txt](https://raw.githubusercontent.com/045200/ad-filter/master/dns.txt) | [dns.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/master/dns.txt) |
+| 适用拦截器 | 规则类型 | 📥 GitHub直链 | 🚀 国内加速链接 |
+| :---- | :---- | :---- | :---- |
+| Adblock Plus | 拦截规则 | [adblock_adp.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_adp.txt) | [adblock_adp.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_adp.txt) |
+| Adblock Plus | 白名单规则 | [allow_adp.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_adp.txt) | [allow_adp.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_adp.txt) |
+| uBlock Origin | 拦截规则 | [adblock_ubo.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_ubo.txt) | [adblock_ubo.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_ubo.txt) |
+| uBlock Origin | 白名单规则 | [allow_ubo.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_ubo.txt) | [allow_ubo.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_ubo.txt) |
+| AdGuard | 拦截规则 | [adblock_adg.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_adg.txt) | [adblock_adg.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_adg.txt) |
+| AdGuard | 白名单规则 | [allow_adg.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_adg.txt) | [allow_adg.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_adg.txt) |
+| AdGuard Home | 拦截规则 | [adblock_adh.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_adh.txt) | [adblock_adh.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_adh.txt) |
+| AdGuard Home | 白名单规则 | [allow_adh.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_adh.txt) | [allow_adh.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_adh.txt) |
+| Clash | 拦截规则 | [adblock_clash.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_clash.txt) | [adblock_clash.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_clash.txt) |
+| Clash | 白名单规则 | [allow_clash.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_clash.txt) | [allow_clash.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_clash.txt) |
+| Surge | 拦截规则 | [adblock_surge.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.txt) | [adblock_surge.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.txt) |
+| Surge | 白名单规则 | [allow_surge.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_surge.txt) | [allow_surge.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_surge.txt) |
+| Pi-hole | 拦截规则 | [adblock_pihole.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_pihole.txt) | [adblock_pihole.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_pihole.txt) |
+| Pi-hole | 白名单规则 | [allow_pihole.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_pihole.txt) | [allow_pihole.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_pihole.txt) |
 
 </details>
 
 <details>
-<summary><b>🛩️ Clash Mihomo规则</b></summary>
+<summary><b>🖥️ Hosts规则</b></summary>
 <br>
 
-| 规则类型 | 📥 GitHub直链 | 🚀 国内加速链接 |
-| :---- | :---- | :---- |
-| Clash Mihomo规则 | [mihomo.mrs](https://raw.githubusercontent.com/045200/ad-filter/master/adb.mrs) | [mihomo.mrs](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/master/adb.mrs) |
+| 适用场景 | 规则类型 | 📥 GitHub直链 | 🚀 国内加速链接 |
+| :---- | :---- | :---- | :---- |
+| 系统Hosts / 各类支持Hosts的工具 | 域名拦截规则 | [hosts.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/hosts.txt) | [hosts.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/hosts.txt) |
 
-</details>
-
-<details>
-<summary><b>✅ 白名单规则</b></summary>
-<br>
-
-| 规则类型 | 📥 GitHub直链 | 🚀 国内加速链接 |
-| :---- | :---- | :---- |
-| 白名单规则 | [allow.txt](https://raw.githubusercontent.com/045200/ad-filter/master/allow.txt) | [allow.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/master/allow.txt) |
 </details>
 
 ## 🚫 拦截效果
@@ -93,6 +109,31 @@
     <img src="https://img.shields.io/badge/Ad%20Blocker%20Test-测试链接-orange?style=for-the-badge" alt="Ad Blocker Test"/>
   </a>
 </div>
+
+## 📝 上游规则来源
+
+### 🔒 拦截规则来源
+- 大萌主-接口广告规则：[https://raw.githubusercontent.com/damengzhu/banad/main/jiekouAD.txt](https://raw.githubusercontent.com/damengzhu/banad/main/jiekouAD.txt)
+- DD-AD去广告规则：[https://raw.githubusercontent.com/afwfv/DD-AD/main/rule/DD-AD.txt](https://raw.githubusercontent.com/afwfv/DD-AD/main/rule/DD-AD.txt)
+- GitHub加速hosts：[https://raw.hellogithub.com/hosts](https://raw.hellogithub.com/hosts)
+- 晴雅去广告规则：[https://raw.githubusercontent.com/790953214/qy-Ads-Rule/main/black.txt](https://raw.githubusercontent.com/790953214/qy-Ads-Rule/main/black.txt)
+- 海哥广告规则：[https://raw.githubusercontent.com/2771936993/HG/main/hg1.txt](https://raw.githubusercontent.com/2771936993/HG/main/hg1.txt)
+- FCM hosts规则：[https://github.com/entr0pia/fcm-hosts/raw/fcm/fcm-hosts](https://github.com/entr0pia/fcm-hosts/raw/fcm/fcm-hosts)
+- 秋风广告规则：[https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt](https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt)
+- 茯苓拦截规则：[https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingBlockList.txt](https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingBlockList.txt)
+
+### ✅ 白名单规则来源
+- 那个谁520广告白名单：[https://raw.githubusercontent.com/qq5460168/EasyAds/refs/heads/main/allow.txt](https://raw.githubusercontent.com/qq5460168/EasyAds/refs/heads/main/allow.txt)
+- AdGuardHome通用白名单：[https://raw.githubusercontent.com/mphin/AdGuardHomeRules/main/Allowlist.txt](https://raw.githubusercontent.com/mphin/AdGuardHomeRules/main/Allowlist.txt)
+- 冷漠域名白名单：[https://file-git.trli.club/file-hosts/allow/Domains](https://file-git.trli.club/file-hosts/allow/Domains)
+- jhsvip白名单：[https://raw.githubusercontent.com/jhsvip/ADRuls/main/white.txt](https://raw.githubusercontent.com/jhsvip/ADRuls/main/white.txt)
+- liwenjie119白名单：[https://raw.githubusercontent.com/liwenjie119/adg-rules/master/white.txt](https://raw.githubusercontent.com/liwenjie119/adg-rules/master/white.txt)
+- 喵二白名单：[https://raw.githubusercontent.com/miaoermua/AdguardFilter/main/whitelist.txt](https://raw.githubusercontent.com/miaoermua/AdguardFilter/main/whitelist.txt)
+- 茯苓白名单：[https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingAllowList.txt](https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingAllowList.txt)
+- Cats-Team白名单：[https://raw.githubusercontent.com/Cats-Team/AdRules/script/script/allowlist.txt](https://raw.githubusercontent.com/Cats-Team/AdRules/script/script/allowlist.txt)
+- 浅笑白名单：[https://raw.githubusercontent.com/user001235/112/main/white.txt](https://raw.githubusercontent.com/user001235/112/main/white.txt)
+- 酷安cocieto白名单：[https://raw.githubusercontent.com/urkbio/adguardhomefilter/main/whitelist.txt](https://raw.githubusercontent.com/urkbio/adguardhomefilter/main/whitelist.txt)
+- anti-ad混合名单：[https://anti-ad.net/easylist.txt](https://anti-ad.net/easylist.txt)
 
 ## 💬 完善项目
 
