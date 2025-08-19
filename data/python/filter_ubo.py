@@ -1,5 +1,135 @@
 #!/usr/bin/env python3
 """
+uBlock Origin 规则转换器
+输入: 
+  - adblock_intermediate.txt (黑名单)
+  - allow_intermediate.txt (白名单)
+输出: 
+  - adblock_ubo.txt (合并规则，白名单优先)
+  - allow_ubo.txt (单独白名单规则)
+功能:
+  1. 处理黑白名单，转换为uBO兼容格式
+  2. 自动去重，白名单规则优先
+  3. 保留有效规则，过滤无效内容
+"""
+
+import os
+import re
+import logging
+from pathlib import Path
+
+# 文件配置
+BLACK_INPUT = "adblock_intermediate.txt"
+WHITE_INPUT = "allow_intermediate.txt"
+MERGED_OUTPUT = "adblock_ubo.txt"  # 合并规则输出
+WHITE_OUTPUT = "allow_ubo.txt"      # 单独白名单输出
+
+def setup_logger():
+    """配置日志记录器"""
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('[%(levelname)s] %(message)s'))
+    logger.addHandler(handler)
+    return logger
+
+logger = setup_logger()
+
+def convert_to_ubo(line: str, is_white: bool) -> str:
+    """将规则转换为uBO格式"""
+    line = line.strip()
+    # 跳过空行和注释
+    if not line or line.startswith('!'):
+        return None
+    
+    # 处理白名单规则（uBO白名单前缀为@@）
+    if is_white:
+        # 已带@@前缀的规则直接保留
+        if line.startswith('@@'):
+            return line
+        # 域名格式转换为@@||domain^
+        if re.match(r'^[\w.-]+$', line):
+            return f"@@||{line}^"
+        # Hosts格式白名单转换
+        if re.match(r'^\d+\.\d+\.\d+\.\d+\s+[\w.-]+$', line):
+            domain = line.split()[-1]
+            return f"@@||{domain}^"
+    
+    # 处理黑名单规则
+    else:
+        # 已符合uBO格式的规则直接保留
+        if line.startswith(('||', '|', '*')) and (line.endswith('^') or '*' in line):
+            return line
+        # 域名格式转换为||domain^
+        if re.match(r'^[\w.-]+$', line):
+            return f"||{line}^"
+        # Hosts格式黑名单转换
+        if re.match(r'^\d+\.\d+\.\d+\.\d+\s+[\w.-]+$', line):
+            domain = line.split()[-1]
+            return f"||{domain}^"
+    
+    # 无法转换的无效规则
+    return None
+
+def process_file(input_path: Path, is_white: bool) -> list:
+    """处理输入文件，返回转换后的规则列表"""
+    if not input_path.exists():
+        logger.warning(f"输入文件不存在: {input_path}")
+        return []
+    
+    rules = []
+    seen = set()  # 用于去重
+    total = 0
+    invalid = 0
+    
+    with input_path.open('r', encoding='utf-8') as f:
+        for line in f:
+            total += 1
+            converted = convert_to_ubo(line, is_white)
+            if converted:
+                # 去重（基于规则内容）
+                if converted not in seen:
+                    rules.append(converted)
+                    seen.add(converted)
+                else:
+                    invalid += 1  # 重复视为无效
+            else:
+                invalid += 1
+    
+    rule_type = "白名单" if is_white else "黑名单"
+    logger.info(f"处理{rule_type}: 总条数{total}，有效{len(rules)}，无效/重复{invalid}")
+    return rules
+
+def main():
+    repo_root = Path(os.getenv('GITHUB_WORKSPACE', os.getcwd()))
+    
+    # 处理白名单
+    white_rules = process_file(repo_root / WHITE_INPUT, is_white=True)
+    
+    # 处理黑名单
+    black_rules = process_file(repo_root / BLACK_INPUT, is_white=False)
+    
+    # 合并规则（白名单在前，确保优先）
+    merged_rules = white_rules + black_rules
+    
+    # 写入合并规则
+    merged_path = repo_root / MERGED_OUTPUT
+    with merged_path.open('w', encoding='utf-8') as f:
+        for rule in merged_rules:
+            f.write(f"{rule}\n")
+    
+    # 单独写入白名单
+    white_path = repo_root / WHITE_OUTPUT
+    with white_path.open('w', encoding='utf-8') as f:
+        for rule in white_rules:
+            f.write(f"{rule}\n")
+    
+    logger.info(f"已生成：{MERGED_OUTPUT}（{len(merged_rules)}条），{WHITE_OUTPUT}（{len(white_rules)}条）")
+
+if __name__ == "__main__":
+    main()
+#!/usr/bin/env python3
+"""
 Surge 规则转换器增强版
 输入: 
   - adblock_intermediate.txt (黑名单)
