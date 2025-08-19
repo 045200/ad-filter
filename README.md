@@ -75,7 +75,7 @@ Hosts规则数量: 0
 | AdGuard Home | 白名单规则 | [allow_adh.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_adh.txt) | [allow_adh.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_adh.txt) |
 | Clash | 拦截规则 | [adblock_clash.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_clash.txt) | [adblock_clash.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_clash.txt) |
 | Clash | 白名单规则 | [allow_clash.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_clash.txt) | [allow_clash.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_clash.txt) |
-| Surge | 拦截规则 | [adblock_surge.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.conf) | [adblock_surge.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.conf) |
+| Surge | 拦截规则 | [adblock_surge.conf](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.conf) | [adblock_surge.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.conf) |
 | Pi-hole | 拦截规则 | [adblock_pihole.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_pihole.txt) | [adblock_pihole.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_pihole.txt) |
 | Pi-hole | 白名单规则 | [allow_pihole.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_pihole.txt) | [allow_pihole.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_pihole.txt) |
 
