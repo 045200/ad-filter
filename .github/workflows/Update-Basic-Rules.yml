@@ -97,7 +97,6 @@ jobs:
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
           python ${{ env.PYTHON_SCRIPTS }}/title.py
-          python ${{ env.PYTHON_SCRIPTS }}/clean-readme.py
 
       - name: Commit changes
         run: |
