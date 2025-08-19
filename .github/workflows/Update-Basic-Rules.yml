@@ -11,7 +11,7 @@ on:
 
 permissions:
   contents: write        # 保留代码写入权限
-  actions: write         # 新增：允许管理工作流（包括删除记录）
+  actions: write         # 允许管理工作流（包括删除记录）
 
 jobs:
   update:
@@ -42,7 +42,11 @@ jobs:
         with:
           python-version: '3.10'
           cache: 'pip'
-      - run: pip install requests aiodns pyyaml
+      # 直接在工作流中声明依赖安装，不依赖外部文件
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests==2.31.0 aiodns==3.0.0 pyyaml==6.0.1 beautifulsoup4==4.12.2  # 固定版本号增强稳定性
 
       - name: Update Mihomo (if version mismatch)
         id: mihomo
