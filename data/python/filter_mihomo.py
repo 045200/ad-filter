@@ -7,6 +7,7 @@ AdBlock + Hosts 规则转换器
 """
 
 import os
+import re
 import sys
 import ipaddress
 from pathlib import Path
