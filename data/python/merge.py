@@ -19,7 +19,7 @@ CONFIG = {
     'allow_pattern': 'allow*.txt',
     'output_block': 'adblock_intermediate.txt',
     'output_allow': 'allow_intermediate.txt',
-    
+
     # 通用规则验证配置
     'max_rule_length': 4096,
     'min_rule_length': 3,
@@ -31,12 +31,12 @@ CONFIG = {
 def setup_logger():
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    
+
     if os.getenv('GITHUB_ACTIONS') == 'true':
         formatter = logging.Formatter('%(message)s')
     else:
         formatter = logging.Formatter('[%(levelname)s] %(message)s')
-    
+
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
     logger.addHandler(handler)
@@ -58,12 +58,12 @@ class RuleProcessor:
     def __init__(self):
         self.github_workspace = os.getenv('GITHUB_WORKSPACE', os.getcwd())
         self.repo_root = Path(self.github_workspace)
-        
+
         # 设置输入输出路径
         self.input_dir = self.repo_root / CONFIG['input_dir']
         self.block_path = self.repo_root / CONFIG['output_block']
         self.allow_path = self.repo_root / CONFIG['output_allow']
-        
+
         self.rule_cache = {'block': set(), 'allow': set()}
         self.stats = {'block': 0, 'allow': 0, 'duplicates': 0}
 
@@ -74,10 +74,10 @@ class RuleProcessor:
 
         logger.info("[1] 处理白名单规则...")
         self._process_files(CONFIG['allow_pattern'], self.allow_path, 'allow')
-        
+
         logger.info("[2] 处理黑名单规则...")
-        self._process_files(CFIG['block_pattern'], self.block_path, 'block')
-        
+        self._process_files(CONFIG['block_pattern'], self.block_path, 'block')  # 已修正拼写错误
+
         logger.info(f"处理完成: 黑名单={self.stats['block']}条 | 白名单={self.stats['allow']}条 | 去重={self.stats['duplicates']}条")
         gh_endgroup()
 
@@ -97,19 +97,19 @@ class RuleProcessor:
                 with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                     for line in f:
                         line = line.strip()
-                        
+
                         if self._is_comment(line):
                             if CONFIG['preserve_headers']:
                                 buffer.append(line)
                             continue
-                            
+
                         if not self._is_valid_rule(line):
                             continue
-                            
+
                         if line in cache:
                             self.stats['duplicates'] += 1
                             continue
-                            
+
                         cache.add(line)
                         buffer.append(line)
                         self.stats[rule_type] += 1
