@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-广告规则下载处理脚本 - CDN加速版
-使用CDN地址提升下载速度，适配GitHub CI环境
+广告规则下载处理脚本 - 恢复注释版
+保留所有原始注释远程源，同时新增CDN加速地址
 """
 
 import os
@@ -23,11 +23,11 @@ TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
 MOD_PATH = DATA_DIR / 'mod'
 
 # 4核16G环境优化参数
-MAX_WORKERS = 4  # 匹配CPU核心数
-REQUEST_TIMEOUT = 8  # 更短超时适配CDN
+MAX_WORKERS = 4
+REQUEST_TIMEOUT = 8
 MAX_RETRIES = 2
 RETRY_DELAY = 0.5
-HTTP_CONN_POOL = 10  # 连接池大小
+HTTP_CONN_POOL = 10
 
 # ============== 日志配置 ==============
 def setup_logger():
@@ -141,7 +141,7 @@ def download_all(urls, prefix, start_index=2):
     session.close()
     return success, total
 
-# ============== 规则列表（CDN加速版）==============
+# ============== 规则列表（恢复注释版）==============
 ADBLOCK_URLS = [
     # 大萌主-接口广告规则（CDN加速）
     "https://ghproxy.com/https://raw.githubusercontent.com/damengzhu/banad/main/jiekouAD.txt",
@@ -149,6 +149,14 @@ ADBLOCK_URLS = [
     "https://mirror.ghproxy.com/https://raw.githubusercontent.com/afwfv/DD-AD/main/rule/DD-AD.txt",
     # GitHub加速hosts（官方CDN）
     "https://raw.hellogithub.com/hosts",
+    # Anti-AD通用规则（注释保留）
+    #"https://anti-ad.net/easylist.txt",
+    # Cats-Team广告规则（注释保留）
+    #"https://ghproxy.com/https://raw.githubusercontent.com/Cats-Team/AdRules/main/adblock.txt",
+    # 那个谁520广告hosts规则（注释保留）
+    #"https://ghproxy.com/https://raw.githubusercontent.com/qq5460168/EasyAds/refs/heads/main/adblock.txt",
+    # 10007自动规则（注释保留）
+    #"https://ghproxy.com/https://raw.githubusercontent.com/lingeringsound/10007_auto/adb.txt",
     # 晴雅去广告规则（CDN加速）
     "https://gh.flyinbug.top/https://raw.githubusercontent.com/790953214/qy-Ads-Rule/main/black.txt",
     # 海哥广告规则（CDN加速）
@@ -157,6 +165,8 @@ ADBLOCK_URLS = [
     "https://proxy.zyglz.com/https://github.com/entr0pia/fcm-hosts/raw/fcm/fcm-hosts",
     # 秋风广告规则（CDN加速）
     "https://ghps.cc/https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt",
+    # SMAdHosts规则（注释保留）
+    #"https://ghproxy.com/https://raw.githubusercontent.com/2Gardon/SM-Ad-FuckU-hosts/master/SMAdHosts",
     # 茯苓拦截规则（CDN加速）
     "https://raw.fastgit.org/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingBlockList.txt"
 ]
@@ -170,8 +180,18 @@ ALLOW_URLS = [
     "https://file-git.trli.club/file-hosts/allow/Domains",
     # jhsvip白名单（CDN加速）
     "https://gh.flyinbug.top/https://raw.githubusercontent.com/jhsvip/ADRuls/main/white.txt",
+    # liwenjie119白名单（注释保留）
+    #"https://ghproxy.com/https://raw.githubusercontent.com/liwenjie119/adg-rules/master/white.txt",
+    # 喵二白名单（注释保留）
+    #"https://ghproxy.com/https://raw.githubusercontent.com/miaoermua/AdguardFilter/main/whitelist.txt",
     # 茯苓白名单（CDN加速）
     "https://raw.fastgit.org/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingAllowList.txt",
+    # Cats-Team白名单（注释保留）
+    #"https://ghproxy.com/https://raw.githubusercontent.com/Cats-Team/AdRules/script/script/allowlist.txt",
+    # 浅笑白名单（注释保留）
+    #"https://ghproxy.com/https://raw.githubusercontent.com/user001235/112/main/white.txt",
+    # 酷安cocieto白名单（注释保留）
+    #"https://ghproxy.com/https://raw.githubusercontent.com/urkbio/adguardhomefilter/main/whitelist.txt",
     # anti-ad混合名单（官方CDN）
     "https://anti-ad.net/easylist.txt"
 ]
