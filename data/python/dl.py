@@ -18,8 +18,8 @@ from urllib3.util.retry import Retry
 
 # ============== GitHub环境变量配置 ==============
 GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
-DATA_DIR = os.getenv('DATA_DIR', 'data')
-TEMP_DIR = os.getenv('TEMP_DIR', 'tmp')
+# 路径配置
+TEMP_PATH = Path('/data/mod')
 
 # ============== 下载优化配置 ==============
 # 基于GitHub CI 4核CPU优化的线程数
@@ -28,10 +28,6 @@ REQUEST_TIMEOUT = 20  # 略微延长超时应对可能的CDN节点差异
 MAX_RETRIES = 3  # 保持重试次数平衡效率与可靠性
 RETRY_BACKOFF = 1.5  # 指数退避策略（1s, 1.5s, 2.25s）
 HTTP_POOL_SIZE = 16  # 连接池大小，提升并发效率
-
-# ============== 路径配置 ==============
-BASE_DIR = Path(GITHUB_WORKSPACE)
-TEMP_PATH = BASE_DIR / TEMP_DIR
 
 # ============== 日志配置 ==============
 def setup_logger():
