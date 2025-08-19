@@ -8,11 +8,10 @@ on:
     paths:
       - 'data/python/**'   # 监测python脚本变更
       - 'data/mod/**'      # 监测mod配置变更
-
-  permissions:
-    contents: write  # 允许推送代码
-    workflow: write  # 允许删除旧工作流记录
-
+      - '*/**'
+permissions:
+  contents: write
+  workflow: write  # 允许删除旧工作流记录
 
 jobs:
   update:
