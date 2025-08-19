@@ -1,13 +1,13 @@
 name: Update Basic Rules & Mihomo
 on: 
-  workflow_dispatch:  # 手动触发
+  workflow_dispatch:
   schedule:
-    - cron: '0 */12 * * *'  # 每12小时自动运行
+    - cron: '0 */12 * * *'
   push:
-    branches: [ "basic" ]  # 仅在 basic 分支推送时触发
+    branches: [ "basic" ]
     paths:
-      - 'data/python/**'   # 监测python脚本变更
-      - 'data/mod/**'      # 监测mod配置变更
+      - 'data/python/**'
+      - 'data/mod/**'
 
 permissions:
   contents: write
@@ -18,18 +18,18 @@ jobs:
     env:
       DATA_DIR: ${{ github.workspace }}/data
       PYTHON_SCRIPTS: ${{ github.workspace }}/data/python
-      MIHOMO_BIN: ${{ github.workspace }}/data/mihomo-tool  # 统一Mihomo路径
-      MAIN_BRANCH: basic  # 核心分支为basic
+      MIHOMO_BIN: ${{ github.workspace }}/data/mihomo-tool
+      MAIN_BRANCH: basic
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ env.MAIN_BRANCH }}  # 拉取basic分支代码
+          ref: ${{ env.MAIN_BRANCH }}
 
-      - name: Install system dependencies (jq)
-        run: sudo apt-get update && sudo apt-get install -y jq  # 确保jq可用（解析JSON用）
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Detect changed files
         id: changes
@@ -39,31 +39,24 @@ jobs:
             ${{ env.PYTHON_SCRIPTS }}/**
             ${{ env.DATA_DIR }}/mod/**
 
-      - name: Set up Python & cache dependencies
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: 'pip'
-          # 修复路径问题，确保从工作区根目录开始查找
-          cache-dependency-path: '**/requirements.txt'
 
       - name: Install Python dependencies
         run: |
-          # 确保requirements.txt存在才安装
-          if [ -f "${{ env.PYTHON_SCRIPTS }}/requirements.txt" ]; then
-            pip install -r ${{ env.PYTHON_SCRIPTS }}/requirements.txt
-          else
-            echo "No requirements.txt found, skipping dependency installation"
-          fi
+          pip install --upgrade pip
+          pip install requests beautifulsoup4 pyyaml
+          # 添加脚本实际需要的其他包
 
+      # 其余步骤保持不变...
       - name: Update Mihomo (if version mismatch)
         id: mihomo
         run: |
-          # 获取最新版本
           LATEST_VERSION=$(curl -sL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name' | sed 's/v//')
           echo "Latest version: $LATEST_VERSION"
           
-          # 获取本地版本（无则默认0.0.0）
           if [ -f "${{ env.MIHOMO_BIN }}" ]; then
             CURRENT_VERSION=$("${{ env.MIHOMO_BIN }}" -v 2>/dev/null | awk '{print $2}' | sed 's/v//' || echo "0.0.0")
           else
@@ -71,10 +64,8 @@ jobs:
           fi
           echo "Current version: $CURRENT_VERSION"
           
-          # 版本不同则更新
           if [ "$CURRENT_VERSION" != "$LATEST_VERSION" ]; then
             echo "Updating Mihomo from v$CURRENT_VERSION to v$LATEST_VERSION"
-            # 确保目录存在
             mkdir -p $(dirname "${{ env.MIHOMO_BIN }}")
             curl -sL "https://github.com/MetaCubeX/mihomo/releases/latest/download/mihomo-linux-amd64-v${LATEST_VERSION}.gz" | gzip -d > "${{ env.MIHOMO_BIN }}"
             chmod +x "${{ env.MIHOMO_BIN }}"
@@ -83,18 +74,16 @@ jobs:
             echo "Mihomo is up-to-date (v$LATEST_VERSION)"
             echo "mihomo_updated=false" >> $GITHUB_OUTPUT
           fi
-          # 记录版本（无论是否更新）
           echo "$LATEST_VERSION" > "${{ env.DATA_DIR }}/.mihomo_version"
-          # 保存版本号供后续步骤使用
           echo "LATEST_VERSION=$LATEST_VERSION" >> $GITHUB_ENV
 
       - name: Process basic rules
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
-          python ${{ env.PYTHON_SCRIPTS }}/dl.py        # 下载原始规则
-          python ${{ env.PYTHON_SCRIPTS }}/merge.py     # 合并规则
-          python ${{ env.PYTHON_SCRIPTS }}/filter-dns.py # 生成DNS规则
-        continue-on-error: true  # 允许单步失败，不中断工作流
+          python ${{ env.PYTHON_SCRIPTS }}/dl.py
+          python ${{ env.PYTHON_SCRIPTS }}/merge.py
+          python ${{ env.PYTHON_SCRIPTS }}/filter-dns.py
+        continue-on-error: true
 
       - name: Generate Mihomo native rules
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
@@ -102,16 +91,13 @@ jobs:
 
       - name: Update docs (Title & README)
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
-        run: |
-          python ${{ env.PYTHON_SCRIPTS }}/title.py
+        run: python ${{ env.PYTHON_SCRIPTS }}/title.py
 
       - name: Commit changes
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Actions"
           git add --all
-          
-          # 提交信息包含Mihomo状态和时间（北京时间）
           if [ "${{ steps.mihomo.outputs.mihomo_updated }}" = "true" ]; then
             git commit -m "Basic rules updated + Mihomo v${{ env.LATEST_VERSION }} at $(TZ=UTC-8 date +'%Y-%m-%d %H:%M:%S')（北京时间）"
           else
@@ -120,7 +106,6 @@ jobs:
 
       - name: Push changes to basic branch
         run: |
-          # 重试机制避免推送冲突
           for i in 1 2 3; do
             git pull --rebase origin ${{ env.MAIN_BRANCH }}
             git push origin ${{ env.MAIN_BRANCH }} && break || sleep 5
