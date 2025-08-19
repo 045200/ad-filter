@@ -4,7 +4,7 @@ on:
   schedule:
     - cron: '0 */12 * * *'  # 每12小时自动运行
   push:
-    branches: [ "basic" ]  # 仅在 basic 分支推送时触发（原默认分支已改为basic）
+    branches: [ "basic" ]  # 仅在 basic 分支推送时触发
     paths:
       - 'data/python/**'   # 监测python脚本变更
       - 'data/mod/**'      # 监测mod配置变更
@@ -19,7 +19,7 @@ jobs:
       DATA_DIR: ${{ github.workspace }}/data
       PYTHON_SCRIPTS: ${{ github.workspace }}/data/python
       MIHOMO_BIN: ${{ github.workspace }}/data/mihomo-tool  # 统一Mihomo路径
-      MAIN_BRANCH: basic  # 核心修改：默认分支从master改为basic
+      MAIN_BRANCH: basic  # 核心分支为basic
 
     steps:
       - name: Checkout code
@@ -27,6 +27,9 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ env.MAIN_BRANCH }}  # 拉取basic分支代码
+
+      - name: Install system dependencies (jq)
+        run: sudo apt-get update && sudo apt-get install -y jq  # 确保jq可用（解析JSON用）
 
       - name: Detect changed files
         id: changes
@@ -36,12 +39,15 @@ jobs:
             ${{ env.PYTHON_SCRIPTS }}/**
             ${{ env.DATA_DIR }}/mod/**
 
-      - name: Set up Python & dependencies
+      - name: Set up Python & cache dependencies
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
-      - run: pip install requests aiodns pyyaml
+          cache-dependency-path: 'data/python/requirements.txt'  # 指定依赖文件路径，启用缓存
+
+      - name: Install Python dependencies
+        run: pip install -r ${{ env.PYTHON_SCRIPTS }}/requirements.txt  # 从requirements.txt安装
 
       - name: Update Mihomo (if version mismatch)
         id: mihomo
@@ -61,6 +67,8 @@ jobs:
           # 版本不同则更新
           if [ "$CURRENT_VERSION" != "$LATEST_VERSION" ]; then
             echo "Updating Mihomo from v$CURRENT_VERSION to v$LATEST_VERSION"
+            # 确保目录存在
+            mkdir -p $(dirname "${{ env.MIHOMO_BIN }}")
             curl -sL "https://github.com/MetaCubeX/mihomo/releases/latest/download/mihomo-linux-amd64-v${LATEST_VERSION}.gz" | gzip -d > "${{ env.MIHOMO_BIN }}"
             chmod +x "${{ env.MIHOMO_BIN }}"
             echo "mihomo_updated=true" >> $GITHUB_OUTPUT
@@ -70,9 +78,10 @@ jobs:
           fi
           # 记录版本（无论是否更新）
           echo "$LATEST_VERSION" > "${{ env.DATA_DIR }}/.mihomo_version"
+          # 保存版本号供后续步骤使用
+          echo "LATEST_VERSION=$LATEST_VERSION" >> $GITHUB_ENV
 
       - name: Process basic rules
-        # 触发条件：文件变更、手动触发、定时任务
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
           python ${{ env.PYTHON_SCRIPTS }}/dl.py        # 下载原始规则
@@ -98,7 +107,7 @@ jobs:
           
           # 提交信息包含Mihomo状态和时间（北京时间）
           if [ "${{ steps.mihomo.outputs.mihomo_updated }}" = "true" ]; then
-            git commit -m "Basic rules updated + Mihomo v${LATEST_VERSION} at $(TZ=UTC-8 date +'%Y-%m-%d %H:%M:%S')（北京时间）"
+            git commit -m "Basic rules updated + Mihomo v${{ env.LATEST_VERSION }} at $(TZ=UTC-8 date +'%Y-%m-%d %H:%M:%S')（北京时间）"
           else
             git commit -m "Basic rules updated at $(TZ=UTC-8 date +'%Y-%m-%d %H:%M:%S')（北京时间）"
           fi || echo "No changes to commit"
