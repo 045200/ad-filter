@@ -1,16 +1,16 @@
 name: Update Basic Rules & Mihomo
 on: 
-  workflow_dispatch:
+  workflow_dispatch:  # 手动触发
   schedule:
-    - cron: '0 */12 * * *'
+    - cron: '0 */12 * * *'  # 每12小时自动运行
   push:
-    branches: [ "basic" ]
+    branches: [ "basic" ]  # 仅在 basic 分支推送时触发
     paths:
-      - 'data/python/**'
-      - 'data/mod/**'
+      - 'data/python/**'   # 监测python脚本变更
+      - 'data/mod/**'      # 监测mod配置变更
 
 permissions:
-  contents: write
+  contents: write  # 允许推送代码
 
 jobs:
   update:
@@ -19,18 +19,21 @@ jobs:
       DATA_DIR: ${{ github.workspace }}/data
       PYTHON_SCRIPTS: ${{ github.workspace }}/data/python
       MIHOMO_BIN: ${{ github.workspace }}/data/mihomo-tool
-      MAIN_BRANCH: basic
+      MAIN_BRANCH: basic  # 核心分支为basic
 
     steps:
+      # 1. 拉取代码
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ env.MAIN_BRANCH }}
 
+      # 2. 安装系统工具（jq用于解析JSON）
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y jq
 
+      # 3. 检测文件变更（仅当python脚本或mod配置变更时触发后续步骤）
       - name: Detect changed files
         id: changes
         uses: tj-actions/changed-files@v42
@@ -39,82 +42,92 @@ jobs:
             ${{ env.PYTHON_SCRIPTS }}/**
             ${{ env.DATA_DIR }}/mod/**
 
+      # 4. 设置Python环境（不依赖requirements.txt缓存）
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
+      # 5. 直接安装Python依赖（按需调整）
       - name: Install Python dependencies
         run: |
           pip install --upgrade pip
           pip install requests beautifulsoup4 pyyaml
-          # 添加脚本实际需要的其他包
+          # 其他可能需要的依赖：
+          # pip install urllib3 pandas numpy
 
-      # 其余步骤保持不变...
-      - name: Update Mihomo (if version mismatch)
+      # 6. 更新Mihomo（版本不匹配时自动下载最新版）
+      - name: Update Mihomo
         id: mihomo
         run: |
           LATEST_VERSION=$(curl -sL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name' | sed 's/v//')
-          echo "Latest version: $LATEST_VERSION"
+          echo "Latest Mihomo version: $LATEST_VERSION"
           
           if [ -f "${{ env.MIHOMO_BIN }}" ]; then
             CURRENT_VERSION=$("${{ env.MIHOMO_BIN }}" -v 2>/dev/null | awk '{print $2}' | sed 's/v//' || echo "0.0.0")
           else
             CURRENT_VERSION="0.0.0"
           fi
-          echo "Current version: $CURRENT_VERSION"
+          echo "Current Mihomo version: $CURRENT_VERSION"
           
           if [ "$CURRENT_VERSION" != "$LATEST_VERSION" ]; then
-            echo "Updating Mihomo from v$CURRENT_VERSION to v$LATEST_VERSION"
+            echo "Updating Mihomo to v$LATEST_VERSION..."
             mkdir -p $(dirname "${{ env.MIHOMO_BIN }}")
             curl -sL "https://github.com/MetaCubeX/mihomo/releases/latest/download/mihomo-linux-amd64-v${LATEST_VERSION}.gz" | gzip -d > "${{ env.MIHOMO_BIN }}"
             chmod +x "${{ env.MIHOMO_BIN }}"
             echo "mihomo_updated=true" >> $GITHUB_OUTPUT
           else
-            echo "Mihomo is up-to-date (v$LATEST_VERSION)"
+            echo "Mihomo is already up-to-date."
             echo "mihomo_updated=false" >> $GITHUB_OUTPUT
           fi
+          # 记录版本信息
           echo "$LATEST_VERSION" > "${{ env.DATA_DIR }}/.mihomo_version"
           echo "LATEST_VERSION=$LATEST_VERSION" >> $GITHUB_ENV
 
+      # 7. 处理规则文件（仅在文件变更或手动触发时运行）
       - name: Process basic rules
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
-          python ${{ env.PYTHON_SCRIPTS }}/dl.py
-          python ${{ env.PYTHON_SCRIPTS }}/merge.py
-          python ${{ env.PYTHON_SCRIPTS }}/filter-dns.py
-        continue-on-error: true
+          python ${{ env.PYTHON_SCRIPTS }}/dl.py        # 下载原始规则
+          python ${{ env.PYTHON_SCRIPTS }}/merge.py     # 合并规则
+          python ${{ env.PYTHON_SCRIPTS }}/filter-dns.py # 生成DNS规则
+        continue-on-error: true  # 允许单步失败
 
-      - name: Generate Mihomo native rules
+      # 8. 生成Mihomo专用规则
+      - name: Generate Mihomo rules
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: python ${{ env.PYTHON_SCRIPTS }}/mihomo.py
 
-      - name: Update docs (Title & README)
+      # 9. 更新文档（README和标题）
+      - name: Update documentation
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: python ${{ env.PYTHON_SCRIPTS }}/title.py
 
+      # 10. 提交变更
       - name: Commit changes
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Actions"
           git add --all
           if [ "${{ steps.mihomo.outputs.mihomo_updated }}" = "true" ]; then
-            git commit -m "Basic rules updated + Mihomo v${{ env.LATEST_VERSION }} at $(TZ=UTC-8 date +'%Y-%m-%d %H:%M:%S')（北京时间）"
+            git commit -m "Auto-update: Rules + Mihomo v${{ env.LATEST_VERSION }} [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
           else
-            git commit -m "Basic rules updated at $(TZ=UTC-8 date +'%Y-%m-%d %H:%M:%S')（北京时间）"
+            git commit -m "Auto-update: Rules [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
           fi || echo "No changes to commit"
 
-      - name: Push changes to basic branch
+      # 11. 推送变更（带重试机制）
+      - name: Push changes
         run: |
           for i in 1 2 3; do
             git pull --rebase origin ${{ env.MAIN_BRANCH }}
             git push origin ${{ env.MAIN_BRANCH }} && break || sleep 5
           done
 
-      - name: Cleanup old workflow runs
+      # 12. 清理旧的工作流运行记录（可选）
+      - name: Cleanup old workflows
         uses: Mattraks/delete-workflow-runs@main
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           retain_days: 0
-          keep_minimum_runs: 0
+          keep_minimum_runs: 3  # 保留最近5次运行记录
