@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-AdGuard 规则转换器 - 混合语法处理 (方案一)
-黑名单存在白名单则提取到白名单
-白名单存在黑名单则跳过
+AdGuard 规则转换器 - 独立处理版
+功能：独立处理黑名单、白名单，不交叉提取，仅转换各自规则为AdGuard格式
 输入: 
   - adblock_intermediate.txt (黑名单)
   - allow_intermediate.txt (白名单)
 输出:
-  - adblock_adg.txt (纯净黑名单)
-  - allow_adg.txt (纯净白名单)
+  - adblock_adg.txt (转换后黑名单)
+  - allow_adg.txt (转换后白名单)
 """
 
 import os
@@ -16,14 +15,54 @@ import re
 import logging
 from pathlib import Path
 
-# 配置
-BLOCK_INPUT = "adblock_intermediate.txt"
-ALLOW_INPUT = "allow_intermediate.txt"
-BLOCK_OUTPUT = "adblock_adg.txt"
-ALLOW_OUTPUT = "allow_adg.txt"
+# 配置统一管理
+CONFIG = {
+    "block": {
+        "input": "adblock_intermediate.txt",
+        "output": "adblock_adg.txt"
+    },
+    "allow": {
+        "input": "allow_intermediate.txt",
+        "output": "allow_adg.txt"
+    }
+}
 
-# 日志配置
+# 预编译正则表达式（三大类规则分类管理）
+REGEX = {
+    # 黑名单规则模式
+    "block": {
+        "dns_rewrite": re.compile(r'^||.+\^$'),         # ||example.com^
+        "hosts": re.compile(r'^\d+\.\d+\.\d+\.\d+\s+[\w.-]+$'),  # IP + 域名
+        "standard": re.compile(r'^[\w.-]+$'),           # 标准域名
+        "wildcard": re.compile(r'^\*?[\w.-]+\*?$')      # 带通配符
+    },
+    # 白名单规则模式
+    "allow": {
+        "standard": re.compile(r'^[\w.-]+$'),           # 标准域名
+        "adblock": re.compile(r'^@@\|\|.+\^$'),         # @@||example.com^
+        "wildcard": re.compile(r'^\*?[\w.-]+\*?$')      # 带通配符
+    },
+    # 通用模式
+    "common": {
+        "comment": re.compile(r'^(!|#|\[Adblock).*'),   # 注释行
+        "empty": re.compile(r'^\s*$'),                  # 空行
+        "modifiers": re.compile(r'\$(.*)$')             # 规则修饰符部分
+    }
+}
+
+# AdGuard支持的修饰符列表
+SUPPORTED_MODIFIERS = {
+    'domain', 'third-party', 'script', 'image', 'stylesheet', 'object',
+    'xmlhttprequest', 'subdocument', 'ping', 'websocket', 'webrtc', 'document',
+    'elemhide', 'genericblock', 'generichide', 'important', 'popup',
+    'csp', 'redirect', 'removeparam', 'badfilter', 'all', 'inline-script',
+    'removeheader', 'hls', 'jsonprune', 'app', 'network', 'dnsrewrite',
+    'replace', 'cname', 'dnstype', 'dns'
+}
+
+
 def setup_logger():
+    """配置日志"""
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
     handler = logging.StreamHandler()
@@ -31,162 +70,116 @@ def setup_logger():
     logger.addHandler(handler)
     return logger
 
+
 logger = setup_logger()
 
-# AdGuard支持的修饰符列表
-SUPPORTED_MODIFIERS = [
-    'domain', 'third-party', 'script', 'image', 'stylesheet', 'object',
-    'xmlhttprequest', 'subdocument', 'ping', 'websocket', 'webrtc', 'document',
-    'elemhide', 'genericblock', 'generichide', 'important', 'popup',
-    'csp', 'redirect', 'removeparam', 'badfilter', 'all', 'inline-script',
-    'removeheader', 'hls', 'jsonprune', 'app', 'network', 'dnsrewrite',
-    'replace', 'cname', 'dnstype', 'dns'
-]
 
-def is_allow_rule(line: str) -> bool:
-    """判断是否为白名单规则"""
-    # 注释行不算规则
-    if not line or line.startswith(('!', '#', '[Adblock')):
-        return False
-    
-    # 明确的白名单标记
-    if line.startswith(('@@', '#@#')):
-        return True
-    
-    # 包含白名单修饰符
-    if '$badfilter' in line or '$generichide' in line:
-        return True
-    
-    return False
+def filter_modifiers(rule: str) -> str:
+    """过滤规则中不支持的修饰符"""
+    if '$' not in rule:
+        return rule
 
-def convert_rule(line: str) -> str:
-    """转换规则为AdGuard格式，过滤不支持的修饰符"""
-    # 处理带有修饰符的规则
-    if '$' in line:
-        base_rule, modifiers = line.split('$', 1)
-        base_rule = base_rule.strip()
-        modifiers = modifiers.strip()
+    base, modifiers_part = rule.split('$', 1)
+    valid_modifiers = []
 
-        # 过滤不支持的修饰符
-        valid_modifiers = []
-        for mod in modifiers.split(','):
-            mod = mod.strip()
-            if not mod:
+    for mod in modifiers_part.split(','):
+        mod = mod.strip()
+        if not mod:
+            continue
+
+        # 分离修饰符名称和值（如 domain=example.com）
+        mod_name = mod.split('=', 1)[0].strip()
+        if mod_name in SUPPORTED_MODIFIERS:
+            valid_modifiers.append(mod)
+
+    return f"{base}${','.join(valid_modifiers)}" if valid_modifiers else base
+
+
+def convert_block_rule(line: str) -> str:
+    """转换黑名单规则为AdGuard格式"""
+    line = line.strip()
+    if REGEX["block"]["dns_rewrite"].match(line):
+        return filter_modifiers(f"{line}$important")
+    if REGEX["block"]["hosts"].match(line):
+        ip, domain = line.split()
+        return filter_modifiers(f"||{domain}^$dnsrewrite=NOERROR;A;{ip}")
+    if REGEX["block"]["standard"].match(line):
+        return filter_modifiers(f"||{line}^")
+    if REGEX["block"]["wildcard"].match(line):
+        return filter_modifiers(f"{line}$important")
+    return filter_modifiers(line)  # 未匹配到特定模式的规则直接过滤修饰符
+
+
+def convert_allow_rule(line: str) -> str:
+    """转换白名单规则为AdGuard格式"""
+    line = line.strip()
+    if REGEX["allow"]["adblock"].match(line):
+        return filter_modifiers(line)
+    if REGEX["allow"]["standard"].match(line):
+        return filter_modifiers(f"@@||{line}^")
+    if REGEX["allow"]["wildcard"].match(line):
+        return filter_modifiers(f"@@||{line}^")
+    return filter_modifiers(line)  # 未匹配到特定模式的规则直接过滤修饰符
+
+
+def process_single_file(input_path: Path, output_path: Path, rule_type: str) -> int:
+    """独立处理单个文件（黑名单/白名单）"""
+    if not input_path.exists():
+        logger.warning(f"输入文件不存在: {input_path}")
+        return 0
+
+    # 选择对应的转换函数
+    convert_func = convert_block_rule if rule_type == "block" else convert_allow_rule
+    unique_rules = set()  # 自动去重
+    total = 0
+    skipped = 0
+
+    with input_path.open('r', encoding='utf-8') as fin, \
+         output_path.open('w', encoding='utf-8') as fout:
+
+        for line in fin:
+            line = line.strip()
+            total += 1
+
+            # 跳过空行和注释行（不写入输出，避免冗余）
+            if REGEX["common"]["empty"].match(line) or REGEX["common"]["comment"].match(line):
+                skipped += 1
                 continue
 
-            # 处理带值的修饰符
-            if '=' in mod:
-                mod_name, mod_value = mod.split('=', 1)
-                mod_name = mod_name.strip()
-                if mod_name in SUPPORTED_MODIFIERS:
-                    valid_modifiers.append(f"{mod_name}={mod_value}")
+            # 转换规则
+            converted = convert_func(line)
+            if converted:
+                unique_rules.add(converted)
             else:
-                if mod in SUPPORTED_MODIFIERS:
-                    valid_modifiers.append(mod)
+                skipped += 1
 
-        # 重新组装规则
-        if valid_modifiers:
-            return f"{base_rule}${','.join(valid_modifiers)}"
-    
-    return line
+        # 写入去重后的规则（排序保证输出一致性）
+        fout.write('\n'.join(sorted(unique_rules)))
 
-def process_files(block_input: Path, allow_input: Path, block_output: Path, allow_output: Path):
-    """处理所有文件，按照方案一处理混合语法"""
-    # 存储从黑名单中提取的白名单规则
-    extracted_allow_rules = []
-    
-    # 处理黑名单文件
-    block_count = 0
-    extracted_count = 0
-    try:
-        with block_input.open('r', encoding='utf-8') as fin_block, \
-             block_output.open('w', encoding='utf-8') as fout_block:
-            
-            for line in fin_block:
-                line = line.strip()
-                if not line:
-                    fout_block.write('\n')
-                    continue
-                    
-                # 注释行直接写入
-                if line.startswith(('!', '#', '[Adblock')):
-                    fout_block.write(line + '\n')
-                    continue
-                
-                # 转换规则
-                converted = convert_rule(line)
-                
-                # 如果是白名单规则，提取到白名单列表
-                if is_allow_rule(converted):
-                    extracted_allow_rules.append(converted)
-                    extracted_count += 1
-                    continue
-                
-                # 写入黑名单规则
-                fout_block.write(converted + '\n')
-                block_count += 1
-                
-    except Exception as e:
-        logger.error(f"处理黑名单文件失败: {str(e)}")
-        return 0, 0
-    
-    # 处理白名单文件
-    allow_count = 0
-    skipped_count = 0
-    try:
-        with allow_input.open('r', encoding='utf-8') as fin_allow, \
-             allow_output.open('w', encoding='utf-8') as fout_allow:
-            
-            for line in fin_allow:
-                line = line.strip()
-                if not line:
-                    fout_allow.write('\n')
-                    continue
-                    
-                # 注释行直接写入
-                if line.startswith(('!', '#', '[Adblock')):
-                    fout_allow.write(line + '\n')
-                    continue
-                
-                # 转换规则
-                converted = convert_rule(line)
-                
-                # 如果不是白名单规则，跳过
-                if not is_allow_rule(converted):
-                    skipped_count += 1
-                    continue
-                
-                # 写入白名单规则
-                fout_allow.write(converted + '\n')
-                allow_count += 1
-            
-            # 写入从黑名单中提取的白名单规则
-            for rule in extracted_allow_rules:
-                fout_allow.write(rule + '\n')
-                allow_count += 1
-                
-    except Exception as e:
-        logger.error(f"处理白名单文件失败: {str(e)}")
-        return block_count, 0
-    
-    logger.info(f"黑名单处理: 保留 {block_count} 条规则, 提取 {extracted_count} 条白名单规则")
-    logger.info(f"白名单处理: 保留 {allow_count - extracted_count} 条规则, 跳过 {skipped_count} 条非白名单规则")
-    
-    return block_count, allow_count
+    logger.info(f"{rule_type}处理: 总规则{total} 有效{len(unique_rules)} 跳过{skipped}")
+    return len(unique_rules)
+
 
 def main():
     repo_root = Path(os.getenv('GITHUB_WORKSPACE', os.getcwd()))
-    
-    # 处理文件
-    block_count, allow_count = process_files(
-        repo_root / BLOCK_INPUT,
-        repo_root / ALLOW_INPUT,
-        repo_root / BLOCK_OUTPUT,
-        repo_root / ALLOW_OUTPUT
+
+    # 独立处理黑名单
+    block_count = process_single_file(
+        repo_root / CONFIG["block"]["input"],
+        repo_root / CONFIG["block"]["output"],
+        "黑名单"
     )
-    
-    logger.info(f"生成 {BLOCK_OUTPUT}: {block_count} 条黑名单规则")
-    logger.info(f"生成 {ALLOW_OUTPUT}: {allow_count} 条白名单规则")
+
+    # 独立处理白名单
+    allow_count = process_single_file(
+        repo_root / CONFIG["allow"]["input"],
+        repo_root / CONFIG["allow"]["output"],
+        "白名单"
+    )
+
+    logger.info(f"生成 {CONFIG['block']['output']}: {block_count} 条规则")
+    logger.info(f"生成 {CONFIG['allow']['output']}: {allow_count} 条规则")
+
 
 if __name__ == "__main__":
     main()
