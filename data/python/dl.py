@@ -65,23 +65,23 @@ def download_rules():
         "https://github.com/entr0pia/fcm-hosts/raw/fcm/fcm-hosts",
         "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt",
         "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/Filters/AWAvenue-Ads-Rule-Replenish.txt",
-        "https://raw.githubusercontent.com/2Gardon/SM-Ad-FuckU-hosts/master/SMAdHosts",
+        #"https://raw.githubusercontent.com/2Gardon/SM-Ad-FuckU-hosts/master/SMAdHosts",
         "https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingBlockList.txt"
     ]
     
     ALLOW_SOURCES = [
-        "https://raw.githubusercontent.com/qq5460168/dangchu/main/white.txt",
-        "https://raw.githubusercontent.com/mphin/AdGuardHomeRules/main/Allowlist.txt",
+        #"https://raw.githubusercontent.com/qq5460168/dangchu/main/white.txt",
+        #"https://raw.githubusercontent.com/mphin/AdGuardHomeRules/main/Allowlist.txt",
         "https://file-git.trli.club/file-hosts/allow/Domains",
         "https://raw.githubusercontent.com/jhsvip/ADRuls/main/white.txt",
         "https://raw.githubusercontent.com/liwenjie119/adg-rules/master/white.txt",
-        "https://raw.githubusercontent.com/miaoermua/AdguardFilter/main/whitelist.txt",
+        #"https://raw.githubusercontent.com/miaoermua/AdguardFilter/main/whitelist.txt",
         "https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingAllowList.txt",
-        "https://raw.githubusercontent.com/Cats-Team/AdRules/script/script/allowlist.txt",
+        #"https://raw.githubusercontent.com/Cats-Team/AdRules/script/script/allowlist.txt",
         "https://raw.githubusercontent.com/user001235/112/main/white.txt",
         "https://raw.githubusercontent.com/urkbio/adguardhomefilter/main/whitelist.txt",
         
-"https://anti-ad.net/easylist.txt"
+#"https://anti-ad.net/easylist.txt"
     ]
     
     # 智能并发控制：根据源数量动态调整
