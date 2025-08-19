@@ -5,8 +5,8 @@ AdGuard Home 规则转换器
   - adblock_intermediate.txt (黑名单)
   - allow_intermediate.txt (白名单)
 输出: 
-  - adblock_agh.txt (黑名单规则)
-  - allow_agh.txt (白名单规则)
+  - adblock_adh.txt (黑名单规则)
+  - allow_adh.txt (白名单规则)
 功能:
   1. 分别处理黑白名单文件
   2. 严格过滤对应语法的规则
@@ -22,8 +22,8 @@ from pathlib import Path
 # 文件配置
 BLACK_INPUT = "adblock_intermediate.txt"
 WHITE_INPUT = "allow_intermediate.txt"
-BLACK_OUTPUT = "adblock_agh.txt"
-WHITE_OUTPUT = "allow_agh.txt"
+BLACK_OUTPUT = "adblock_adh.txt"
+WHITE_OUTPUT = "allow_adh.txt"
 
 def setup_logger():
     """配置日志记录器"""
