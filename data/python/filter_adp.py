@@ -14,8 +14,8 @@ from pathlib import Path
 # 配置
 INPUT_FILE = "adblock_intermediate.txt"
 ALLOW_INPUT_FILE = "allow_intermediate.txt"
-OUTPUT_FILE = "adblock_abp.txt"
-ALLOW_OUTPUT_FILE = "allow_abp.txt"
+OUTPUT_FILE = "adblock_adp.txt"
+ALLOW_OUTPUT_FILE = "allow_adp.txt"
 
 # 日志配置
 def setup_logger():
