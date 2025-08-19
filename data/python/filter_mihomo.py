@@ -84,63 +84,66 @@ class RuleParser:
         """解析 Clash YAML 文件，提取有效域名"""
         Logger.info(f"解析 Clash 规则文件 {input_file}...")
         all_rules = []
-        
+
         if not input_file.exists():
             Logger.error(f"输入文件 {input_file} 不存在")
             return all_rules
-        
+
         try:
             with input_file.open('r', encoding='utf-8') as f:
                 clash_data = yaml.safe_load(f)
-            
+
             if 'payload' not in clash_data:
                 Logger.error("Clash 文件格式错误：缺少 'payload' 部分")
                 return all_rules
-                
+
             for rule in clash_data['payload']:
                 self.stats['total'] += 1
                 self.stats['clash_rules'] += 1
-                
+
                 # 只处理 DOMAIN-SUFFIX 类型规则
                 if rule.get('type') != 'DOMAIN-SUFFIX':
                     continue
-                    
+
                 domain = rule.get('value', '').strip().lower()
                 policy = rule.get('policy', '').upper()
-                
+
                 # 只处理 REJECT 策略的规则（黑名单）
                 if policy != 'REJECT':
                     continue
-                    
+
                 # 验证 DNS 并去重
                 if not DNSValidator.is_valid_domain(domain):
                     self.stats['invalid_dns'] += 1
                     continue
-                    
+
                 if domain in self.seen_domains:
                     self.stats['duplicates'] += 1
                     continue
-                    
+
                 self.seen_domains.add(domain)
                 self.stats['valid'] += 1
-                all_rules.append((domain, f"'{domain}'"))
-                
+                # 生成标准Clash规则格式（关键修复点）
+                rule_str = f"type: DOMAIN-SUFFIX\n  value: {domain}"
+                all_rules.append((domain, rule_str))
+
             return all_rules
         except Exception as e:
             Logger.error(f"解析 Clash 文件失败: {str(e)}")
             return all_rules
 
     def generate_antiad_yaml(self, rules: List[str]) -> str:
-        """生成 YAML 规则集"""
+        """生成符合Clash标准的YAML规则集（关键修复点）"""
         rules_sorted = sorted(set(rules))
-        yaml = [
+        yaml_lines = [
             "#Title: AD-Filter",
             f"#Update time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC+8",
             "",
             "payload:"
         ]
-        yaml.extend(f"  - {rule}" for rule in rules_sorted)
-        return '\n'.join(yaml)
+        # 每条规则需要正确缩进
+        yaml_lines.extend(f"  - {rule}" for rule in rules_sorted)
+        return '\n'.join(yaml_lines)
 
     def compile_rules(self, yaml_content: str, output_path: Path) -> bool:
         """编译为 MRS 格式"""
@@ -183,7 +186,7 @@ def main():
     workspace = Path(GITHUB_WORKSPACE)
     input_path = workspace / INPUT_FILE
     output_path = workspace / OUTPUT_FILE
-    
+
     # 编译器路径处理
     compiler_path = COMPILER_PATH
     if not os.path.isabs(COMPILER_PATH):
