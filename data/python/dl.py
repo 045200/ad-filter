@@ -58,7 +58,8 @@ def download_rules():
     ADBLOCK_SOURCES = [
         "https://raw.githubusercontent.com/damengzhu/banad/main/jiekouAD.txt",
         "https://raw.githubusercontent.com/afwfv/DD-AD/main/rule/DD-AD.txt",
-        "https://raw.hellogithub.com/hosts",
+        
+"https://raw.hellogithub.com/hosts",
         "https://raw.githubusercontent.com/790953214/qy-Ads-Rule/main/black.txt",
         "https://raw.githubusercontent.com/2771936993/HG/main/hg1.txt",
         "https://github.com/entr0pia/fcm-hosts/raw/fcm/fcm-hosts",
@@ -79,7 +80,8 @@ def download_rules():
         "https://raw.githubusercontent.com/Cats-Team/AdRules/script/script/allowlist.txt",
         "https://raw.githubusercontent.com/user001235/112/main/white.txt",
         "https://raw.githubusercontent.com/urkbio/adguardhomefilter/main/whitelist.txt",
-        "https://anti-ad.net/easylist.txt"
+        
+"https://anti-ad.net/easylist.txt"
     ]
     
     # 智能并发控制：根据源数量动态调整
