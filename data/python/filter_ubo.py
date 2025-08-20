@@ -1,258 +1,216 @@
 #!/usr/bin/env python3
-"""
-uBlock Origin 规则转换器
-输入: 
-  - adblock_intermediate.txt (黑名单)
-  - allow_intermediate.txt (白名单)
-输出: 
-  - adblock_ubo.txt (合并规则，白名单优先)
-  - allow_ubo.txt (单独白名单规则)
-功能:
-  1. 处理黑白名单，转换为uBO兼容格式
-  2. 自动去重，白名单规则优先
-  3. 保留有效规则，过滤无效内容
-"""
+# -*- coding: utf-8 -*-
+
+"""uBlock Origin规则处理（GitHub环境适配，分黑白名单输出）"""
 
 import os
+import sys
+import glob
 import re
 import logging
+import time
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from typing import Tuple, List, Set, Dict
 
-# 文件配置
-BLACK_INPUT = "adblock_intermediate.txt"
-WHITE_INPUT = "allow_intermediate.txt"
-MERGED_OUTPUT = "adblock_ubo.txt"  # 合并规则输出
-WHITE_OUTPUT = "allow_ubo.txt"      # 单独白名单输出
+
+class Config:
+    # GitHub环境变量适配
+    GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", "")
+    RUNNER_TEMP = os.getenv("RUNNER_TEMP", os.getenv("TEMP_DIR", "tmp"))
+    INPUT_DIR = os.getenv("INPUT_DIR", f"{GITHUB_WORKSPACE}/input" if GITHUB_WORKSPACE else "input")
+    OUTPUT_DIR = os.getenv("OUTPUT_DIR", f"{GITHUB_WORKSPACE}/output" if GITHUB_WORKSPACE else "output")
+
+    # 输出文件路径
+    OUTPUT_BLACK = Path(OUTPUT_DIR) / "adblock_ubo.txt"
+    OUTPUT_WHITE = Path(OUTPUT_DIR) / "allow_ubo.txt"
+    TEMP_DIR = Path(RUNNER_TEMP) / "ubo_processing"
+
+    # 可通过环境变量配置的参数
+    MAX_WORKERS = int(os.getenv("MAX_WORKERS", str(min(os.cpu_count() or 4, 4))))
+    RULE_LEN_RANGE = (3, 8192)  # uBO支持更长规则（如脚本拦截）
+    INPUT_PATTERNS = os.getenv("INPUT_PATTERNS", "*.txt,*.list").split(",")
+
+
+class RegexPatterns:
+    # 黑名单规则（uBO原生语法，含扩展）
+    BLACK_BASE = re.compile(r'^(||[\w.-]+\^?|[\w.-]+##.+|[\*a-z0-9\-\.]+|/.*/|[\w.-]+\$[\w,-]+)$')
+    BLACK_UBO_EXTEND = re.compile(r'^##\+js\(.+\)$')  # uBO特有脚本拦截（如##+js(no-adb)）
+    BLACK_CSP = re.compile(r'^[\w.-]+\$csp=.+$')  # uBO支持的CSP规则
+
+    # 白名单规则（uBO例外语法）
+    WHITE_BASE = re.compile(r'^(@@\|\|[\w.-]+\^?|[\w.-]+#@#+|@@[\w.-]+\$[\w,-]+)$')
+    WHITE_UBO_EXTEND = re.compile(r'^@@##\+js\(.+\)$')  # 脚本白名单（如@@##+js(no-adb)）
+    WHITE_CSP = re.compile(r'^@@[\w.-]+\$csp=.+$')  # CSP例外规则
+
+    # 可转换规则
+    HOSTS_RULE = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')  # 转换为||domain.com^
+    PLAIN_DOMAIN = re.compile(r'^[\w.-]+\.[a.[]{2,}$')  # 转换为||domain.com^
+
+    # 过滤项
+    COMMENT = re.compile(r'^[!#]')
+    EMPTY_LINE = re.compile(r'^\s*$')
+
 
 def setup_logger():
-    """配置日志记录器"""
-    logger = logging.getLogger()
+    """适配GitHub Actions日志格式（支持通知/警告/错误级别）"""
+    logger = logging.getLogger('UBOSplit')
     logger.setLevel(logging.INFO)
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter('[%(levelname)s] %(message)s'))
-    logger.addHandler(handler)
+
+    class GitHubFormatter(logging.Formatter):
+        def format(self, record):
+            if record.levelno == logging.INFO:
+                return f"::notice::{record.getMessage()}"
+            elif record.levelno == logging.WARNING:
+                return f"::warning::{record.getMessage()}"
+            elif record.levelno == logging.ERROR:
+                return f"::error::{record.getMessage()}"
+            return record.getMessage()
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(GitHubFormatter())
+    logger.handlers = [handler]
     return logger
 
 logger = setup_logger()
 
-def convert_to_ubo(line: str, is_white: bool) -> str:
-    """将规则转换为uBO格式"""
-    line = line.strip()
-    # 跳过空行和注释
-    if not line or line.startswith('!'):
-        return None
-    
-    # 处理白名单规则（uBO白名单前缀为@@）
-    if is_white:
-        # 已带@@前缀的规则直接保留
-        if line.startswith('@@'):
-            return line
-        # 域名格式转换为@@||domain^
-        if re.match(r'^[\w.-]+$', line):
-            return f"@@||{line}^"
-        # Hosts格式白名单转换
-        if re.match(r'^\d+\.\d+\.\d+\.\d+\s+[\w.-]+$', line):
-            domain = line.split()[-1]
-            return f"@@||{domain}^"
-    
-    # 处理黑名单规则
-    else:
-        # 已符合uBO格式的规则直接保留
-        if line.startswith(('||', '|', '*')) and (line.endswith('^') or '*' in line):
-            return line
-        # 域名格式转换为||domain^
-        if re.match(r'^[\w.-]+$', line):
-            return f"||{line}^"
-        # Hosts格式黑名单转换
-        if re.match(r'^\d+\.\d+\.\d+\.\d+\s+[\w.-]+$', line):
-            domain = line.split()[-1]
-            return f"||{domain}^"
-    
-    # 无法转换的无效规则
-    return None
 
-def process_file(input_path: Path, is_white: bool) -> list:
-    """处理输入文件，返回转换后的规则列表"""
-    if not input_path.exists():
-        logger.warning(f"输入文件不存在: {input_path}")
-        return []
-    
-    rules = []
-    seen = set()  # 用于去重
-    total = 0
-    invalid = 0
-    
-    with input_path.open('r', encoding='utf-8') as f:
-        for line in f:
-            total += 1
-            converted = convert_to_ubo(line, is_white)
-            if converted:
-                # 去重（基于规则内容）
-                if converted not in seen:
-                    rules.append(converted)
-                    seen.add(converted)
-                else:
-                    invalid += 1  # 重复视为无效
-            else:
-                invalid += 1
-    
-    rule_type = "白名单" if is_white else "黑名单"
-    logger.info(f"处理{rule_type}: 总条数{total}，有效{len(rules)}，无效/重复{invalid}")
-    return rules
+class UBOSplitter:
+    def __init__(self):
+        # 创建目录（适配GitHub权限）
+        for dir_path in [Config.TEMP_DIR, Path(Config.INPUT_DIR), Path(Config.OUTPUT_DIR)]:
+            dir_path.mkdir(parents=True, exist_ok=True)
+            if os.name != "nt":
+                os.chmod(dir_path, 0o755)  # 确保Linux Runner可写
 
-def main():
-    repo_root = Path(os.getenv('GITHUB_WORKSPACE', os.getcwd()))
-    
-    # 处理白名单
-    white_rules = process_file(repo_root / WHITE_INPUT, is_white=True)
-    
-    # 处理黑名单
-    black_rules = process_file(repo_root / BLACK_INPUT, is_white=False)
-    
-    # 合并规则（白名单在前，确保优先）
-    merged_rules = white_rules + black_rules
-    
-    # 写入合并规则
-    merged_path = repo_root / MERGED_OUTPUT
-    with merged_path.open('w', encoding='utf-8') as f:
-        for rule in merged_rules:
-            f.write(f"{rule}\n")
-    
-    # 单独写入白名单
-    white_path = repo_root / WHITE_OUTPUT
-    with white_path.open('w', encoding='utf-8') as f:
-        for rule in white_rules:
-            f.write(f"{rule}\n")
-    
-    logger.info(f"已生成：{MERGED_OUTPUT}（{len(merged_rules)}条），{WHITE_OUTPUT}（{len(white_rules)}条）")
+        # 清理旧文件
+        for f in [Config.OUTPUT_BLACK, Config.OUTPUT_WHITE]:
+            if f.exists():
+                f.unlink()
 
-if __name__ == "__main__":
-    main()
-#!/usr/bin/env python3
-"""
-Surge 规则转换器增强版
-输入: 
-  - adblock_intermediate.txt (黑名单)
-  - allow_intermediate.txt (白名单)
-输出: 
-  - adblock_surge.conf (合并规则)
-功能:
-  1. 分别处理黑白名单文件
-  2. 严格过滤对应语法的规则
-  3. 自动去重处理
-  4. 白名单规则使用DIRECT策略，黑名单使用REJECT策略
-  5. 合并规则时白名单优先
-  6. 纯净输出，不添加任何额外信息
-"""
+        self.regex = RegexPatterns()
+        self.len_min, self.len_max = Config.RULE_LEN_RANGE
 
-import os
-import re
-import logging
-from pathlib import Path
+    def run(self):
+        start_time = time.time()
+        logger.info("===== uBlock Origin 黑白名单处理（GitHub环境适配） =====")
 
-# 文件配置
-BLACK_INPUT = "adblock_intermediate.txt"
-WHITE_INPUT = "allow_intermediate.txt"
-OUTPUT_FILE = "adblock_surge.conf"
+        # 加载输入文件
+        input_files = []
+        for pattern in Config.INPUT_PATTERNS:
+            input_files.extend([Path(p) for p in glob.glob(str(Path(Config.INPUT_DIR) / pattern))])
 
-def setup_logger():
-    """配置日志记录器"""
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter('[%(levelname)s] %(message)s'))
-    logger.addHandler(handler)
-    return logger
+        if not input_files:
+            logger.error(f"未在 {Config.INPUT_DIR} 找到文件（格式：{Config.INPUT_PATTERNS}）")
+            return
 
-logger = setup_logger()
+        # 全局去重缓存
+        black_cache: Set[str] = set()
+        white_cache: Set[str] = set()
+        total_stats = {'black': 0, 'white': 0, 'filtered': 0, 'unsupported': 0}
 
-def convert_black_rule(line: str) -> str:
-    """转换黑名单规则为Surge格式"""
-    # DNS重写规则 (||example.com^)
-    if line.startswith('||') and line.endswith('^'):
-        return f"DOMAIN-SUFFIX,{line[2:-1]},REJECT"
-    
-    # Hosts规则 (0.0.0.0 example.com)
-    if re.match(r'^\d+\.\d+\.\d+\.\d+\s+[\w.-]+$', line):
-        parts = line.split()
-        return f"IP-CIDR,{parts[0]}/32,REJECT"
-    
-    # 标准域名规则 (example.com)
-    if re.match(r'^[\w.-]+$', line):
-        return f"DOMAIN-SUFFIX,{line},REJECT"
-    
-    # 其他无效规则
-    return None
+        # 并发处理文件
+        with ProcessPoolExecutor(max_workers=Config.MAX_WORKERS) as executor:
+            futures = {executor.submit(self._process_file, f): f for f in input_files}
+            for future in as_completed(futures):
+                file = futures[future]
+                try:
+                    (black_rules, white_rules), stats = future.result()
+                    # 全局去重
+                    new_black = [r for r in black_rules if r not in black_cache]
+                    new_white = [r for r in white_rules if r not in white_cache]
+                    black_cache.update(new_black)
+                    white_cache.update(new_white)
+                    # 累加统计
+                    total_stats['black'] += len(new_black)
+                    total_stats['white'] += len(new_white)
+                    total_stats['filtered'] += stats['filtered']
+                    total_stats['unsupported'] += stats['unsupported']
+                    logger.info(f"处理 {file.name}：新增黑名单{len(new_black)}条，白名单{len(new_white)}条")
+                except Exception as e:
+                    logger.error(f"处理{file.name}失败：{str(e)}")
 
-def convert_white_rule(line: str) -> str:
-    """转换白名单规则为Surge格式"""
-    # 标准白名单规则 (@@||example.com^)
-    if line.startswith('@@||') and line.endswith('^'):
-        return f"DOMAIN-SUFFIX,{line[4:-1]},DIRECT"
-    
-    # 简化白名单规则 (example.com)
-    if re.match(r'^[\w.-]+$', line):
-        return f"DOMAIN-SUFFIX,{line},DIRECT"
-    
-    # 其他无效规则
-    return None
+        # 写入输出文件
+        with open(Config.OUTPUT_BLACK, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(black_cache) + '\n')
+        with open(Config.OUTPUT_WHITE, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(white_cache) + '\n')
 
-def process_file(input_path: Path, is_blacklist: bool) -> list:
-    """处理输入文件并返回转换后的规则列表"""
-    if not input_path.exists():
-        logger.warning(f"输入文件不存在: {input_path}")
-        return []
-    
-    converter = convert_black_rule if is_blacklist else convert_white_rule
-    rule_type = "黑名单" if is_blacklist else "白名单"
-    rules = []
-    seen_rules = set()
-    skipped_count = 0
-    
-    with input_path.open('r', encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            # 跳过空行和注释
-            if not line or line.startswith('!'):
-                continue
-                
-            # 转换规则
-            rule = converter(line)
-            if rule:
-                # 提取规则标识符 (类型+值)
-                rule_key = rule.split(',')[1]
-                if rule_key not in seen_rules:
-                    rules.append(rule)
-                    seen_rules.add(rule_key)
-                else:
-                    skipped_count += 1
-            else:
-                skipped_count += 1
-    
-    logger.info(f"处理{rule_type}规则: 输入 {len(rules)+skipped_count} 条, "
-                f"有效 {len(rules)} 条, 跳过 {skipped_count} 条")
-    return rules
+        # 输出GitHub Actions变量（供后续步骤引用）
+        print(f"::set-output name=ubo_blacklist_path::{Config.OUTPUT_BLACK}")
+        print(f"::set-output name=ubo_whitelist_path::{Config.OUTPUT_WHITE}")
+        print(f"::set-output name=ubo_blacklist_count::{total_stats['black']}")
+        print(f"::set-output name=ubo_whitelist_count::{total_stats['white']}")
 
-def main():
-    repo_root = Path(os.getenv('GITHUB_WORKSPACE', os.getcwd()))
-    
-    # 处理白名单 (优先处理，确保白名单规则在前)
-    white_rules = process_file(repo_root / WHITE_INPUT, is_blacklist=False)
-    
-    # 处理黑名单
-    black_rules = process_file(repo_root / BLACK_INPUT, is_blacklist=True)
-    
-    # 合并规则集 (白名单在前，黑名单在后)
-    all_rules = white_rules + black_rules
-    total_rules = len(all_rules)
-    
-    # 写入输出文件 - 只包含规则行
-    output_path = repo_root / OUTPUT_FILE
-    with output_path.open('w', encoding='utf-8') as outfile:
-        for rule in all_rules:
-            outfile.write(rule + '\n')
-    
-    logger.info(f"生成 {OUTPUT_FILE}: {total_rules} 条规则 (白名单: {len(white_rules)}, 黑名单: {len(black_rules)})")
+        logger.info(f"\n处理完成：\n黑名单：{total_stats['black']}条\n白名单：{total_stats['white']}条")
+        logger.info(f"过滤无效规则：{total_stats['filtered']}条，不支持规则：{total_stats['unsupported']}条")
+        logger.info(f"耗时：{time.time()-start_time:.2f}秒")
 
-if __name__ == "__main__":
-    main()
+    def _process_file(self, file_path: Path) -> Tuple[Tuple[List[str], List[str]], Dict]:
+        """处理单个文件，返回黑白名单及统计"""
+        black_rules: List[str] = []
+        white_rules: List[str] = []
+        stats = {'filtered': 0, 'unsupported': 0}
+        file_black_cache: Set[str] = set()
+        file_white_cache: Set[str] = set()
+
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    rule_type, rule = self._classify_rule(line)
+                    if rule_type == 'black' and rule not in file_black_cache:
+                        file_black_cache.add(rule)
+                        black_rules.append(rule)
+                    elif rule_type == 'white' and rule not in file_white_cache:
+                        file_white_cache.add(rule)
+                        white_rules.append(rule)
+                    elif rule_type == 'filtered':
+                        stats['filtered'] += 1
+                    else:
+                        stats['unsupported'] += 1
+        except Exception as e:
+            logger.warning(f"读取{file_path.name}出错：{str(e)}")
+
+        return (black_rules, white_rules), stats
+
+    def _classify_rule(self, line: str) -> Tuple[str, str]:
+        """分类规则类型（支持uBO扩展语法）"""
+        # 过滤注释和无效长度
+        if self.regex.COMMENT.match(line) or not (self.len_min <= len(line) <= self.len_max):
+            return ('filtered', '')
+
+        # 白名单规则（含uBO扩展）
+        if (self.regex.WHITE_BASE.match(line) or 
+            self.regex.WHITE_UBO_EXTEND.match(line) or 
+            self.regex.WHITE_CSP.match(line)):
+            return ('white', line)
+
+        # 黑名单规则（含uBO扩展）
+        if (self.regex.BLACK_BASE.match(line) or 
+            self.regex.BLACK_UBO_EXTEND.match(line) or 
+            self.regex.BLACK_CSP.match(line)):
+            return ('black', line)
+
+        # 转换Hosts为黑名单
+        hosts_match = self.regex.HOSTS_RULE.match(line)
+        if hosts_match:
+            return ('black', f"||{hosts_match.group(2)}^")
+
+        # 转换纯域名为黑名单
+        if self.regex.PLAIN_DOMAIN.match(line):
+            return ('black', f"||{line}^")
+
+        # 未匹配的规则
+        return ('unsupported', '')
+
+
+if __name__ == '__main__':
+    try:
+        splitter = UBOSplitter()
+        splitter.run()
+    except Exception as e:
+        logger.critical(f"运行失败：{str(e)}", exc_info=True)
+        sys.exit(1)
