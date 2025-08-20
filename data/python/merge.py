@@ -49,7 +49,7 @@ class RegexPatterns:
 
     # 可转换为Adblock的规则（与下载脚本内容对齐）
     HOSTS_RULE = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')  # Hosts规则
-    PLAIN_DOMAIN = re.compile(r'^[\w.-]+\.[a-z]{2,}$')  # 纯域名（Pi-hole格式，如example.com）
+    PLAIN_DOMAIN = re.compile(r'^[\w.-]+\.[a.[]{2,}$')  # 纯域名（Pi-hole格式，如example.com）
 
     # 过滤项
     COMMENT = re.compile(r'^[!#]')  # 注释行（! 或 # 开头）
@@ -67,7 +67,7 @@ def setup_logger():
         formatter = logging.Formatter('%(message)s')
     else:
         formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
-    
+
     handler.setFormatter(formatter)
     logger.handlers = [handler]
     return logger
@@ -135,7 +135,7 @@ class AdblockMerger:
 
         with ProcessPoolExecutor(max_workers=Config.MAX_WORKERS) as executor:
             futures = {executor.submit(self._process_file, file): file for file in input_files}
-            
+
             for future in as_completed(futures):
                 file = futures[future]
                 try:
@@ -165,7 +165,11 @@ class AdblockMerger:
 
         # 若在GitHub Actions中，输出产物路径（供后续步骤使用）
         if os.getenv('GITHUB_ACTIONS') == 'true':
-            logger.info(f"::set-output name=merged_file::{Config.OUTPUT_FILE}")
+            # 使用新的环境文件方式设置输出，替代 deprecated 的 set-output 命令
+            github_output = os.getenv('GITHUB_OUTPUT')
+            if github_output:
+                with open(github_output, 'a') as f:
+                    f.write(f"merged_file={Config.OUTPUT_FILE}\n")
 
     def _process_file(self, file_path: Path) -> Tuple[List[str], Dict]:
         """处理单个文件，返回有效规则和统计信息"""
