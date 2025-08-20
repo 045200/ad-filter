@@ -23,7 +23,7 @@ class Config:
     MAX_WORKERS = min(os.cpu_count() or 4, 4)
     RULE_LEN_RANGE = (3, 255)
     MAX_FILESIZE_MB = 50
-    INPUT_PATTERNS = ["*.txt", "*.list"]
+    INPUT_PATTERNS = ["adblock_merged.txt"]
     HOSTS_IP = "0.0.0.0"  # 统一使用0.0.0.0作为拦截IP
 
 
