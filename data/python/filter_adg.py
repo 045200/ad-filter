@@ -28,7 +28,7 @@ class Config:
     MAX_WORKERS = min(os.cpu_count() or 4, 4)
     RULE_LEN_RANGE = (3, 4096)
     MAX_FILESIZE_MB = 50
-    INPUT_PATTERNS = ["*.txt", "*.list"]
+    INPUT_PATTERNS = ["adblock_merged.txt"]
 
 
 class RegexPatterns:
