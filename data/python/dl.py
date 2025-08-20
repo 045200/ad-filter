@@ -53,9 +53,9 @@ class Config:
         # Anti-AD通用规则（注释保留）
         #"https://anti-ad.net/easylist.txt",
         # Cats-Team广告规则（注释保留）
-        #"https://raw.githubusercontent.com/Cats-Team/AdRules/main/adblock.txt",
+        "https://raw.githubusercontent.com/Cats-Team/AdRules/main/adblock.txt",
         # 那个谁520广告hosts规则（注释保留）
-        #"https://raw.githubusercontent.com/qq5460168/EasyAds/refs/heads/main/adblock.txt",
+        "https://raw.githubusercontent.com/qq5460168/EasyAds/refs/heads/main/adblock.txt",
         # 10007自动规则（注释保留）
         #"https://raw.githubusercontent.com/lingeringsound/10007_auto/adb.txt",
         # 晴雅去广告规则（官方CDN）
@@ -67,7 +67,7 @@ class Config:
         # 秋风广告规则（官方CDN）
         "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt",
         # SMAdHosts规则（注释保留）
-        #"https://raw.githubusercontent.com/2Gardon/SM-Ad-FuckU-hosts/master/SMAdHosts",
+        "https://raw.githubusercontent.com/2Gardon/SM-Ad-FuckU-hosts/master/SMAdHosts",
         # 茯苓拦截规则（官方CDN）
         "https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingBlockList.txt"
     ]
@@ -82,19 +82,20 @@ class Config:
         # jhsvip白名单（官方CDN）
         "https://raw.githubusercontent.com/jhsvip/ADRuls/main/white.txt",
         # liwenjie119白名单（注释保留）
-        #"https://raw.githubusercontent.com/liwenjie119/adg-rules/master/white.txt",
+        "https://raw.githubusercontent.com/liwenjie119/adg-rules/master/white.txt",
         # 喵二白名单（注释保留）
-        #"https://raw.githubusercontent.com/miaoermua/AdguardFilter/main/whitelist.txt",
+        "https://raw.githubusercontent.com/miaoermua/AdguardFilter/main/whitelist.txt",
         # 茯苓白名单（官方CDN）
         "https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingAllowList.txt",
         # Cats-Team白名单（注释保留）
-        #"https://raw.githubusercontent.com/Cats-Team/AdRules/script/script/allowlist.txt",
+        "https://raw.githubusercontent.com/Cats-Team/AdRules/script/script/allowlist.txt",
         # 浅笑白名单（注释保留）
-        #"https://raw.githubusercontent.com/user001235/112/main/white.txt",
+        "https://raw.githubusercontent.com/user001235/112/main/white.txt",
         # 酷安cocieto白名单（注释保留）
-        #"https://raw.githubusercontent.com/urkbio/adguardhomefilter/main/whitelist.txt",
+        "https://raw.githubusercontent.com/urkbio/adguardhomefilter/main/whitelist.txt",
         # anti-ad混合名单（官方CDN）
-        "https://anti-ad.net/easylist.txt"
+        
+#"https://anti-ad.net/easylist.txt"
     ]
 
     # 本地规则文件映射（源路径 -> 临时目录路径）
