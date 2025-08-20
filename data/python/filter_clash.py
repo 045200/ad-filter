@@ -29,7 +29,7 @@ class Config:
     # 规则处理配置
     MAX_WORKERS = int(os.getenv("MAX_WORKERS", str(min(os.cpu_count() or 4, 4))))
     RULE_LEN_RANGE = (3, 4096)  # 有效规则长度范围
-    INPUT_PATTERNS = os.getenv("INPUT_PATTERNS", "*.txt,*.list").split(",")
+    INPUT_PATTERNS = os.getenv("INPUT_PATTERNS", "adblock_merged.txt").split(",")
     SUPPORTED_RULE_TYPES = {'DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD'}  # 下游支持的规则类型
 
 
