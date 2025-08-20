@@ -17,10 +17,11 @@ from typing import Tuple, List, Set, Dict
 class Config:
     GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
     BASE_DIR = Path(GITHUB_WORKSPACE)
+    # 输入：根目录下的临时目录
     TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
-    # 移除OUTPUT_DIR，直接在根目录输出文件
-    OUTPUT_FILE = BASE_DIR / "adblock_ubo.txt"  # 拦截规则（根目录）
-    ALLOW_FILE = BASE_DIR / "allow_ubo.txt"     # 白名单规则（根目录）
+    # 输出：直接在根目录
+    OUTPUT_FILE = BASE_DIR / "adblock_ubo.txt"  # 黑名单（拦截规则）
+    ALLOW_FILE = BASE_DIR / "allow_ubo.txt"     # 白名单（允许规则）
     MAX_WORKERS = min(os.cpu_count() or 4, 4)
     RULE_LEN_RANGE = (3, 4096)
     MAX_FILESIZE_MB = 50
@@ -40,7 +41,7 @@ class RegexPatterns:
 
     # 可转换规则
     HOSTS_RULE = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')  # 转换为||domain.com^
-    PLAIN_DOMAIN = re.compile(r'^[\w.-]+\.[a.[]{2,}$')  # 转换为||domain.com^
+    PLAIN_DOMAIN = re.compile(r'^[\w.-]+\.[a-z]{2,}$')  # 转换为||domain.com^（修正原正则错误）
 
     # 过滤项
     COMMENT = re.compile(r'^[!#]')
@@ -72,14 +73,13 @@ logger = setup_logger()
 
 class UBOSplitter:
     def __init__(self):
-        # 创建目录（适配GitHub权限）
-        for dir_path in [Config.TEMP_DIR, Path(Config.INPUT_DIR), Path(Config.OUTPUT_DIR)]:
-            dir_path.mkdir(parents=True, exist_ok=True)
-            if os.name != "nt":
-                os.chmod(dir_path, 0o755)  # 确保Linux Runner可写
+        # 确保临时目录存在（输入目录）
+        Config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            os.chmod(Config.TEMP_DIR, 0o755)  # 确保Linux Runner可写
 
-        # 清理旧文件
-        for f in [Config.OUTPUT_BLACK, Config.OUTPUT_WHITE]:
+        # 清理根目录下的旧输出文件
+        for f in [Config.OUTPUT_FILE, Config.ALLOW_FILE]:
             if f.exists():
                 f.unlink()
 
@@ -89,14 +89,17 @@ class UBOSplitter:
     def run(self):
         start_time = time.time()
         logger.info("===== uBlock Origin 黑白名单处理（GitHub环境适配） =====")
+        logger.info(f"输入目录: {Config.TEMP_DIR}")
+        logger.info(f"输出黑名单: {Config.OUTPUT_FILE}")
+        logger.info(f"输出白名单: {Config.ALLOW_FILE}")
 
-        # 加载输入文件
+        # 加载输入文件（从临时目录）
         input_files = []
         for pattern in Config.INPUT_PATTERNS:
-            input_files.extend([Path(p) for p in glob.glob(str(Path(Config.INPUT_DIR) / pattern))])
+            input_files.extend([Path(p) for p in glob.glob(str(Config.TEMP_DIR / pattern))])
 
         if not input_files:
-            logger.error(f"未在 {Config.INPUT_DIR} 找到文件（格式：{Config.INPUT_PATTERNS}）")
+            logger.error(f"未在临时目录找到文件（格式：{Config.INPUT_PATTERNS}）")
             return
 
         # 全局去重缓存
@@ -125,17 +128,21 @@ class UBOSplitter:
                 except Exception as e:
                     logger.error(f"处理{file.name}失败：{str(e)}")
 
-        # 写入输出文件
-        with open(Config.OUTPUT_BLACK, 'w', encoding='utf-8') as f:
+        # 写入输出文件到根目录
+        with open(Config.OUTPUT_FILE, 'w', encoding='utf-8') as f:
             f.write('\n'.join(black_cache) + '\n')
-        with open(Config.OUTPUT_WHITE, 'w', encoding='utf-8') as f:
+        with open(Config.ALLOW_FILE, 'w', encoding='utf-8') as f:
             f.write('\n'.join(white_cache) + '\n')
 
-        # 输出GitHub Actions变量（供后续步骤引用）
-        print(f"::set-output name=ubo_blacklist_path::{Config.OUTPUT_BLACK}")
-        print(f"::set-output name=ubo_whitelist_path::{Config.OUTPUT_WHITE}")
-        print(f"::set-output name=ubo_blacklist_count::{total_stats['black']}")
-        print(f"::set-output name=ubo_whitelist_count::{total_stats['white']}")
+        # 输出GitHub Actions变量（使用GITHUB_OUTPUT文件）
+        if os.getenv('GITHUB_ACTIONS') == 'true':
+            github_output = os.getenv('GITHUB_OUTPUT')
+            if github_output:
+                with open(github_output, 'a') as f:
+                    f.write(f"ubo_blacklist_path={Config.OUTPUT_FILE}\n")
+                    f.write(f"ubo_whitelist_path={Config.ALLOW_FILE}\n")
+                    f.write(f"ubo_blacklist_count={total_stats['black']}\n")
+                    f.write(f"ubo_whitelist_count={total_stats['white']}\n")
 
         logger.info(f"\n处理完成：\n黑名单：{total_stats['black']}条\n白名单：{total_stats['white']}条")
         logger.info(f"过滤无效规则：{total_stats['filtered']}条，不支持规则：{total_stats['unsupported']}条")
@@ -143,6 +150,16 @@ class UBOSplitter:
 
     def _process_file(self, file_path: Path) -> Tuple[Tuple[List[str], List[str]], Dict]:
         """处理单个文件，返回黑白名单及统计"""
+        # 检查文件大小
+        try:
+            size_mb = file_path.stat().st_size / (1024 * 1024)
+            if size_mb > Config.MAX_FILESIZE_MB:
+                logger.warning(f"跳过大文件 {file_path.name}（{size_mb:.1f}MB）")
+                return ([], []), {'filtered': 0, 'unsupported': 0}
+        except Exception as e:
+            logger.error(f"获取{file_path.name}大小失败：{str(e)}")
+            return ([], []), {'filtered': 0, 'unsupported': 0}
+
         black_rules: List[str] = []
         white_rules: List[str] = []
         stats = {'filtered': 0, 'unsupported': 0}
@@ -153,8 +170,8 @@ class UBOSplitter:
             with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                 for line in f:
                     line = line.strip()
-                    if not line:
-                        continue
+                    if self.regex.EMPTY_LINE.match(line):
+                        continue  # 跳过空行
                     rule_type, rule = self._classify_rule(line)
                     if rule_type == 'black' and rule not in file_black_cache:
                         file_black_cache.add(rule)
