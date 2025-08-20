@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 """
 Adblock Plus 规则转换器
 功能：将各类中间规则（hosts、域名列表等）转换为标准ABP语法，去重后输出纯净规则
@@ -10,23 +12,31 @@ ABP核心语法参考：
 
 import os
 import re
+import time
 import logging
 from pathlib import Path
 from typing import Set
 
-# 文件路径配置
+# ============== 环境变量与路径配置 ==============
+# 与步骤1/2/3/4保持一致的路径定义
+GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
+BASE_DIR = Path(GITHUB_WORKSPACE)
+TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')  # 输入文件统一存放于临时目录
+DATA_DIR = BASE_DIR / os.getenv('DATA_DIR', 'data')  # 预留数据目录，与其他步骤对齐
+
+# 文件路径配置（关联基础目录，与前序步骤路径逻辑一致）
 FILE_CONFIG = {
-    "block_input": "block_intermediate.txt",  # 待转换的拦截规则输入
-    "allow_input": "allow_intermediate.txt",  # 待转换的允许规则输入
-    "block_output": "abp_block.txt",          # ABP格式拦截规则输出
-    "allow_output": "abp_allow.txt"           # ABP格式允许规则输出
+    "block_input": TEMP_DIR / "block_intermediate.txt",  # 输入文件位于临时目录
+    "allow_input": TEMP_DIR / "allow_intermediate.txt",
+    "block_output": BASE_DIR / "abp_block.txt",          # 输出文件位于根目录
+    "allow_output": BASE_DIR / "abp_allow.txt"
 }
 
-# 预编译正则（匹配输入规则类型，按ABP语法转换）
+# ============== 预编译正则（匹配输入规则类型，按ABP语法转换） ==============
 REGEX_PATTERNS = {
     # 通用需跳过的行（注释、空行等，确保输出纯净）
     "skip": re.compile(r'^\s*$|^(!|#|//).*', re.IGNORECASE),  # 空行、注释行（!/#//开头）
-    
+
     # 拦截规则（黑名单）匹配模式
     "block": {
         "domain": re.compile(r'^[\w.-]+\.?$'),  # 标准域名（example.com 或 example.com.）
@@ -34,7 +44,7 @@ REGEX_PATTERNS = {
         "abp_raw": re.compile(r'^(\|\||\*)\S+\^?$'),  # 已符合ABP格式的规则（如||example.com^）
         "path": re.compile(r'^[\w.-]+/.*$')  # 带路径的规则（example.com/path）
     },
-    
+
     # 允许规则（白名单）匹配模式
     "allow": {
         "domain": re.compile(r'^[\w.-]+\.?$'),  # 标准域名
@@ -44,19 +54,55 @@ REGEX_PATTERNS = {
 }
 
 
+# ============== 日志配置 ==============
 def setup_logger():
     """配置日志，记录处理状态（不干扰输出文件）"""
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
     handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter('[%(levelname)s] %(message)s'))
-    logger.addHandler(handler)
+    # 适配GitHub Actions环境的日志格式
+    fmt = '%(message)s' if os.getenv('GITHUB_ACTIONS') == 'true' else '[%(levelname)s] %(message)s'
+    handler.setFormatter(logging.Formatter(fmt))
+    logger.handlers = [handler]
     return logger
 
 
 logger = setup_logger()
 
 
+# ============== GitHub Actions支持 ==============
+def gh_group(name):
+    """GitHub Actions日志分组开始（与前序步骤保持一致）"""
+    if os.getenv('GITHUB_ACTIONS') == 'true':
+        logger.info(f"::group::{name}")
+
+
+def gh_endgroup():
+    """GitHub Actions日志分组结束（与前序步骤保持一致）"""
+    if os.getenv('GITHUB_ACTIONS') == 'true':
+        logger.info("::endgroup::")
+
+
+# ============== 清理历史输出文件（与步骤3/4逻辑一致） ==============
+def clean_history_outputs():
+    """清理步骤5生成的历史输出文件，避免旧文件残留"""
+    gh_group("清理历史输出文件")
+    deleted = 0
+    # 定义需清理的输出文件列表（关联FILE_CONFIG中的输出路径）
+    output_files = [
+        FILE_CONFIG["block_output"],
+        FILE_CONFIG["allow_output"]
+    ]
+    for file in output_files:
+        if file.exists() and file.is_file():
+            file.unlink(missing_ok=True)
+            deleted += 1
+    logger.info(f"清理完成：{deleted}个历史输出文件已删除")
+    gh_endgroup()
+    return deleted
+
+
+# ============== 规则处理核心逻辑 ==============
 def is_valid_abp_domain(domain: str) -> bool:
     """验证域名合法性（符合ABP规则要求，避免无效规则）"""
     domain = domain.rstrip('.')  # 移除可能的末尾点
@@ -181,22 +227,44 @@ def write_abp_rules(rules: Set[str], output_path: Path):
     logger.info(f"已生成ABP规则文件：{output_path.name}（{len(rules)}条规则）")
 
 
+# ============== 主流程 ==============
 def main():
-    # 确定工作目录（支持GitHub Actions环境）
-    work_dir = Path(os.getenv('GITHUB_WORKSPACE', os.getcwd()))
+    start_time = time.time()  # 耗时统计，与前序步骤对齐
+
+    # 先清理历史输出，再准备环境（与步骤3/4逻辑一致）
+    clean_history_outputs()
+
+    gh_group("规则转换准备")
+    # 验证目录存在性（确保临时目录和数据目录可用）
+    for dir in [TEMP_DIR, DATA_DIR]:
+        dir.mkdir(exist_ok=True, parents=True)
+    logger.info("ABP规则转换环境就绪")
+    gh_endgroup()
 
     # 处理拦截规则（黑名单）
-    block_rules = process_rules(work_dir / FILE_CONFIG["block_input"], "block")
-    write_abp_rules(block_rules, work_dir / FILE_CONFIG["block_output"])
+    gh_group("处理拦截规则")
+    block_rules = process_rules(FILE_CONFIG["block_input"], "block")
+    write_abp_rules(block_rules, FILE_CONFIG["block_output"])
+    gh_endgroup()
 
     # 处理允许规则（白名单）
-    allow_rules = process_rules(work_dir / FILE_CONFIG["allow_input"], "allow")
-    write_abp_rules(allow_rules, work_dir / FILE_CONFIG["allow_output"])
+    gh_group("处理允许规则")
+    allow_rules = process_rules(FILE_CONFIG["allow_input"], "allow")
+    write_abp_rules(allow_rules, FILE_CONFIG["allow_output"])
+    gh_endgroup()
 
-    # 检查黑白名单冲突（同一规则同时存在于拦截和允许列表）
+    # 检查黑白名单冲突
+    gh_group("冲突规则检查")
     conflicts = block_rules & allow_rules
     if conflicts:
         logger.warning(f"发现{len(conflicts)}条冲突规则（同时在拦截和允许列表中）")
+    else:
+        logger.info("未发现拦截与允许规则冲突")
+    gh_endgroup()
+
+    # 输出总耗时
+    elapsed = time.time() - start_time
+    logger.info(f"ABP规则转换完成 | 总耗时: {elapsed:.2f}s")
 
 
 if __name__ == "__main__":
