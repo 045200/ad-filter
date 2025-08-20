@@ -8,17 +8,13 @@ import pytz
 
 # 拦截器配置（含通用规则hybrid）
 ADBLOCKERS: Dict[str, Dict[str, str]] = {
-    "adp": {"name": "Adblock Plus", "suffix": ".txt", "comment": "!", "has_allow": True},
-    "ubo": {"name": "uBlock Origin", "suffix": ".txt", "comment": "!", "has_allow": True},
+    "adp": {"name": "Adblock Plus", "suffix": ".txt", "comment": "!", "has_allow": False},
+    "ubo": {"name": "uBlock Origin", "suffix": ".txt", "comment": "!", "has_allow": False},
     "adg": {"name": "AdGuard", "suffix": ".txt", "comment": "!", "has_allow": True},
     "adh": {"name": "AdGuard Home", "suffix": ".txt", "comment": "#", "has_allow": True},
     "clash": {"name": "Clash", "suffix": ".yaml", "comment": "#", "has_allow": False},
     "surge": {"name": "Surge", "suffix": ".conf", "comment": "#", "has_allow": False},
-    "pihole": {"name": "Pi-hole", "suffix": ".txt", "comment": "#", "has_allow": True},
-    "hybrid": {"name": "通用混合规则", "suffix": ".txt", "comment": "!", "has_allow": True, 
-               "title_rule": "通用混合拦截规则", "desc_rule": "适用于 Adblock Plus/UBO/AdGuard 等主流拦截器的通用规则",
-               "title_allow": "通用混合白名单规则", "desc_allow": "适用于 Adblock Plus/UBO/AdGuard 等主流拦截器的通用白名单"}
-}
+    "pihole": {"name": "Pi-hole", "suffix": ".txt", "comment": "#", "has_allow": True}
 
 # 头信息模板（整合通用规则配置，通过变量动态适配）
 ADBLOCK_HEADER = """{comment} Title: {title}
