@@ -24,7 +24,7 @@ class Config:
     GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
     BASE_DIR = Path(GITHUB_WORKSPACE)
     DATA_DIR = BASE_DIR / os.getenv('DATA_DIR', 'data')
-    TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
+    TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')  # 与合并脚本使用相同的临时目录
     MOD_PATH = DATA_DIR / 'mod'  # 本地规则目录
 
     # 下载参数（4核16G环境优化）
@@ -310,6 +310,14 @@ class RuleDownloader:
         logger.info(f"远程白名单规则: 成功{self.stats['allow']['success']}个，失败{self.stats['allow']['fail']}个")
         logger.info(f"总耗时: {elapsed:.2f}秒")
         logger.info("📌 所有下载任务处理完毕，临时目录已准备就绪")
+        
+        # 在GitHub Actions中输出临时目录路径，供后续步骤使用
+        if os.getenv('GITHUB_ACTIONS') == 'true':
+            github_output = os.getenv('GITHUB_OUTPUT')
+            if github_output:
+                with open(github_output, 'a') as f:
+                    f.write(f"temp_dir={self.config.TEMP_DIR}\n")
+        
         gh_endgroup()
 
 
