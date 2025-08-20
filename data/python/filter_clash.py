@@ -22,7 +22,7 @@ class Config:
     OUTPUT_DIR = os.getenv("OUTPUT_DIR", f"{GITHUB_WORKSPACE}/output" if GITHUB_WORKSPACE else "output")
 
     # 输出文件改为.yaml（Clash规则集格式）
-    OUTPUT_BLOCK = Path(OUTPUT_DIR) / "clash_block.yaml"  # 拦截规则集
+    OUTPUT_BLOCK = Path(OUTPUT_DIR) / "clash_adblock.yaml"  # 拦截规则集
     OUTPUT_ALLOW = Path(OUTPUT_DIR) / "clash_allow.yaml"  # 放行规则集
     TEMP_DIR = Path(RUNNER_TEMP) / "clash_processing"
 
