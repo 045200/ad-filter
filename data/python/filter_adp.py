@@ -15,16 +15,24 @@ from typing import Tuple, List, Set, Dict
 
 
 class Config:
-    GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
-    BASE_DIR = Path(GITHUB_WORKSPACE)
-    TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
-    # 移除OUTPUT_DIR，直接在根目录输出文件
-    OUTPUT_FILE = BASE_DIR / "adblock_adp.txt"  # 拦截规则（根目录）
-    ALLOW_FILE = BASE_DIR / "allow_adp.txt"     # 白名单规则（根目录）
-    MAX_WORKERS = min(os.cpu_count() or 4, 4)
+    # 优先读取GitHub环境变量，适配GitHub Actions
+    GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", "")  # GitHub工作区根目录
+    RUNNER_TEMP = os.getenv("RUNNER_TEMP", os.getenv("TEMP_DIR", "tmp"))  # GitHub Runner临时目录
+
+    # 输入目录：直接使用GitHub Runner临时目录根目录（而非子目录）
+    INPUT_DIR = os.getenv("INPUT_DIR", RUNNER_TEMP)
+    # 输出目录：直接使用GitHub工作区根目录
+    OUTPUT_DIR = os.getenv("OUTPUT_DIR", GITHUB_WORKSPACE if GITHUB_WORKSPACE else "output")
+
+    # 输出文件路径（直接放在工作区根目录）
+    OUTPUT_BLACK = Path(OUTPUT_DIR) / "adblock_adp.txt"
+    OUTPUT_WHITE = Path(OUTPUT_DIR) / "allow_adp.txt"
+    # 临时处理目录（使用Runner临时目录的子目录，避免污染根目录）
+    TEMP_DIR = Path(RUNNER_TEMP) / "adblock_processing"
+
+    MAX_WORKERS = int(os.getenv("MAX_WORKERS", str(min(os.cpu_count() or 4, 4))))
     RULE_LEN_RANGE = (3, 4096)
-    MAX_FILESIZE_MB = 50
-    INPUT_PATTERNS = ["*.txt", "*.list"]
+    INPUT_PATTERNS = os.getenv("INPUT_PATTERNS", "*.txt,*.list").split(",")  # 输入文件格式
 
 
 class RegexPatterns:
@@ -51,13 +59,12 @@ class RegexPatterns:
 
 
 def setup_logger():
-    """适配GitHub Actions的日志格式，支持通知级别的日志显示"""
+    """适配GitHub Actions的日志格式"""
     logger = logging.getLogger('AdblockPlusSplit')
     logger.setLevel(logging.INFO)
 
     class GitHubFormatter(logging.Formatter):
         def format(self, record):
-            # 对GitHub Actions输出特殊格式（::notice::message）
             if record.levelno == logging.INFO:
                 return f"::notice::{record.getMessage()}"
             elif record.levelno == logging.WARNING:
@@ -76,27 +83,33 @@ logger = setup_logger()
 
 class AdblockPlusSplitter:
     def __init__(self):
-        Config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
-        Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        # 清理原有输出文件
-        if Config.OUTPUT_FILE.exists():
-            Config.OUTPUT_FILE.unlink()
-        if Config.ALLOW_FILE.exists():
-            Config.ALLOW_FILE.unlink()
+        # 创建必要目录（确保临时处理目录和输出目录存在）
+        for dir_path in [Config.TEMP_DIR, Path(Config.OUTPUT_DIR)]:
+            dir_path.mkdir(parents=True, exist_ok=True)
+            # 确保Linux环境下可写权限
+            if os.name != "nt":
+                os.chmod(dir_path, 0o755)
+
+        # 清理旧输出文件
+        for f in [Config.OUTPUT_BLACK, Config.OUTPUT_WHITE]:
+            if f.exists():
+                f.unlink()
+
         self.regex = RegexPatterns()
         self.len_min, self.len_max = Config.RULE_LEN_RANGE
 
     def run(self):
         start_time = time.time()
         logger.info("===== Adblock Plus 黑白名单处理（GitHub环境适配） =====")
-        # 读取输入文件（支持GitHub工作目录下的input目录）
+        
+        # 读取输入文件（直接从GitHub Runner临时目录根目录读取）
         input_files = []
         for pattern in Config.INPUT_PATTERNS:
-            # 修复：补充闭合glob.glob的括号和列表推导式的括号
+            # 拼接路径：临时目录 + 文件名模式（如 *.txt）
             input_files.extend([Path(p) for p in glob.glob(str(Path(Config.INPUT_DIR) / pattern))])
 
         if not input_files:
-            logger.error(f"未在输入目录 {Config.INPUT_DIR} 找到文件（格式：{Config.INPUT_PATTERNS}）")
+            logger.error(f"未在GitHub临时目录 {Config.INPUT_DIR} 找到文件（格式：{Config.INPUT_PATTERNS}）")
             return
 
         # 全局去重缓存
@@ -124,7 +137,7 @@ class AdblockPlusSplitter:
                 except Exception as e:
                     logger.error(f"处理{file.name}失败：{str(e)}")
 
-        # 写入输出文件（支持GitHub工作目录下的output目录）
+        # 写入输出文件（直接放在GitHub工作区根目录）
         with open(Config.OUTPUT_BLACK, 'w', encoding='utf-8') as f:
             f.write('\n'.join(black_cache) + '\n')
         with open(Config.OUTPUT_WHITE, 'w', encoding='utf-8') as f:
@@ -136,7 +149,8 @@ class AdblockPlusSplitter:
         print(f"::set-output name=blacklist_count::{total_stats['black']}")
         print(f"::set-output name=whitelist_count::{total_stats['white']}")
 
-        logger.info(f"\n处理完成：\n黑名单规则：{total_stats['black']}条\n白名单规则：{total_stats['white']}条")
+        logger.info(f"\n处理完成：\n黑名单规则：{total_stats['black']}条（保存至 {Config.OUTPUT_BLACK}）")
+        logger.info(f"白名单规则：{total_stats['white']}条（保存至 {Config.OUTPUT_WHITE}）")
         logger.info(f"过滤无效规则：{total_stats['filtered']}条，不支持规则：{total_stats['unsupported']}条")
         logger.info(f"耗时：{time.time()-start_time:.2f}秒")
 
