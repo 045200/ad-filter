@@ -94,8 +94,7 @@ class Config:
         # 酷安cocieto白名单（注释保留）
         "https://raw.githubusercontent.com/urkbio/adguardhomefilter/main/whitelist.txt",
         # anti-ad混合名单（官方CDN）
-        
-#"https://anti-ad.net/easylist.txt"
+        #"https://anti-ad.net/easylist.txt"
     ]
 
     # 本地规则文件映射（源路径 -> 临时目录路径）
