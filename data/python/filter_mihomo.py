@@ -1,229 +1,217 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 """
-AdBlock + Hosts 规则转换器
-输入: adblock_clash.yaml (Clash规则文件)
+AdBlock 规则转换器（极简版）
+输入: 已去重、格式合规的 Clash YAML 规则文件
 输出: adb.mrs
-使用 GitHub 工作空间根目录作为基准路径
+适配GitHub Actions环境，直接解析生成并编译
 """
 
 import os
-import re
 import sys
 import ipaddress
-from pathlib import Path
-from datetime import datetime
-from typing import List, Set, Tuple
 import tempfile
 import subprocess
 import idna
 import yaml
+import logging
+from pathlib import Path
+from datetime import datetime
+from typing import List
 
-# 配置 - 使用环境变量设置路径
-GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
-INPUT_FILE = os.getenv("ADBLOCK_INPUT", "adblock_clash.yaml")  # 输入文件
-OUTPUT_FILE = os.getenv("ADBLOCK_OUTPUT", "adb.mrs")           # 输出文件
-COMPILER_PATH = os.getenv("COMPILER_PATH", "./data/mihomo-tool") # 编译器路径
-MAX_DOMAIN_LENGTH = 253  # RFC 1035 限制
-MAX_LABEL_LENGTH = 63    # RFC 1035 限制
 
-class Logger:
-    @staticmethod
-    def info(msg): print(f"[{datetime.now().strftime('%H:%M:%S')}] INFO: {msg}")
-    @staticmethod
-    def error(msg): print(f"[{datetime.now().strftime('%H:%M:%S')}] ERROR: {msg}", file=sys.stderr)
-    @staticmethod
-    def warning(msg): print(f"[{datetime.now().strftime('%H:%M:%S')}] WARNING: {msg}")
+class Config:
+    """配置管理（优先读取GitHub环境变量）"""
+    GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
+    INPUT_FILE = os.getenv("ADBLOCK_INPUT", "adblock_clash.yaml")
+    OUTPUT_FILE = os.getenv("ADBLOCK_OUTPUT", "adb.mrs")
+    COMPILER_PATH = os.getenv("COMPILER_PATH", "./data/mihomo-tool")
+    MAX_DOMAIN_LENGTH = 253  # RFC 1035 限制
+    MAX_LABEL_LENGTH = 63    # RFC 1035 限制
+
+    @property
+    def input_path(self) -> Path:
+        return Path(self.GITHUB_WORKSPACE) / self.INPUT_FILE
+
+    @property
+    def output_path(self) -> Path:
+        return Path(self.GITHUB_WORKSPACE) / self.OUTPUT_FILE
+
+    @property
+    def compiler_abs_path(self) -> Path:
+        return Path(self.GITHUB_WORKSPACE) / self.COMPILER_PATH if not os.path.isabs(self.COMPILER_PATH) else Path(self.COMPILER_PATH)
+
 
 class DNSValidator:
+    """极简DNS验证（仅检查格式合法性）"""
     @staticmethod
     def is_valid_domain(domain: str) -> bool:
-        """验证域名是否符合 DNS 标准"""
-        if not domain or len(domain) > MAX_DOMAIN_LENGTH:
+        domain = domain.strip().lower()
+        # 基础长度校验
+        if not domain or len(domain) > Config.MAX_DOMAIN_LENGTH:
             return False
-
-        # 排除 IP 地址
+        # 排除IP地址
         try:
             ipaddress.ip_address(domain)
             return False
         except ValueError:
             pass
-
-        # 验证域名结构
+        # 标签格式校验
         labels = domain.split('.')
         if len(labels) < 2:
             return False
-
         for label in labels:
-            if not label or len(label) > MAX_LABEL_LENGTH:
+            if not label or len(label) > Config.MAX_LABEL_LENGTH or label.startswith('-') or label.endswith('-'):
                 return False
-            if label.startswith('-') or label.endswith('-'):
-                return False
-            if not re.match(r'^[a-z0-9-]+$', label):
-                return False
-
-        # 验证国际化域名（IDNA）
+        # IDNA编码验证
         try:
             idna.encode(domain)
+            return True
         except idna.IDNAError:
             return False
 
-        return True
 
-class RuleParser:
-    def __init__(self):
-        self.seen_domains: Set[str] = set()
+def setup_logger():
+    """GitHub适配日志"""
+    logger = logging.getLogger("AdblockConverter")
+    logger.setLevel(logging.INFO)
+
+    class GitHubFormatter(logging.Formatter):
+        def format(self, record):
+            timestamp = datetime.now().strftime('%H:%M:%S')
+            if record.levelno == logging.INFO:
+                return f"[{timestamp}] ::notice:: {record.getMessage()}"
+            elif record.levelno == logging.WARNING:
+                return f"[{timestamp}] ::warning:: {record.getMessage()}"
+            elif record.levelno == logging.ERROR:
+                return f"[{timestamp}] ::error:: {record.getMessage()}"
+            return f"[{timestamp}] {record.getMessage()}"
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(GitHubFormatter())
+    logger.handlers = [handler]
+    return logger
+
+logger = setup_logger()
+
+
+class AdblockConverter:
+    """极简转换器（输入已去重）"""
+    def __init__(self, config: Config):
+        self.config = config
         self.stats = {
-            'total': 0,            # 总规则数
-            'valid': 0,            # 有效域名数
-            'invalid_dns': 0,      # DNS 无效
-            'duplicates': 0,       # 重复域名
-            'clash_rules': 0       # Clash 规则数
+            'total': 0,    # 输入总规则数
+            'valid': 0,    # 有效域名数
+            'invalid': 0   # 无效域名数（DNS格式问题）
         }
 
-    def parse_clash_file(self, input_file: Path) -> List[Tuple[str, str]]:
-        """解析 Clash YAML 文件，提取有效域名"""
-        Logger.info(f"解析 Clash 规则文件 {input_file}...")
-        all_rules = []
+    def parse_input(self) -> List[str]:
+        """直接解析输入文件（假设已去重）"""
+        input_path = self.config.input_path
+        logger.info(f"解析输入文件: {input_path}")
 
-        if not input_file.exists():
-            Logger.error(f"输入文件 {input_file} 不存在")
-            return all_rules
+        if not input_path.exists():
+            logger.error(f"输入文件不存在: {input_path}")
+            return []
 
         try:
-            with input_file.open('r', encoding='utf-8') as f:
-                clash_data = yaml.safe_load(f)
+            with input_path.open('r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
 
-            if 'payload' not in clash_data:
-                Logger.error("Clash 文件格式错误：缺少 'payload' 部分")
-                return all_rules
+            if not data or 'payload' not in data:
+                logger.error("文件缺少'payload'节点")
+                return []
 
-            for rule in clash_data['payload']:
+            valid_domains = []
+            for rule in data['payload']:
                 self.stats['total'] += 1
-                self.stats['clash_rules'] += 1
-
-                # 只处理 DOMAIN-SUFFIX 类型规则
-                if rule.get('type') != 'DOMAIN-SUFFIX':
-                    continue
-
+                # 直接提取域名（假设type和policy已合规）
                 domain = rule.get('value', '').strip().lower()
-                policy = rule.get('policy', '').upper()
-
-                # 只处理 REJECT 策略的规则（黑名单）
-                if policy != 'REJECT':
+                if not domain:
+                    self.stats['invalid'] += 1
                     continue
 
-                # 验证 DNS 并去重
-                if not DNSValidator.is_valid_domain(domain):
-                    self.stats['invalid_dns'] += 1
-                    continue
+                # 仅做DNS格式验证（输入已去重，无需去重逻辑）
+                if DNSValidator.is_valid_domain(domain):
+                    valid_domains.append(domain)
+                    self.stats['valid'] += 1
+                else:
+                    self.stats['invalid'] += 1
 
-                if domain in self.seen_domains:
-                    self.stats['duplicates'] += 1
-                    continue
+            logger.info(f"解析完成: 总规则{self.stats['total']}，有效{self.stats['valid']}，无效{self.stats['invalid']}")
+            return valid_domains
 
-                self.seen_domains.add(domain)
-                self.stats['valid'] += 1
-                # 生成标准Clash规则格式（关键修复点）
-                rule_str = f"type: DOMAIN-SUFFIX\n  value: {domain}"
-                all_rules.append((domain, rule_str))
-
-            return all_rules
         except Exception as e:
-            Logger.error(f"解析 Clash 文件失败: {str(e)}")
-            return all_rules
+            logger.error(f"解析失败: {str(e)}")
+            return []
 
-    def generate_antiad_yaml(self, rules: List[str]) -> str:
-        """生成符合Clash标准的YAML规则集（关键修复点）"""
-        rules_sorted = sorted(set(rules))
-        yaml_lines = [
-            "#Title: AD-Filter",
-            f"#Update time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC+8",
-            "",
-            "payload:"
-        ]
-        # 每条规则需要正确缩进
-        yaml_lines.extend(f"  - {rule}" for rule in rules_sorted)
+    def generate_compile_yaml(self, domains: List[str]) -> str:
+        """生成编译用YAML（保持Clash规范格式）"""
+        sorted_domains = sorted(domains)  # 仅排序，无需去重
+        yaml_lines = ["payload:"] + [f"  - type: DOMAIN-SUFFIX\n    value: {d}" for d in sorted_domains]
         return '\n'.join(yaml_lines)
 
-    def compile_rules(self, yaml_content: str, output_path: Path) -> bool:
-        """编译为 MRS 格式"""
-        temp_path = None
+    def compile_to_mrs(self, yaml_content: str) -> bool:
+        """编译为MRS格式"""
+        temp_file = None
         try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False, encoding='utf-8') as f:
                 f.write(yaml_content)
-                temp_path = f.name
+                temp_file = f.name
 
             result = subprocess.run(
-                [COMPILER_PATH, "convert-ruleset", "domain", "mrs", temp_path, str(output_path)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=300,
-                check=False
+                [str(self.config.compiler_abs_path), "convert-ruleset", "domain", "mrs", temp_file, str(self.config.output_path)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300, text=True
             )
 
             if result.returncode != 0:
-                error = result.stderr.decode('utf-8', errors='replace')
-                Logger.error(f"编译失败：{error[:500]}...")
+                logger.error(f"编译失败: {result.stderr[:500]}...")
                 return False
 
-            if not output_path.exists() or output_path.stat().st_size == 0:
-                Logger.error("输出文件为空")
+            if not self.config.output_path.exists() or self.config.output_path.stat().st_size == 0:
+                logger.error("输出文件为空")
                 return False
 
+            logger.info(f"MRS生成成功: {self.config.output_path}（{self.config.output_path.stat().st_size/1024:.1f}KB）")
             return True
+
         except Exception as e:
-            Logger.error(f"编译异常：{str(e)}")
+            logger.error(f"编译异常: {str(e)}")
             return False
         finally:
-            if temp_path and os.path.exists(temp_path):
+            if temp_file and os.path.exists(temp_file):
                 try:
-                    os.unlink(temp_path)
+                    os.unlink(temp_file)
                 except Exception as e:
-                    Logger.error(f"临时文件删除失败：{str(e)}")
+                    logger.warning(f"临时文件清理失败: {str(e)}")
+
+    def run(self) -> int:
+        """执行流程"""
+        domains = self.parse_input()
+        if not domains:
+            logger.error("无有效域名可处理")
+            return 1
+
+        yaml_content = self.generate_compile_yaml(domains)
+        if not self.compile_to_mrs(yaml_content):
+            return 1
+
+        # 输出GitHub变量
+        print(f"::set-output name=mrs_path::{self.config.output_path}")
+        print(f"::set-output name=rule_count::{self.stats['valid']}")
+
+        logger.info("流程完成")
+        return 0
+
 
 def main():
-    # 设置工作空间路径
-    workspace = Path(GITHUB_WORKSPACE)
-    input_path = workspace / INPUT_FILE
-    output_path = workspace / OUTPUT_FILE
-
-    # 编译器路径处理
-    compiler_path = COMPILER_PATH
-    if not os.path.isabs(COMPILER_PATH):
-        compiler_path = workspace / COMPILER_PATH
-
-    # 创建规则解析器
-    parser = RuleParser()
-
-    # 解析 Clash 规则文件
-    all_rules = parser.parse_clash_file(input_path)
-
-    # 生成 YAML 并编译
-    yaml_content = parser.generate_antiad_yaml([rule for (domain, rule) in all_rules])
-    Logger.info(f"从 {parser.stats['total']} 条规则中提取 {len(all_rules)} 个有效域名")
-
-    Logger.info("编译为 MRS 格式...")
-    if parser.compile_rules(yaml_content, output_path):
-        file_size = output_path.stat().st_size / 1024
-        Logger.info(f"✅ 成功生成：{output_path}（{file_size:.1f} KB）")
-
-    # 输出统计
-    Logger.info("\n=== 转换统计 ===")
-    stats = [
-        ("总规则数", parser.stats['total']),
-        ("有效域名数", parser.stats['valid']),
-        ("DNS 无效", parser.stats['invalid_dns']),
-        ("重复域名", parser.stats['duplicates'])
-    ]
-
-    for name, value in stats:
-        Logger.info(f"{name:<12}: {value}")
-
-    if parser.stats['valid'] == 0:
-        Logger.warning("未生成有效规则！")
+    try:
+        return AdblockConverter(Config()).run()
+    except Exception as e:
+        logger.critical(f"运行失败: {str(e)}")
         return 1
 
-    return 0
 
 if __name__ == "__main__":
     sys.exit(main())
