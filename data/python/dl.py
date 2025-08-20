@@ -35,7 +35,7 @@ HEADERS = {
 }
 
 # 规则URL列表（输出文件名：adblockXX.txt/allowXX.txt）
-    ADBLOCK_URLS = [
+ADBLOCK_URLS = [
         # 大萌主-接口广告规则（官方CDN）
         "https://raw.githubusercontent.com/damengzhu/banad/main/jiekouAD.txt",
         # DD-AD去广告规则（官方CDN）
@@ -64,7 +64,7 @@ HEADERS = {
         "https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingBlockList.txt"
     ]
 
-    ALLOW_URLS = [
+ALLOW_URLS = [
         # 那个谁520广告白名单（官方CDN）
         "https://raw.githubusercontent.com/qq5460168/EasyAds/main/allow.txt",
         # AdGuardHome通用白名单（官方CDN）
