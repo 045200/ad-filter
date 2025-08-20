@@ -101,7 +101,8 @@ class AdblockPlusSplitter:
         # 读取输入文件（支持GitHub工作目录下的input目录）
         input_files = []
         for pattern in Config.INPUT_PATTERNS:
-            input_files.extend([Path(p) for p in glob.glob(str(Path(Config.INPUT_DIR) / pattern))
+            # 修复：补充闭合glob.glob的括号和列表推导式的括号
+            input_files.extend([Path(p) for p in glob.glob(str(Path(Config.INPUT_DIR) / pattern))])
 
         if not input_files:
             logger.error(f"未在输入目录 {Config.INPUT_DIR} 找到文件（格式：{Config.INPUT_PATTERNS}）")
