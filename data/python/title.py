@@ -87,6 +87,46 @@ def detect_files(base_dir: Path) -> Dict[str, Dict[str, Path]]:
     return detected
 
 
+def process_file(path: Path, ab_info: Dict[str, str], is_allow: bool, timestamp: str) -> int:
+    """通用文件处理函数（处理主规则或白名单）"""
+    try:
+        with open(path, "r+", encoding="utf-8") as f:
+            lines = f.readlines()
+            valid_lines = count_valid_lines(lines, ab_info["comment"])
+
+            # 区分主规则和白名单的标题、描述、模板
+            if is_allow:
+                title = ab_info.get("title_allow", f"{ab_info['name']} 白名单")
+                description = ab_info.get("desc_allow", f"{ab_info['name']}专用白名单规则")
+                header_template = ALLOW_HEADER
+            else:
+                title = ab_info.get("title_rule", f"{ab_info['name']} 拦截规则")
+                description = ab_info.get("desc_rule", f"适用于{ab_info['name']}的拦截规则")
+                header_template = ADBLOCK_HEADER
+
+            # 生成头信息并写入
+            header = header_template.format(
+                comment=ab_info["comment"],
+                title=title,
+                timestamp=timestamp,
+                description=description,
+                line_count=valid_lines
+            )
+            f.seek(0)
+            f.write(header)
+            f.writelines(lines)
+            f.truncate()
+
+        # 输出日志（区分主规则和白名单）
+        file_type = "白名单" if is_allow else "拦截规则"
+        print(f"✅ 处理 {ab_info['name']} {file_type}：{valid_lines} 行")
+        return valid_lines
+    except Exception as e:
+        file_type = "白名单" if is_allow else "拦截规则"
+        print(f"❌ 处理 {ab_info['name']} {file_type} 失败：{str(e)}", flush=True)
+        return 0
+
+
 def process_rule_files(detected: Dict[str, Dict[str, Path]], timestamp: str) -> Dict[str, int]:
     """处理规则文件（含通用规则），使用模板动态生成头信息"""
     stats = {ab_key: {"rules": 0, "allow": 0} for ab_key in ADBLOCKERS}
@@ -95,60 +135,14 @@ def process_rule_files(detected: Dict[str, Dict[str, Path]], timestamp: str) -> 
     # 处理主规则文件（含通用规则）
     for ab_key, path in detected["adblock"].items():
         ab_info = ADBLOCKERS[ab_key]
-        try:
-            with open(path, "r+", encoding="utf-8") as f:
-                lines = f.readlines()
-                valid_lines = count_valid_lines(lines, ab_info["comment"])
-
-                # 从配置中获取标题和描述（通用规则专用配置优先，其他用默认格式）
-                title = ab_info.get("title_rule", f"{ab_info['name']} 拦截规则")
-                description = ab_info.get("desc_rule", f"适用于{ab_info['name']}的拦截规则")
-
-                header = ADBLOCK_HEADER.format(
-                    comment=ab_info["comment"],
-                    title=title,
-                    timestamp=timestamp,
-                    description=description,
-                    line_count=valid_lines
-                )
-                f.seek(0)
-                f.write(header)
-                f.writelines(lines)
-                f.truncate()
-
-            stats[ab_key]["rules"] = valid_lines
-            print(f"✅ 处理 {ab_info['name']} 拦截规则：{valid_lines} 行")
-        except Exception as e:
-            print(f"❌ 处理 {ab_info['name']} 拦截规则失败：{str(e)}", flush=True)
+        valid_lines = process_file(path, ab_info, is_allow=False, timestamp=timestamp)
+        stats[ab_key]["rules"] = valid_lines
 
     # 处理白名单文件（含通用规则）
     for ab_key, path in detected["allow"].items():
         ab_info = ADBLOCKERS[ab_key]
-        try:
-            with open(path, "r+", encoding="utf-8") as f:
-                lines = f.readlines()
-                valid_lines = count_valid_lines(lines, ab_info["comment"])
-
-                # 从配置中获取标题和描述
-                title = ab_info.get("title_allow", f"{ab_info['name']} 白名单")
-                description = ab_info.get("desc_allow", f"{ab_info['name']}专用白名单规则")
-
-                header = ALLOW_HEADER.format(
-                    comment=ab_info["comment"],
-                    title=title,
-                    timestamp=timestamp,
-                    description=description,
-                    line_count=valid_lines
-                )
-                f.seek(0)
-                f.write(header)
-                f.writelines(lines)
-                f.truncate()
-
-            stats[ab_key]["allow"] = valid_lines
-            print(f"✅ 处理 {ab_info['name']} 白名单：{valid_lines} 行")
-        except Exception as e:
-            print(f"❌ 处理 {ab_info['name']} 白名单失败：{str(e)}", flush=True)
+        valid_lines = process_file(path, ab_info, is_allow=True, timestamp=timestamp)
+        stats[ab_key]["allow"] = valid_lines
 
     # 处理hosts文件
     if detected["hosts"]:
