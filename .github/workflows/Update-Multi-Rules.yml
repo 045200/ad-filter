@@ -35,6 +35,8 @@ jobs:
         run: |
           # 清理可能存在的临时目录，但避免删除代码目录本身
           find "${{ github.workspace }}" -maxdepth 1 \( -name "tmp*" -o -name "temp*" -o -name ".tmp*" -o -name ".temp*" \) -exec rm -rf {} + 2>/dev/null || true
+          # 清理根目录下的指定格式文件
+          find "${{ github.workspace }}" -maxdepth 1 \( -name "*.txt" -o -name "*.mrs" -o -name "*.conf" -o -name "*.yaml" \) -exec rm -f {} + 2>/dev/null || true
 
       # 3. 检测文件变更
       - name: Detect changed files
