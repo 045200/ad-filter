@@ -101,7 +101,6 @@ jobs:
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
           python ${{ env.PYTHON_SCRIPTS }}/filter_adp.py   # Adblock Plus
-          python ${{ env.PYTHON_SCRIPTS }}/filter_hybrid.py   # Adblock通用规则
           python ${{ env.PYTHON_SCRIPTS }}/filter_pihole.py   # Pihole
           python ${{ env.PYTHON_SCRIPTS }}/filter_hosts.py   # Hosts
           python ${{ env.PYTHON_SCRIPTS }}/filter_ubo.py   # uBlock Origin
