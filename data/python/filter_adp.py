@@ -75,7 +75,7 @@ logger = setup_logger()
 
 
 class AdblockPlusSplitter:
-        def __init__(self):
+    def __init__(self):
         Config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
         Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         # 清理原有输出文件
