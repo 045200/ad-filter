@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 """
 通用广告规则处理器 - 优化版
 针对 GitHub Actions 4核16GB环境优化
@@ -11,30 +13,34 @@ import sys
 import glob
 import re
 import logging
+import time
 from pathlib import Path
 import ipaddress
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import lru_cache
-import time
 from typing import Tuple, List, Set, Dict
 
-# === 配置参数 ===
-CONFIG = {
-    'temp_dir': os.getenv('TEMP_DIR', 'tmp'),  # 临时目录
-    'block_pattern': 'adblock*.txt',          # 黑名单文件匹配模式
-    'allow_pattern': 'allow*.txt',            # 白名单文件匹配模式
-    'output_block': 'adblock_intermediate.txt',  # 黑名单初筛输出
-    'output_allow': 'allow_intermediate.txt',    # 白名单初筛输出
-    'max_workers': min(mp.cpu_count(), 4),    # 自适应进程数（最多4核）
-    'max_rule_length': 4096,                  # 规则最大长度
-    'min_rule_length': 3,                     # 规则最小长度
-    'preserve_headers': True,                 # 是否保留文件头注释
-    'max_filesize_mb': 50,                    # 单个文件最大大小
-    'chunk_size': 10000,                      # 大文件处理块大小
-}
+# ============== 环境变量与配置 ==============
+GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
+BASE_DIR = Path(GITHUB_WORKSPACE)
+TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
 
-# === 预编译正则表达式 ===
+# 规则文件配置
+BLOCK_PATTERN = 'adblock*.txt'
+ALLOW_PATTERN = 'allow*.txt'
+OUTPUT_BLOCK = TEMP_DIR / 'adblock_intermediate.txt'
+OUTPUT_ALLOW = TEMP_DIR / 'allow_intermediate.txt'
+
+# 处理参数（4核16G环境优化）
+MAX_WORKERS = min(mp.cpu_count(), 4)
+MAX_RULE_LENGTH = 4096
+MIN_RULE_LENGTH = 3
+PRESERVE_HEADERS = True
+MAX_FILESIZE_MB = 50
+CHUNK_SIZE = 10000
+
+# ============== 预编译正则表达式 ==============
 # 白名单规则标记（Adblock风格）
 WHITELIST_MARKER = re.compile(r'^@@')
 
@@ -58,24 +64,24 @@ ELEMENT_EXCEPTION_PATTERN = re.compile(r'^.*#@#.*$')  # 元素隐藏白名单
 COMMENT_PATTERN = re.compile(r'^[!#]|^\[Adblock')
 EMPTY_LINE_PATTERN = re.compile(r'^\s*$')
 
-# === 日志配置 ===
+# ============== 日志配置 ==============
 def setup_logger():
     logger = logging.getLogger('RuleProcessor')
     logger.setLevel(logging.INFO)
     handler = logging.StreamHandler(sys.stdout)
-    
+
     if os.getenv('GITHUB_ACTIONS') == 'true':
         formatter = logging.Formatter('%(message)s')
     else:
         formatter = logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s', datefmt='%H:%M:%S')
-    
+
     handler.setFormatter(formatter)
-    logger.addHandler(handler)
+    logger.handlers = [handler]
     return logger
 
 logger = setup_logger()
 
-# === GitHub Actions分组输出 ===
+# ============== GitHub Actions支持 ==============
 def gh_group(name: str):
     if os.getenv('GITHUB_ACTIONS') == 'true':
         logger.info(f"::group::{name}")
@@ -84,7 +90,7 @@ def gh_endgroup():
     if os.getenv('GITHUB_ACTIONS') == 'true':
         logger.info("::endgroup::")
 
-# === 规则统计工具类 ===
+# ============== 规则统计工具类 ==============
 class RuleStats:
     """记录单文件处理统计信息"""
     def __init__(self):
@@ -101,26 +107,18 @@ class RuleStats:
                 f"长度过滤={self.length_filtered}, 不支持={self.unsupported}, "
                 f"有效规则={self.valid}, 特殊规则={self.special}")
 
-# === 主处理器类 ===
+# ============== 主处理器类 ==============
 class RuleProcessor:
     def __init__(self):
-        self.github_workspace = os.getenv('GITHUB_WORKSPACE', os.getcwd())
-        self.repo_root = Path(self.github_workspace)
-        
-        # 路径设置
-        self.temp_dir = self.repo_root / CONFIG['temp_dir']
-        self.block_output = self.temp_dir / CONFIG['output_block']
-        self.allow_output = self.temp_dir / CONFIG['output_allow']
-        
         # 确保临时目录存在
-        self.temp_dir.mkdir(parents=True, exist_ok=True)
+        TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
     def run(self):
         """主执行流程"""
         gh_group("规则处理器启动")
         start_time = time.time()
-        logger.info(f"工作目录: {self.repo_root}")
-        logger.info(f"输出文件: 黑名单={self.block_output}, 白名单={self.allow_output}")
+        logger.info(f"工作目录: {BASE_DIR}")
+        logger.info(f"输出文件: 黑名单={OUTPUT_BLOCK}, 白名单={OUTPUT_ALLOW}")
         gh_endgroup()
 
         # 并行处理黑白名单
@@ -129,7 +127,7 @@ class RuleProcessor:
                 executor.submit(self._process_rule_type, 'allow'),
                 executor.submit(self._process_rule_type, 'block')
             ]
-            
+
             for future in as_completed(futures):
                 try:
                     rule_type, total_stats = future.result()
@@ -139,18 +137,18 @@ class RuleProcessor:
 
         elapsed = time.time() - start_time
         logger.info(f"\n所有处理完成! 耗时 {elapsed:.2f}秒")
-        logger.info(f"黑名单初筛结果: {self.block_output.stat().st_size//1024}KB")
-        logger.info(f"白名单初筛结果: {self.allow_output.stat().st_size//1024}KB")
+        logger.info(f"黑名单初筛结果: {OUTPUT_BLOCK.stat().st_size//1024}KB")
+        logger.info(f"白名单初筛结果: {OUTPUT_ALLOW.stat().st_size//1024}KB")
 
     def _process_rule_type(self, rule_type: str) -> Tuple[str, RuleStats]:
         """处理指定类型（allow/block）的所有文件"""
         gh_group(f"开始处理{rule_type}规则")
-        
+
         # 获取文件路径和输出文件
-        pattern = CONFIG[f'{rule_type}_pattern']
-        file_paths = [Path(p) for p in glob.glob(str(self.temp_dir / pattern))]
-        output_file = self.allow_output if rule_type == 'allow' else self.block_output
-        
+        pattern = ALLOW_PATTERN if rule_type == 'allow' else BLOCK_PATTERN
+        file_paths = [Path(p) for p in glob.glob(str(TEMP_DIR / pattern))]
+        output_file = OUTPUT_ALLOW if rule_type == 'allow' else OUTPUT_BLOCK
+
         if not file_paths:
             logger.warning(f"未找到匹配{pattern}的文件，创建空输出")
             output_file.write_text('')
@@ -158,18 +156,18 @@ class RuleProcessor:
             return (rule_type, RuleStats())
 
         logger.info(f"发现{len(file_paths)}个{rule_type}文件，启动并行处理")
-        
+
         # 并行处理单个文件
         total_stats = RuleStats()
         all_rules: List[str] = []
         file_caches: List[Set[str]] = []  # 收集每个文件的去重缓存用于全局去重
 
-        with ProcessPoolExecutor(max_workers=CONFIG['max_workers']) as executor:
+        with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {
                 executor.submit(self._process_single_file, path, rule_type): path 
                 for path in file_paths
             }
-            
+
             for future in as_completed(futures):
                 path = futures[future]
                 try:
@@ -194,7 +192,7 @@ class RuleProcessor:
         output_file.write_text('\n'.join(unique_rules) + '\n')
         logger.info(f"{rule_type}规则处理完成，写入{len(unique_rules)}条规则到{output_file}")
         gh_endgroup()
-        
+
         return (rule_type, total_stats)
 
     def _process_single_file(self, file_path: Path, rule_type: str) -> Tuple[List[str], Set[str], RuleStats]:
@@ -211,30 +209,30 @@ class RuleProcessor:
             # 分块读取大文件
             with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                 while True:
-                    chunk = f.readlines(CONFIG['chunk_size'])
+                    chunk = f.readlines(CHUNK_SIZE)
                     if not chunk:
                         break
                     for line in chunk:
                         line = line.strip()
                         stats.total += 1
-                        
+
                         # 处理空行
                         if EMPTY_LINE_PATTERN.match(line):
                             stats.empty += 1
                             continue
-                            
+
                         # 处理注释和文件头
                         if COMMENT_PATTERN.match(line):
                             stats.comments += 1
-                            if CONFIG['preserve_headers']:
+                            if PRESERVE_HEADERS:
                                 self._add_rule(line, rules, local_cache, stats, is_special=True)
                             continue
-                            
+
                         # 长度过滤
-                        if not (CONFIG['min_rule_length'] <= len(line) <= CONFIG['max_rule_length']):
+                        if not (MIN_RULE_LENGTH <= len(line) <= MAX_RULE_LENGTH):
                             stats.length_filtered += 1
                             continue
-                            
+
                         # 规则标准化（区分通用/特殊规则）
                         normalized, is_special = self._normalize_rule(line, rule_type)
                         if normalized:
@@ -278,12 +276,12 @@ class RuleProcessor:
         """
         # 处理白名单标记（Adblock风格）
         is_whitelist_marker = WHITELIST_MARKER.match(line) is not None
-        
+
         # 1. Hosts规则
         hosts_match = HOSTS_PATTERN.match(line)
         if hosts_match:
             return (hosts_match.group(2), False)  # 提取域名
-        
+
         # 2. Adblock域名规则
         adblock_match = ADBLOCK_DOMAIN_PATTERN.match(line)
         if adblock_match:
@@ -291,36 +289,36 @@ class RuleProcessor:
             if is_whitelist_marker and rule_type == 'allow':
                 return (line, False)  # 保留原始格式作为通用规则
             return (adblock_match.group(1), False)
-        
+
         # 3. 元素隐藏规则（特殊规则，按来源归类）
         if ELEMENT_HIDING_PATTERN.match(line) or ELEMENT_EXCEPTION_PATTERN.match(line):
             return (line, True)
-        
+
         # 4. Surge规则
         surge_domain = SURGE_DOMAIN_PATTERN.match(line)
         if surge_domain:
             return (surge_domain.group(1), False)
-        
+
         surge_suffix = SURGE_SUFFIX_PATTERN.match(line)
         if surge_suffix:
             return (surge_suffix.group(1), False)
-        
+
         surge_keyword = SURGE_KEYWORD_PATTERN.match(line)
         if surge_keyword:
             return (surge_keyword.group(1), False)
-        
+
         # 5. IP/CIDR规则（通用规则）
         if RuleProcessor._is_valid_ip_or_cidr(line) or SURGE_CIDR_PATTERN.match(line):
             return (line, False)
-        
+
         # 6. 通配符/正则规则（通用规则）
         if ADBLOCK_WILDCARD_PATTERN.match(line) or ADBLOCK_REGEX_PATTERN.match(line):
             return (line, False)
-        
+
         # 7. 白名单特殊规则（仅allow保留）
         if is_whitelist_marker and rule_type == 'allow':
             return (line, True)
-        
+
         # 未匹配到通用规则，但属于支持的特殊规则（按来源保留）
         return (line, True)
 
@@ -339,14 +337,15 @@ class RuleProcessor:
         """检查文件大小是否超过限制"""
         try:
             size_mb = file_path.stat().st_size / (1024 * 1024)
-            if size_mb > CONFIG['max_filesize_mb']:
-                logger.warning(f"跳过大文件 {file_path.name} ({size_mb:.1f}MB > {CONFIG['max_filesize_mb']}MB)")
+            if size_mb > MAX_FILESIZE_MB:
+                logger.warning(f"跳过大文件 {file_path.name} ({size_mb:.1f}MB > {MAX_FILESIZE_MB}MB)")
                 return False
             return True
         except Exception as e:
             logger.error(f"获取文件大小失败 {file_path.name}: {str(e)}")
             return False
 
+# ============== 主流程 ==============
 if __name__ == '__main__':
     try:
         processor = RuleProcessor()
