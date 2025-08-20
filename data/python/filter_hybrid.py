@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""支持混合语法的拦截器规则合并工具（Adblock Plus/UBO/AdGuard通用）"""
+"""通用Adblock规则合并工具（输出拦截+白名单规则，覆盖80%常用语法）"""
 
 import os
 import sys
@@ -15,66 +15,54 @@ from typing import Tuple, List, Set, Dict
 
 
 class Config:
-    """配置：适配支持混合语法的拦截器（Adblock Plus/UBO/AdGuard）"""
+    """配置：聚焦通用规则，输出拦截+白名单文件"""
     GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
     BASE_DIR = Path(GITHUB_WORKSPACE)
     TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
     OUTPUT_DIR = BASE_DIR / os.getenv('OUTPUT_DIR', 'output')
-    OUTPUT_FILE = OUTPUT_DIR / "adblock_hybrid.txt"  # 单一输出文件
+    
+    # 核心输出文件
+    BLOCK_RULES_FILE = OUTPUT_DIR / "adblock_hybrid.txt"  # 拦截规则
+    ALLOW_RULES_FILE = OUTPUT_DIR / "allow_hybrid.txt"    # 白名单规则
+    
     MAX_WORKERS = min(os.cpu_count() or 4, 4)
-    RULE_LEN_RANGE = (3, 4096)  # 兼容长规则（如UBO的脚本拦截）
+    RULE_LEN_RANGE = (3, 2048)  # 限制合理长度，覆盖多数场景
     MAX_FILESIZE_MB = 50
     INPUT_PATTERNS = ["*.txt", "*.list"]
 
 
 class RegexPatterns:
-    """混合语法规则正则（覆盖Adblock Plus/UBO/AdGuard通用及扩展语法）"""
-    # 基础Adblock规则
-    ADBLOCK_DOMAIN = re.compile(r'^\|\|([\w.-]+)\^?$')  # 域名拦截：||domain.com^
-    ADBLOCK_WHITELIST = re.compile(r'^@@\|\|([\w.-]+)\^?$')  # 域名白名单：@@||domain.com^
-    ADBLOCK_ELEMENT = re.compile(r'^[\w.-]+##.+$')  # 元素隐藏：domain.com##.ad
-    ADBLOCK_ELEMENT_EXCEPT = re.compile(r'^[\w.-]+#@#+$')  # 元素白名单：domain.com#@#.ad
-    ADBLOCK_WILDCARD = re.compile(r'^[\*a-z0-9\-\.]+$', re.IGNORECASE)  # 通配符：*adserver*
-    ADBLOCK_REGEX = re.compile(r'^/.*/$')  # 正则规则：/^https?:\/\/ad/
+    """聚焦80%常用Adblock语法（通用型）"""
+    # 核心拦截规则（所有工具兼容）
+    BLOCK_DOMAIN = re.compile(r'^\|\|([\w.-]+)\^?$')  # ||domain.com^（基础域名拦截）
+    BLOCK_WILDCARD = re.compile(r'^[\*a-z0-9\-\./]+$', re.IGNORECASE)  # *ad/*、adserver.*（通配符）
+    BLOCK_PATH = re.compile(r'^/[\w\-\./\*]+$')  # /ads/*（路径拦截）
 
-    # 扩展语法（UBO/AdGuard支持）
-    UBO_SCRIPT = re.compile(r'^##\+js\(.+\)$')  # UBO脚本拦截：##+js(abort-on-property-read.js)
-    ADGUARD_CSP = re.compile(r'^[\w.-]+\$csp=.+$')  # AdGuard CSP规则：domain.com$csp=default-src 'self'
-    ADGUARD_REDIRECT = re.compile(r'^[\w.-]+\$redirect=.+$')  # AdGuard重定向：domain.com$redirect=noop.txt
+    # 核心白名单规则（所有工具兼容）
+    ALLOW_DOMAIN = re.compile(r'^@@\|\|([\w.-]+)\^?$')  # @@||domain.com^（域名白名单）
+    ALLOW_WILDCARD = re.compile(r'^@@[\*a-z0-9\-\./]+$', re.IGNORECASE)  # @@*ad/*（通配符白名单）
 
-    # 可转换规则
-    HOSTS_RULE = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')  # Hosts规则
-    PLAIN_DOMAIN = re.compile(r'^[\w.-]+\.[a-z]{2,}$')  # 纯域名：domain.com
+    # 可转换规则（提升通用性）
+    HOSTS_RULE = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')  # Hosts规则转域名拦截
+    PLAIN_DOMAIN = re.compile(r'^[\w.-]+\.[a.[]{2,}$')  # 纯域名（domain.com）转||domain.com^
 
-    # 过滤项
+    # 过滤项（非规则内容）
     COMMENT = re.compile(r'^[!#]')  # 注释行（! 或 # 开头）
     EMPTY_LINE = re.compile(r'^\s*$')  # 空行
+    # 排除过于特殊的扩展语法（确保通用性）
+    SPECIAL_EXTENSIONS = re.compile(r'(##\+js|#@#|\$csp|\$redirect)', re.IGNORECASE)
 
 
 def setup_logger():
-    logger = logging.getLogger('HybridAdblockMerger')
+    logger = logging.getLogger('SimpleAdblockMerger')
     logger.setLevel(logging.INFO)
     handler = logging.StreamHandler(sys.stdout)
-    
-    if os.getenv('GITHUB_ACTIONS') == 'true':
-        formatter = logging.Formatter('%(message)s')
-    else:
-        formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
-    
+    formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
     handler.setFormatter(formatter)
     logger.handlers = [handler]
     return logger
 
 logger = setup_logger()
-
-
-def gh_group(name: str):
-    if os.getenv('GITHUB_ACTIONS') == 'true':
-        logger.info(f"::group::{name}")
-
-def gh_endgroup():
-    if os.getenv('GITHUB_ACTIONS') == 'true':
-        logger.info(f"::endgroup::")
 
 
 def check_file_size(file_path: Path) -> bool:
@@ -89,21 +77,26 @@ def check_file_size(file_path: Path) -> bool:
         return False
 
 
-class HybridAdblockMerger:
+class SimpleAdblockMerger:
     def __init__(self):
+        # 初始化目录
         Config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
         Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        # 清理原有输出文件（确保单一输出）
-        if Config.OUTPUT_FILE.exists():
-            Config.OUTPUT_FILE.unlink()
+        
+        # 清理旧文件
+        for file in [Config.BLOCK_RULES_FILE, Config.ALLOW_RULES_FILE]:
+            if file.exists():
+                file.unlink()
+                
         self.regex = RegexPatterns()
         self.len_min, self.len_max = Config.RULE_LEN_RANGE
 
     def run(self):
         start_time = time.time()
-        gh_group("===== 混合语法规则合并（Adblock Plus/UBO/AdGuard） =====")
+        logger.info("===== 通用Adblock规则合并工具 =====")
         logger.info(f"输入目录: {Config.TEMP_DIR}")
-        logger.info(f"输出文件: {Config.OUTPUT_FILE}")
+        logger.info(f"拦截规则输出: {Config.BLOCK_RULES_FILE}")
+        logger.info(f"白名单规则输出: {Config.ALLOW_RULES_FILE}")
 
         # 获取输入文件
         input_files = []
@@ -111,148 +104,151 @@ class HybridAdblockMerger:
             input_files.extend([Path(p) for p in glob.glob(str(Config.TEMP_DIR / pattern))])
         if not input_files:
             logger.error("未找到输入文件，退出")
-            gh_endgroup()
             return
 
         logger.info(f"发现{len(input_files)}个文件，开始处理...")
 
-        # 全局规则存储及去重
-        all_rules: List[str] = []
-        global_cache: Set[str] = set()
-        total_stats = self._empty_stats()
+        # 全局去重缓存
+        block_cache: Set[str] = set()
+        allow_cache: Set[str] = set()
+        # 结果存储
+        block_rules: List[str] = []
+        allow_rules: List[str] = []
+        # 统计
+        total_stats = {'total': 0, 'block': 0, 'allow': 0, 'filtered': 0}
 
         # 并行处理文件
         with ProcessPoolExecutor(max_workers=Config.MAX_WORKERS) as executor:
             futures = {executor.submit(self._process_file, file): file for file in input_files}
-            
+
             for future in as_completed(futures):
                 file = futures[future]
                 try:
-                    rules, stats = future.result()
-                    # 全局去重（跨文件重复）
-                    new_rules = [rule for rule in rules if rule not in global_cache]
-                    all_rules.extend(new_rules)
-                    global_cache.update(new_rules)
-                    # 合并统计
-                    total_stats = self._merge_stats(total_stats, stats)
-                    logger.info(f"处理完成 {file.name}：有效规则{stats['valid']}条")
+                    results, stats = future.result()
+                    # 全局去重并合并
+                    new_block = [r for r in results['block'] if r not in block_cache]
+                    new_allow = [r for r in results['allow'] if r not in allow_cache]
+                    
+                    block_rules.extend(new_block)
+                    allow_rules.extend(new_allow)
+                    
+                    block_cache.update(new_block)
+                    allow_cache.update(new_allow)
+                    
+                    # 更新统计
+                    for k, v in stats.items():
+                        total_stats[k] += v
+                    logger.info(f"处理完成 {file.name}：拦截{stats['block']}条，白名单{stats['allow']}条")
                 except Exception as e:
                     logger.error(f"处理文件{file.name}失败: {str(e)}")
 
-        # 写入单一纯净规则文件（无任何头信息，仅规则）
-        with open(Config.OUTPUT_FILE, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(all_rules) + '\n')
+        # 写入输出文件
+        self._write_rules(Config.BLOCK_RULES_FILE, block_rules, "拦截规则")
+        self._write_rules(Config.ALLOW_RULES_FILE, allow_rules, "白名单规则")
 
-        # 输出结果统计
+        # 最终统计
         elapsed = time.time() - start_time
-        logger.info(f"\n===== 处理完成 =====")
+        logger.info("\n===== 处理完成 =====")
         logger.info(f"总处理文件: {len(input_files)}个")
-        logger.info(f"总有效规则数（去重后）: {len(all_rules)}条")
-        logger.info(f"过滤规则数: {total_stats['filtered'] + total_stats['unsupported']}条")
+        logger.info(f"总拦截规则（去重后）: {len(block_rules)}条")
+        logger.info(f"总白名单规则（去重后）: {len(allow_rules)}条")
+        logger.info(f"过滤无效规则: {total_stats['filtered']}条")
         logger.info(f"耗时: {elapsed:.2f}秒")
-        gh_endgroup()
 
-        # GitHub Actions输出产物路径
-        if os.getenv('GITHUB_ACTIONS') == 'true':
-            logger.info(f"::set-output name=hybrid_file::{Config.OUTPUT_FILE}")
-
-    def _process_file(self, file_path: Path) -> Tuple[List[str], Dict]:
-        """处理单个文件，返回有效规则和统计"""
+    def _process_file(self, file_path: Path) -> Tuple[Dict, Dict]:
+        """处理单个文件，返回拦截/白名单规则和统计"""
         if not check_file_size(file_path):
-            return [], self._empty_stats()
+            return {'block': [], 'allow': []}, {'total': 0, 'block': 0, 'allow': 0, 'filtered': 0}
 
-        stats = self._empty_stats()
-        local_rules: List[str] = []
-        local_cache: Set[str] = set()  # 单文件内去重
+        stats = {'total': 0, 'block': 0, 'allow': 0, 'filtered': 0}
+        local_block: Set[str] = set()
+        local_allow: Set[str] = set()
 
         try:
             with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                 for line in f:
                     line = line.strip()
-                    processed_rule = self._process_line(line, stats, local_cache)
-                    if processed_rule:
-                        local_rules.append(processed_rule)
+                    self._process_line(line, local_block, local_allow, stats)
         except Exception as e:
             logger.error(f"读取文件{file_path.name}出错: {str(e)}")
 
-        return local_rules, stats
+        return {
+            'block': list(local_block),
+            'allow': list(local_allow)
+        }, stats
 
-    def _process_line(self, line: str, stats: Dict, local_cache: Set[str]) -> str:
-        """处理单行规则，保留混合语法兼容规则"""
+    def _process_line(self, line: str, block_set: Set[str], allow_set: Set[str], stats: Dict):
+        """处理单行，分类为拦截/白名单规则（仅保留通用语法）"""
         stats['total'] += 1
 
-        # 过滤空行和注释
-        if self.regex.EMPTY_LINE.match(line) or self.regex.COMMENT.match(line):
+        # 过滤注释、空行、特殊扩展语法（确保通用性）
+        if (self.regex.EMPTY_LINE.match(line) or 
+            self.regex.COMMENT.match(line) or 
+            self.regex.SPECIAL_EXTENSIONS.search(line)):
             stats['filtered'] += 1
-            return None
+            return
 
-        # 长度过滤
+        # 过滤长度异常的规则
         if not (self.len_min <= len(line) <= self.len_max):
             stats['filtered'] += 1
-            return None
+            return
 
-        # 转换/保留为混合语法兼容规则
-        hybrid_rule = self._to_hybrid_rule(line)
-        if not hybrid_rule:
-            stats['unsupported'] += 1
-            return None
+        # 转换为通用规则并分类
+        rule_type, rule = self._classify_rule(line)
+        if not rule:
+            stats['filtered'] += 1
+            return
 
         # 单文件内去重
-        if hybrid_rule in local_cache:
+        if rule_type == 'block' and rule not in block_set:
+            block_set.add(rule)
+            stats['block'] += 1
+        elif rule_type == 'allow' and rule not in allow_set:
+            allow_set.add(rule)
+            stats['allow'] += 1
+        else:
             stats['filtered'] += 1
-            return None
 
-        local_cache.add(hybrid_rule)
-        stats['valid'] += 1
-        return hybrid_rule
+    def _classify_rule(self, line: str) -> Tuple[str, str]:
+        """判断规则类型（拦截/白名单）并转换为通用格式"""
+        # 白名单规则（以@@开头）
+        if line.startswith('@@'):
+            # 纯白名单域名转换为@@||domain.com^
+            if self.regex.PLAIN_DOMAIN.match(line[2:]):  # 去掉@@后检查是否为纯域名
+                return 'allow', f"@@||{line[2:]}^"
+            # 保留通用白名单格式（@@+域名/通配符）
+            if self.regex.ALLOW_DOMAIN.match(line) or self.regex.ALLOW_WILDCARD.match(line):
+                return 'allow', line
+            return '', ''  # 非通用白名单格式
 
-    def _to_hybrid_rule(self, line: str) -> str:
-        """转换为混合语法兼容规则（保留各工具通用及扩展语法）"""
-        # 1. 保留UBO扩展语法（如脚本拦截）
-        if self.regex.UBO_SCRIPT.match(line):
-            return line
+        # 拦截规则
+        else:
+            # Hosts规则转换为||domain.com^
+            hosts_match = self.regex.HOSTS_RULE.match(line)
+            if hosts_match:
+                return 'block', f"||{hosts_match.group(2)}^"
+            # 纯域名转换为||domain.com^
+            if self.regex.PLAIN_DOMAIN.match(line):
+                return 'block', f"||{line}^"
+            # 保留通用拦截格式（域名/通配符/路径）
+            if self.regex.BLOCK_DOMAIN.match(line) or self.regex.BLOCK_WILDCARD.match(line) or self.regex.BLOCK_PATH.match(line):
+                return 'block', line
+            return '', ''  # 非通用拦截格式
 
-        # 2. 保留AdGuard扩展语法（如CSP、重定向）
-        if self.regex.ADGUARD_CSP.match(line) or self.regex.ADGUARD_REDIRECT.match(line):
-            return line
-
-        # 3. 保留标准Adblock规则（Adblock Plus/UBO/AdGuard通用）
-        if (self.regex.ADBLOCK_DOMAIN.match(line) or
-            self.regex.ADBLOCK_WHITELIST.match(line) or
-            self.regex.ADBLOCK_ELEMENT.match(line) or
-            self.regex.ADBLOCK_ELEMENT_EXCEPT.match(line) or
-            self.regex.ADBLOCK_WILDCARD.match(line) or
-            self.regex.ADBLOCK_REGEX.match(line)):
-            return line
-
-        # 4. 转换Hosts规则为Adblock域名规则（通用格式）
-        hosts_match = self.regex.HOSTS_RULE.match(line)
-        if hosts_match:
-            domain = hosts_match.group(2)
-            return f"||{domain}^"
-
-        # 5. 转换纯域名为Adblock域名规则（通用格式）
-        if self.regex.PLAIN_DOMAIN.match(line):
-            return f"||{line}^"
-
-        # 不支持的规则（如其他工具特有语法）
-        return None
-
-    @staticmethod
-    def _empty_stats() -> Dict:
-        return {'total': 0, 'valid': 0, 'filtered': 0, 'unsupported': 0}
-
-    @staticmethod
-    def _merge_stats(total: Dict, new: Dict) -> Dict:
-        for key in total:
-            total[key] += new[key]
-        return total
+    def _write_rules(self, file_path: Path, rules: List[str], name: str):
+        """写入规则文件"""
+        if not rules:
+            logger.warning(f"无{name}可写入")
+            return
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(rules) + '\n')
+        logger.info(f"已写入{len(rules)}条{name}到 {file_path}")
 
 
 if __name__ == '__main__':
     try:
-        merger = HybridAdblockMerger()
+        merger = SimpleAdblockMerger()
         merger.run()
     except Exception as e:
-        logger.critical(f"工具运行失败: {str(e)}", exc_info=not os.getenv('GITHUB_ACTIONS'))
+        logger.critical(f"工具运行失败: {str(e)}", exc_info=True)
         sys.exit(1)
