@@ -17,19 +17,23 @@ from typing import Tuple, List, Set, Dict
 class Config:
     # GitHub环境变量适配
     GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", "")
-    RUNNER_TEMP = os.getenv("RUNNER_TEMP", os.getenv("TEMP_DIR", "tmp"))
+    # 临时目录：基于GitHub根目录（GITHUB_WORKSPACE）的临时目录
+    RUNNER_TEMP = os.getenv("RUNNER_TEMP", f"{GITHUB_WORKSPACE}/tmp" if GITHUB_WORKSPACE else "tmp")
+    # 输入目录保留原有逻辑（如需调整可进一步修改）
     INPUT_DIR = os.getenv("INPUT_DIR", f"{GITHUB_WORKSPACE}/input" if GITHUB_WORKSPACE else "input")
-    OUTPUT_DIR = os.getenv("OUTPUT_DIR", f"{GITHUB_WORKSPACE}/output" if GITHUB_WORKSPACE else "output")
 
-    # 输出文件路径
-    OUTPUT_BLACK = Path(OUTPUT_DIR) / "adblock_adh.txt"
-    OUTPUT_WHITE = Path(OUTPUT_DIR) / "allow_adh.txt"
+    # 输出文件路径：直接放在GitHub根目录（GITHUB_WORKSPACE）
+    OUTPUT_BLACK = Path(GITHUB_WORKSPACE) / "adblock_adh.txt" if GITHUB_WORKSPACE else Path("adblock_adh.txt")
+    OUTPUT_WHITE = Path(GITHUB_WORKSPACE) / "allow_adh.txt" if GITHUB_WORKSPACE else Path("allow_adh.txt")
+    
+    # 临时子目录：基于GitHub根目录的临时目录下的处理目录
     TEMP_DIR = Path(RUNNER_TEMP) / "adguard_processing"
 
     # 可配置参数
     MAX_WORKERS = int(os.getenv("MAX_WORKERS", str(min(os.cpu_count() or 4, 4))))
     RULE_LEN_RANGE = (3, 4096)
     INPUT_PATTERNS = os.getenv("INPUT_PATTERNS", "*.txt,*.list,*.hosts").split(",")
+
 
 
 class RegexPatterns:
