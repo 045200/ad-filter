@@ -10,7 +10,7 @@ from pathlib import Path
 # 基础配置
 GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
 INPUT_DIR = Path(GITHUB_WORKSPACE) / "tmp"
-OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "clash.yaml"
+OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "adblock_clash.yaml"
 INPUT_FILE = INPUT_DIR / "adblock_merged.txt"
 
 # 预编译正则表达式
