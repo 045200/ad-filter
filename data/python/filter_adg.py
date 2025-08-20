@@ -2,251 +2,201 @@
 # -*- coding: utf-8 -*-
 
 """
-AdGuard规则转换工具（无头部信息） - 优化版
+专属拦截器规则转换工具
+- 保留拦截器已支持的Adblock原生语法
+- 转换不支持的规则类型（Hosts、非标准格式等）
+- 补充处理未涵盖的规则语法（通配符、路径规则等）
 """
 
 import os
 import sys
-import glob
 import re
 import logging
 import time
 from pathlib import Path
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Tuple, List, Set, Dict
 
 
 # ============== 配置集中管理 ==============
 class Config:
-    GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", "")
-    INPUT_DIR = Path(os.getenv("INPUT_DIR", Path(GITHUB_WORKSPACE) / "tmp" if GITHUB_WORKSPACE else "tmp"))
-    OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", GITHUB_WORKSPACE if GITHUB_WORKSPACE else "."))
-    OUTPUT_FILE = OUTPUT_DIR / "adblock_adg.txt"
-    ALLOW_FILE = OUTPUT_DIR / "allow_adg.txt"
-    MAX_WORKERS = min(os.cpu_count() or 4, 4)
+    # 输入输出配置
+    INPUT_FILE = Path(os.getenv("INPUT_FILE", "adblock_merged.txt"))
+    OUTPUT_FILE = Path(os.getenv("OUTPUT_FILE", "interceptor_rules.txt"))
+    # 拦截器原生支持的规则类型（不转换）
+    SUPPORTED_ADBLOCK_TYPES = {
+        "domain_rule": re.compile(r'^\|\|([a-z0-9-]+\.)+[a-z]{2,}\^?(\$[a-z0-9_,=;]+)?$', re.IGNORECASE),
+        "element_rule": re.compile(r'^([a-z0-9-]+\.)+[a-z]{2,}##.+$', re.IGNORECASE),
+        "whitelist_rule": re.compile(r'^@@\|\|([a-z0-9-]+\.)+[a-z]{2,}\^?(\$[a-z0-9_,=;]+)?$', re.IGNORECASE),
+        "adguard_extra": re.compile(r'^([a-z0-9-]+\.)+[a-z]{2,}\$(csp|redirect)=', re.IGNORECASE),
+        "modifier_rule": re.compile(r'^\|\|([a-z0-9-]+\.)+[a-z]{2,}(/.*)?\$[a-z0-9_,=;]+$', re.IGNORECASE)
+    }
+    # 转换规则映射（键：规则类型，值：转换函数）
+    CONVERSION_MAP = {
+        "hosts": lambda d: f"||{d}^",
+        "plain_domain": lambda d: f"||{d}^",
+        "wildcard_simple": lambda d: f"||{d}^",  # 简单通配符（*domain.com → ||domain.com^）
+        "invalid_format": lambda r: None  # 无效格式不转换
+    }
+    # 规则长度范围
     RULE_LEN_RANGE = (3, 4096)
-    MAX_FILESIZE_MB = 50
-    INPUT_PATTERNS = ["adblock_merged.txt"]
-
-
-# ============== 预编译正则 ==============
-class RegexPatterns:
-    # 核心规则
-    ADBLOCK_DOMAIN = re.compile(r'^\|\|([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\^?$', re.IGNORECASE)
-    ADBLOCK_WHITELIST = re.compile(r'^@@\|\|([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\^?$', re.IGNORECASE)
-    ADBLOCK_ELEMENT = re.compile(r'^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}##.+$', re.IGNORECASE)
-    ADBLOCK_ELEMENT_EXCEPT = re.compile(r'^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}#@#.+$', re.IGNORECASE)
-    HOSTS_RULE = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$', re.IGNORECASE)
-    PLAIN_DOMAIN = re.compile(r'^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$', re.IGNORECASE)
-    ADGUARD_CSP = re.compile(r'^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\$csp=', re.IGNORECASE)
-    ADGUARD_REDIRECT = re.compile(r'^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\$redirect=', re.IGNORECASE)
-    COMMENT = re.compile(r'^[!#]')
-    EMPTY_LINE = re.compile(r'^\s*$')
+    # 忽略的规则类型（注释、空行等）
+    IGNORE_PATTERNS = [
+        re.compile(r'^[!#]'),  # 注释
+        re.compile(r'^\s*$')   # 空行
+    ]
 
 
 # ============== 日志配置 ==============
 def setup_logger():
-    logger = logging.getLogger('AdGuardMerger')
+    logger = logging.getLogger('InterceptorConverter')
     logger.setLevel(logging.INFO)
     handler = logging.StreamHandler(sys.stdout)
-    fmt = '%(message)s' if os.getenv('GITHUB_ACTIONS') == 'true' else '%(asctime)s [%(levelname)s] %(message)s'
-    handler.setFormatter(logging.Formatter(fmt, datefmt='%H:%M:%S'))
+    handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S'))
     logger.addHandler(handler)
     return logger
 
 logger = setup_logger()
 
 
-# ============== GitHub Actions 分组 ==============
-def gh_group(name: str):
-    if os.getenv('GITHUB_ACTIONS') == 'true':
-        logger.info(f"::group::{name}")
-
-def gh_endgroup():
-    if os.getenv('GITHUB_ACTIONS') == 'true':
-        logger.info("::endgroup::")
-
-
-# ============== 工具函数 ==============
-def check_file_size(file_path: Path) -> bool:
-    try:
-        size_mb = file_path.stat().st_size / (1024 * 1024)
-        if size_mb > Config.MAX_FILESIZE_MB:
-            logger.warning(f"跳过大文件 {file_path.name}（{size_mb:.1f}MB）")
-            return False
-        return True
-    except Exception as e:
-        logger.error(f"获取文件大小失败 {file_path.name}: {str(e)}")
-        return False
-
-
-# ============== 核心处理类 ==============
-class AdGuardMerger:
+# ============== 核心转换类 ==============
+class InterceptorConverter:
     def __init__(self):
-        Config.INPUT_DIR.mkdir(parents=True, exist_ok=True)
-        Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        # 清理旧输出
-        for f in [Config.OUTPUT_FILE, Config.ALLOW_FILE]:
-            if f.exists():
-                f.unlink()
-        self.regex = RegexPatterns()
-        self.len_min, self.len_max = Config.RULE_LEN_RANGE
+        # 初始化路径
+        self.input_path = Config.INPUT_FILE
+        self.output_path = Config.OUTPUT_FILE
+        # 去重缓存
+        self.rule_cache: Set[str] = set()
+        # 统计信息
+        self.stats = {
+            "total": 0,
+            "supported": 0,  # 拦截器原生支持，不转换
+            "converted": 0,  # 已转换
+            "ignored": 0,    # 忽略（注释、空行等）
+            "invalid": 0     # 无效规则，无法转换
+        }
 
     def run(self):
+        """主运行函数"""
         start_time = time.time()
-        gh_group("===== AdGuard规则转换 =====")
-        logger.info(f"输入目录: {Config.INPUT_DIR}")
-        logger.info(f"输出规则: {Config.OUTPUT_FILE}")
-        logger.info(f"输出白名单: {Config.ALLOW_FILE}")
+        logger.info("===== 专属拦截器规则转换开始 =====")
+        logger.info(f"输入文件: {self.input_path}")
+        logger.info(f"输出文件: {self.output_path}")
 
-        input_files = []
-        for pattern in Config.INPUT_PATTERNS:
-            input_files.extend(Path(p) for p in glob.glob(str(Config.INPUT_DIR / pattern)))
-        if not input_files:
-            logger.error("未找到输入文件，退出")
-            gh_endgroup()
+        if not self.input_path.exists():
+            logger.error(f"输入文件不存在: {self.input_path}")
             return
 
-        logger.info(f"发现 {len(input_files)} 个文件，开始处理...")
+        # 读取并处理规则
+        processed_rules = self._process_rules()
 
-        all_rules, all_allows = [], []
-        global_rule_cache, global_allow_cache = set(), set()
-        total_stats = self._empty_stats()
+        # 写入输出
+        with open(self.output_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(processed_rules) + '\n')
 
-        with ProcessPoolExecutor(max_workers=Config.MAX_WORKERS) as executor:
-            futures = {executor.submit(self._process_file, f): f for f in input_files}
-            for future in as_completed(futures):
-                file = futures[future]
-                try:
-                    rules, allows, stats = future.result()
-                    # 全局去重
-                    new_rules = [r for r in rules if r not in global_rule_cache]
-                    new_allows = [a for a in allows if a not in global_allow_cache]
-                    all_rules.extend(new_rules)
-                    all_allows.extend(new_allows)
-                    global_rule_cache.update(new_rules)
-                    global_allow_cache.update(new_allows)
-                    total_stats = self._merge_stats(total_stats, stats)
-                    logger.info(f"处理完成 {file.name}：有效规则 {stats['valid']} 条")
-                except Exception as e:
-                    logger.error(f"处理 {file.name} 失败: {str(e)}")
-
-        # 写出结果（无头部）
-        with open(Config.OUTPUT_FILE, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(sorted(all_rules)) + '\n')
-        with open(Config.ALLOW_FILE, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(sorted(all_allows)) + '\n')
-
+        # 输出统计
         elapsed = time.time() - start_time
-        logger.info(f"\n处理完成：总规则 {len(all_rules)} 条，白名单 {len(all_allows)} 条，耗时 {elapsed:.2f} 秒")
-        gh_endgroup()
+        logger.info("\n===== 转换统计 =====")
+        logger.info(f"总规则数: {self.stats['total']}")
+        logger.info(f"原生支持(不转换): {self.stats['supported']}")
+        logger.info(f"成功转换: {self.stats['converted']}")
+        logger.info(f"忽略规则(注释/空行): {self.stats['ignored']}")
+        logger.info(f"无效规则: {self.stats['invalid']}")
+        logger.info(f"耗时: {elapsed:.2f}秒")
+        logger.info(f"输出规则数(去重后): {len(processed_rules)}")
 
-        # GitHub Actions 输出
-        if os.getenv('GITHUB_ACTIONS') == 'true':
-            github_output = os.getenv('GITHUB_OUTPUT')
-            if github_output:
-                with open(github_output, 'a', encoding='utf-8') as f:
-                    f.write(f"adguard_file={Config.OUTPUT_FILE}\n")
-                    f.write(f"adguard_allow_file={Config.ALLOW_FILE}\n")
+    def _process_rules(self) -> List[str]:
+        """处理所有规则并返回转换后列表"""
+        processed = []
+        with open(self.input_path, 'r', encoding='utf-8', errors='replace') as f:
+            for line in f:
+                line = line.strip()
+                self.stats["total"] += 1
+                # 处理单条规则
+                result = self._process_line(line)
+                if result and result not in self.rule_cache:
+                    processed.append(result)
+                    self.rule_cache.add(result)
+        return processed
 
-    def _process_file(self, file_path: Path) -> Tuple[List[str], List[str], Dict]:
-        if not check_file_size(file_path):
-            return [], [], self._empty_stats()
+    def _process_line(self, line: str) -> str:
+        """处理单条规则，返回转换后结果或原规则（支持的类型）"""
+        # 检查是否为忽略类型（注释、空行）
+        if any(pattern.match(line) for pattern in Config.IGNORE_PATTERNS):
+            self.stats["ignored"] += 1
+            return ""
 
-        stats = self._empty_stats()
-        rules, allows = [], []
-        rule_cache, allow_cache = set(), set()
+        # 检查规则长度
+        len_min, len_max = Config.RULE_LEN_RANGE
+        if not (len_min <= len(line) <= len_max):
+            self.stats["invalid"] += 1
+            return ""
 
-        try:
-            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                for line in f:
-                    line = line.strip()
-                    rule, is_allow = self._process_line(line, stats)
-                    if rule:
-                        target_list = allows if is_allow else rules
-                        cache = allow_cache if is_allow else rule_cache
-                        if rule not in cache:
-                            target_list.append(rule)
-                            cache.add(rule)
-        except Exception as e:
-            logger.error(f"读取 {file_path.name} 出错: {str(e)}")
+        # 检查是否为拦截器原生支持的规则类型（不转换）
+        if self._is_supported_type(line):
+            self.stats["supported"] += 1
+            return line
 
-        return rules, allows, stats
+        # 识别规则类型并转换
+        rule_type, content = self._identify_rule_type(line)
+        if rule_type in Config.CONVERSION_MAP:
+            converted = Config.CONVERSION_MAP[rule_type](content)
+            if converted:
+                self.stats["converted"] += 1
+                return converted
 
-    def _process_line(self, line: str, stats: Dict) -> Tuple[str, bool]:
-        stats['total'] += 1
-        if not line or self.regex.EMPTY_LINE.match(line) or self.regex.COMMENT.match(line):
-            stats['filtered'] += 1
-            return None, False
-        if not (self.len_min <= len(line) <= self.len_max):
-            stats['filtered'] += 1
-            return None, False
+        # 无法识别的规则（无效）
+        self.stats["invalid"] += 1
+        return ""
 
-        rule, is_allow = self._to_adguard(line)
-        if rule:
-            stats['valid'] += 1
-        else:
-            stats['unsupported'] += 1
-        return rule, is_allow
+    def _is_supported_type(self, line: str) -> bool:
+        """判断是否为拦截器原生支持的规则类型"""
+        for pattern in Config.SUPPORTED_ADBLOCK_TYPES.values():
+            if pattern.match(line):
+                return True
+        return False
 
-    def _to_adguard(self, line: str) -> Tuple[str, bool]:
-        # 白名单
-        if line.startswith('@@'):
-            norm = line[2:]
-            if self.regex.ADBLOCK_DOMAIN.match(norm) or \
-               self.regex.ADBLOCK_ELEMENT_EXCEPT.match(norm):
-                return norm, True
-            return line, True
-
-        # Hosts 转换
-        hosts_match = self.regex.HOSTS_RULE.match(line)
+    def _identify_rule_type(self, line: str) -> Tuple[str, str]:
+        """识别规则类型，返回类型和核心内容"""
+        # Hosts规则（0.0.0.0/127.0.0.1/::1 域名）
+        hosts_match = re.match(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([a-z0-9-]+\.)+[a-z]{2,}$', line, re.IGNORECASE)
         if hosts_match:
-            domain = hosts_match.group(2)
+            return "hosts", hosts_match.group(2)
+
+        # 纯域名（无任何前缀后缀）
+        plain_match = re.match(r'^([a-z0-9-]+\.)+[a-z]{2,}$', line, re.IGNORECASE)
+        if plain_match and self._is_valid_domain(plain_match.group(0)):
+            return "plain_domain", plain_match.group(0)
+
+        # 简单通配符规则（*domain.com 或 domain.com* 或 *domain.com*）
+        wildcard_match = re.match(r'^\*?([a-z0-9-]+\.)+[a-z]{2,}\*?$', line, re.IGNORECASE)
+        if wildcard_match:
+            # 提取纯域名部分（去除首尾*）
+            domain = wildcard_match.group(1).strip('*')
             if self._is_valid_domain(domain):
-                return f"||{domain}^", False
+                return "wildcard_simple", domain
 
-        # 纯域名
-        if self.regex.PLAIN_DOMAIN.match(line) and self._is_valid_domain(line):
-            return f"||{line}^", False
-
-        # AdGuard 特有规则
-        if self.regex.ADGUARD_CSP.match(line) or \
-           self.regex.ADGUARD_REDIRECT.match(line) or \
-           self.regex.ADBLOCK_ELEMENT.match(line) or \
-           self.regex.ADBLOCK_DOMAIN.match(line):
-            return line, False
-
-        return None, False
+        # 其他无法识别的类型（视为无效）
+        return "invalid_format", line
 
     def _is_valid_domain(self, domain: str) -> bool:
-        if re.match(r'^\d{1,3}(\.\d{1,3}){3}$|^$?[a-f0-9:]+$?$', domain, re.IGNORECASE):
+        """验证域名有效性（基础验证）"""
+        if len(domain) > 253:
             return False
-        if len(domain) < 4 or len(domain) > 253 or '..' in domain:
+        if '..' in domain or domain.startswith('.') or domain.endswith('.'):
             return False
-        if domain.startswith('.') or domain.endswith('.'):
-            return False
-        parts = domain.lower().split('.')
-        if len(parts) < 2:
-            return False
-        for p in parts:
-            if not p or len(p) > 63 or not re.match(r'^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$', p):
+        # 检查每个域名片段
+        parts = domain.split('.')
+        for part in parts:
+            if not re.match(r'^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$', part, re.IGNORECASE):
                 return False
         return True
-
-    @staticmethod
-    def _empty_stats() -> Dict:
-        return {'total': 0, 'valid': 0, 'filtered': 0, 'unsupported': 0}
-
-    @staticmethod
-    def _merge_stats(total: Dict, new: Dict) -> Dict:
-        return {k: total[k] + new[k] for k in total}
 
 
 # ============== 主入口 ==============
 if __name__ == '__main__':
     try:
-        merger = AdGuardMerger()
-        merger.run()
+        converter = InterceptorConverter()
+        converter.run()
     except Exception as e:
-        logger.critical(f"运行失败: {str(e)}", exc_info=not os.getenv('GITHUB_ACTIONS'))
+        logger.critical(f"转换失败: {str(e)}", exc_info=True)
         sys.exit(1)
