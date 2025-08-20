@@ -18,13 +18,15 @@ class Config:
     """配置：聚焦通用规则，输出拦截+白名单文件"""
     GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
     BASE_DIR = Path(GITHUB_WORKSPACE)
+    # 输入：仓库根目录下的临时目录
     TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
-    OUTPUT_DIR = BASE_DIR / os.getenv('OUTPUT_DIR', 'output')
-    
-    # 核心输出文件
+    # 输出：仓库根目录（修正为直接使用仓库根目录，而非子目录）
+    OUTPUT_DIR = BASE_DIR
+
+    # 核心输出文件（直接输出到仓库根目录）
     BLOCK_RULES_FILE = OUTPUT_DIR / "adblock_hybrid.txt"  # 拦截规则
     ALLOW_RULES_FILE = OUTPUT_DIR / "allow_hybrid.txt"    # 白名单规则
-    
+
     MAX_WORKERS = min(os.cpu_count() or 4, 4)
     RULE_LEN_RANGE = (3, 2048)  # 限制合理长度，覆盖多数场景
     MAX_FILESIZE_MB = 50
@@ -79,15 +81,15 @@ def check_file_size(file_path: Path) -> bool:
 
 class SimpleAdblockMerger:
     def __init__(self):
-        # 初始化目录
+        # 初始化目录（临时目录需确保存在，输出目录为仓库根目录通常已存在）
         Config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
-        Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        
+        Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)  # 兼容仓库根目录不存在的极端情况
+
         # 清理旧文件
         for file in [Config.BLOCK_RULES_FILE, Config.ALLOW_RULES_FILE]:
             if file.exists():
                 file.unlink()
-                
+
         self.regex = RegexPatterns()
         self.len_min, self.len_max = Config.RULE_LEN_RANGE
 
@@ -128,13 +130,13 @@ class SimpleAdblockMerger:
                     # 全局去重并合并
                     new_block = [r for r in results['block'] if r not in block_cache]
                     new_allow = [r for r in results['allow'] if r not in allow_cache]
-                    
+
                     block_rules.extend(new_block)
                     allow_rules.extend(new_allow)
-                    
+
                     block_cache.update(new_block)
                     allow_cache.update(new_allow)
-                    
+
                     # 更新统计
                     for k, v in stats.items():
                         total_stats[k] += v
