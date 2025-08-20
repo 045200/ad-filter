@@ -1,271 +1,227 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-Adblock Plus 规则转换器
-功能：将各类中间规则（hosts、域名列表等）转换为标准ABP语法，去重后输出纯净规则
-ABP核心语法参考：
-- 基本拦截规则：||example.com^（匹配所有子域名及协议）
-- 例外规则（白名单）：@@||example.com^（跳过拦截）
-- 通配符：*（匹配任意字符）、^（匹配分隔符，如/、:等）
-"""
+"""Adblock Plus规则处理（支持GitHub环境变量，分黑白名单输出）"""
 
 import os
+import sys
+import glob
 import re
-import time
 import logging
+import time
 from pathlib import Path
-from typing import Set
-
-# ============== 环境变量与路径配置 ==============
-# 与步骤1/2/3/4保持一致的路径定义
-GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
-BASE_DIR = Path(GITHUB_WORKSPACE)
-TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')  # 输入文件统一存放于临时目录
-DATA_DIR = BASE_DIR / os.getenv('DATA_DIR', 'data')  # 预留数据目录，与其他步骤对齐
-
-# 文件路径配置（关联基础目录，与前序步骤路径逻辑一致）
-FILE_CONFIG = {
-    "block_input": TEMP_DIR / "block_intermediate.txt",  # 输入文件位于临时目录
-    "allow_input": TEMP_DIR / "allow_intermediate.txt",
-    "block_output": BASE_DIR / "abp_block.txt",          # 输出文件位于根目录
-    "allow_output": BASE_DIR / "abp_allow.txt"
-}
-
-# ============== 预编译正则（匹配输入规则类型，按ABP语法转换） ==============
-REGEX_PATTERNS = {
-    # 通用需跳过的行（注释、空行等，确保输出纯净）
-    "skip": re.compile(r'^\s*$|^(!|#|//).*', re.IGNORECASE),  # 空行、注释行（!/#//开头）
-
-    # 拦截规则（黑名单）匹配模式
-    "block": {
-        "domain": re.compile(r'^[\w.-]+\.?$'),  # 标准域名（example.com 或 example.com.）
-        "hosts": re.compile(r'^\d+\.\d+\.\d+\.\d+\s+([\w.-]+\.?)$'),  # hosts格式（IP 域名）
-        "abp_raw": re.compile(r'^(\|\||\*)\S+\^?$'),  # 已符合ABP格式的规则（如||example.com^）
-        "path": re.compile(r'^[\w.-]+/.*$')  # 带路径的规则（example.com/path）
-    },
-
-    # 允许规则（白名单）匹配模式
-    "allow": {
-        "domain": re.compile(r'^[\w.-]+\.?$'),  # 标准域名
-        "abp_raw": re.compile(r'^@@(\|\||\*)\S+\^?$'),  # 已符合ABP例外格式的规则（如@@||example.com^）
-        "path": re.compile(r'^[\w.-]+/.*$')  # 带路径的允许规则
-    }
-}
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from typing import Tuple, List, Set, Dict
 
 
-# ============== 日志配置 ==============
+class Config:
+    # 优先读取GitHub环境变量，适配GitHub Actions
+    GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", "")  # GitHub工作目录
+    RUNNER_TEMP = os.getenv("RUNNER_TEMP", os.getenv("TEMP_DIR", "tmp"))  # Runner临时目录
+    INPUT_DIR = os.getenv("INPUT_DIR", f"{GITHUB_WORKSPACE}/input" if GITHUB_WORKSPACE else "input")  # 输入目录（支持GitHub Actions输入参数）
+    OUTPUT_DIR = os.getenv("OUTPUT_DIR", f"{GITHUB_WORKSPACE}/output" if GITHUB_WORKSPACE else "output")  # 输出目录
+
+    # 输出文件路径（基于输出目录）
+    OUTPUT_BLACK = Path(OUTPUT_DIR) / "adblock_adp.txt"
+    OUTPUT_WHITE = Path(OUTPUT_DIR) / "allow_adp.txt"
+    TEMP_DIR = Path(RUNNER_TEMP) / "adblock_processing"  # 临时处理目录（使用Runner临时目录）
+
+    MAX_WORKERS = int(os.getenv("MAX_WORKERS", str(min(os.cpu_count() or 4, 4))))  # 支持环境变量配置并发数
+    RULE_LEN_RANGE = (3, 4096)
+    INPUT_PATTERNS = os.getenv("INPUT_PATTERNS", "*.txt,*.list").split(",")  # 支持环境变量配置输入文件格式
+
+
+class RegexPatterns:
+    # 黑名单规则（Adblock Plus标准语法）
+    BLACK_DOMAIN = re.compile(r'^\|\|([\w.-]+)\^?$')  # ||domain.com^
+    BLACK_ELEMENT = re.compile(r'^[\w.-]+##.+$')  # domain.com##.ad
+    BLACK_WILDCARD = re.compile(r'^[\*a-z0-9\-\.]+$', re.IGNORECASE)  # *adserver*
+    BLACK_REGEX = re.compile(r'^/.*/$')  # /^https?:\/\/ad/
+    BLACK_OPTIONS = re.compile(r'^[\w.-]+\$[\w,-]+$')  # domain.com$script,third-party
+
+    # 白名单规则（Adblock Plus例外语法）
+    WHITE_DOMAIN = re.compile(r'^@@\|\|([\w.-]+)\^?$')  # @@||domain.com^
+    WHITE_ELEMENT = re.compile(r'^[\w.-]+#@#+$')  # domain.com#@#.ad
+    WHITE_OPTIONS = re.compile(r'^@@[\w.-]+\$[\w,-]+$')  # @@domain.com$script
+
+    # 可转换规则
+    HOSTS_RULE = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')  # Hosts -> 黑名单
+    PLAIN_DOMAIN = re.compile(r'^[\w.-]+\.[a.[]{2,}$')  # 纯域名 -> 黑名单
+
+    # 过滤项
+    COMMENT = re.compile(r'^[!#]')
+    EMPTY_LINE = re.compile(r'^\s*$')
+    UNSUPPORTED = re.compile(r'##\+js\(|\$csp=|\$redirect=')
+
+
 def setup_logger():
-    """配置日志，记录处理状态（不干扰输出文件）"""
-    logger = logging.getLogger()
+    """适配GitHub Actions的日志格式，支持通知级别的日志显示"""
+    logger = logging.getLogger('AdblockPlusSplit')
     logger.setLevel(logging.INFO)
-    handler = logging.StreamHandler()
-    # 适配GitHub Actions环境的日志格式
-    fmt = '%(message)s' if os.getenv('GITHUB_ACTIONS') == 'true' else '[%(levelname)s] %(message)s'
-    handler.setFormatter(logging.Formatter(fmt))
+
+    class GitHubFormatter(logging.Formatter):
+        def format(self, record):
+            # 对GitHub Actions输出特殊格式（::notice::message）
+            if record.levelno == logging.INFO:
+                return f"::notice::{record.getMessage()}"
+            elif record.levelno == logging.WARNING:
+                return f"::warning::{record.getMessage()}"
+            elif record.levelno == logging.ERROR:
+                return f"::error::{record.getMessage()}"
+            return record.getMessage()
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(GitHubFormatter())
     logger.handlers = [handler]
     return logger
-
 
 logger = setup_logger()
 
 
-# ============== GitHub Actions支持 ==============
-def gh_group(name):
-    """GitHub Actions日志分组开始（与前序步骤保持一致）"""
-    if os.getenv('GITHUB_ACTIONS') == 'true':
-        logger.info(f"::group::{name}")
+class AdblockPlusSplitter:
+    def __init__(self):
+        # 创建必要目录（适配GitHub环境权限）
+        for dir_path in [Config.TEMP_DIR, Path(Config.INPUT_DIR), Path(Config.OUTPUT_DIR)]:
+            dir_path.mkdir(parents=True, exist_ok=True)
+            # 确保GitHub环境下目录可写
+            if os.name != "nt":  # 非Windows环境（如GitHub Linux Runner）
+                os.chmod(dir_path, 0o755)
+
+        # 清理旧输出文件
+        for f in [Config.OUTPUT_BLACK, Config.OUTPUT_WHITE]:
+            if f.exists():
+                f.unlink()
+
+        self.regex = RegexPatterns()
+        self.len_min, self.len_max = Config.RULE_LEN_RANGE
+
+    def run(self):
+        start_time = time.time()
+        logger.info("===== Adblock Plus 黑白名单处理（GitHub环境适配） =====")
+        # 读取输入文件（支持GitHub工作目录下的input目录）
+        input_files = []
+        for pattern in Config.INPUT_PATTERNS:
+            input_files.extend([Path(p) for p in glob.glob(str(Path(Config.INPUT_DIR) / pattern))
+
+        if not input_files:
+            logger.error(f"未在输入目录 {Config.INPUT_DIR} 找到文件（格式：{Config.INPUT_PATTERNS}）")
+            return
+
+        # 全局去重缓存
+        black_cache: Set[str] = set()
+        white_cache: Set[str] = set()
+        total_stats = {'black': 0, 'white': 0, 'filtered': 0, 'unsupported': 0}
+
+        with ProcessPoolExecutor(max_workers=Config.MAX_WORKERS) as executor:
+            futures = {executor.submit(self._process_file, f): f for f in input_files}
+            for future in as_completed(futures):
+                file = futures[future]
+                try:
+                    (black_rules, white_rules), stats = future.result()
+                    # 全局去重后添加
+                    new_black = [r for r in black_rules if r not in black_cache]
+                    new_white = [r for r in white_rules if r not in white_cache]
+                    black_cache.update(new_black)
+                    white_cache.update(new_white)
+                    # 累加统计
+                    total_stats['black'] += len(new_black)
+                    total_stats['white'] += len(new_white)
+                    total_stats['filtered'] += stats['filtered']
+                    total_stats['unsupported'] += stats['unsupported']
+                    logger.info(f"处理 {file.name}：新增黑名单{len(new_black)}条，白名单{len(new_white)}条")
+                except Exception as e:
+                    logger.error(f"处理{file.name}失败：{str(e)}")
+
+        # 写入输出文件（支持GitHub工作目录下的output目录）
+        with open(Config.OUTPUT_BLACK, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(black_cache) + '\n')
+        with open(Config.OUTPUT_WHITE, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(white_cache) + '\n')
+
+        # 输出GitHub Actions可识别的结果（用于后续步骤引用）
+        print(f"::set-output name=blacklist_path::{Config.OUTPUT_BLACK}")
+        print(f"::set-output name=whitelist_path::{Config.OUTPUT_WHITE}")
+        print(f"::set-output name=blacklist_count::{total_stats['black']}")
+        print(f"::set-output name=whitelist_count::{total_stats['white']}")
+
+        logger.info(f"\n处理完成：\n黑名单规则：{total_stats['black']}条\n白名单规则：{total_stats['white']}条")
+        logger.info(f"过滤无效规则：{total_stats['filtered']}条，不支持规则：{total_stats['unsupported']}条")
+        logger.info(f"耗时：{time.time()-start_time:.2f}秒")
+
+    def _process_file(self, file_path: Path) -> Tuple[Tuple[List[str], List[str]], Dict]:
+        """处理单个文件，返回（黑名单，白名单）及统计"""
+        black_rules: List[str] = []
+        white_rules: List[str] = []
+        stats = {'filtered': 0, 'unsupported': 0}
+        # 单文件内去重缓存
+        file_black_cache: Set[str] = set()
+        file_white_cache: Set[str] = set()
+
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # 分类处理规则
+                    rule_type, rule = self._classify_rule(line)
+                    if rule_type == 'black' and rule not in file_black_cache:
+                        file_black_cache.add(rule)
+                        black_rules.append(rule)
+                    elif rule_type == 'white' and rule not in file_white_cache:
+                        file_white_cache.add(rule)
+                        white_rules.append(rule)
+                    elif rule_type == 'filtered':
+                        stats['filtered'] += 1
+                    else:
+                        stats['unsupported'] += 1
+        except Exception as e:
+            logger.warning(f"读取{file_path.name}出错：{str(e)}")
+
+        return (black_rules, white_rules), stats
+
+    def _classify_rule(self, line: str) -> Tuple[str, str]:
+        """判断规则类型（black/white/filtered/unsupported）"""
+        # 过滤注释和无效长度
+        if self.regex.COMMENT.match(line) or not (self.len_min <= len(line) <= self.len_max):
+            return ('filtered', '')
+        # 过滤不支持的语法
+        if self.regex.UNSUPPORTED.search(line):
+            return ('unsupported', '')
+
+        # 白名单规则
+        if (self.regex.WHITE_DOMAIN.match(line) or 
+            self.regex.WHITE_ELEMENT.match(line) or 
+            self.regex.WHITE_OPTIONS.match(line)):
+            return ('white', line)
+
+        # 黑名单规则（原生）
+        if (self.regex.BLACK_DOMAIN.match(line) or 
+            self.regex.BLACK_ELEMENT.match(line) or 
+            self.regex.BLACK_WILDCARD.match(line) or 
+            self.regex.BLACK_REGEX.match(line) or 
+            self.regex.BLACK_OPTIONS.match(line)):
+            return ('black', line)
+
+        # 转换Hosts为黑名单
+        hosts_match = self.regex.HOSTS_RULE.match(line)
+        if hosts_match:
+            black_rule = f"||{hosts_match.group(2)}^"
+            return ('black', black_rule)
+
+        # 转换纯域名为黑名单
+        if self.regex.PLAIN_DOMAIN.match(line):
+            black_rule = f"||{line}^"
+            return ('black', black_rule)
+
+        # 未匹配的规则
+        return ('unsupported', '')
 
 
-def gh_endgroup():
-    """GitHub Actions日志分组结束（与前序步骤保持一致）"""
-    if os.getenv('GITHUB_ACTIONS') == 'true':
-        logger.info("::endgroup::")
-
-
-# ============== 清理历史输出文件（与步骤3/4逻辑一致） ==============
-def clean_history_outputs():
-    """清理步骤5生成的历史输出文件，避免旧文件残留"""
-    gh_group("清理历史输出文件")
-    deleted = 0
-    # 定义需清理的输出文件列表（关联FILE_CONFIG中的输出路径）
-    output_files = [
-        FILE_CONFIG["block_output"],
-        FILE_CONFIG["allow_output"]
-    ]
-    for file in output_files:
-        if file.exists() and file.is_file():
-            file.unlink(missing_ok=True)
-            deleted += 1
-    logger.info(f"清理完成：{deleted}个历史输出文件已删除")
-    gh_endgroup()
-    return deleted
-
-
-# ============== 规则处理核心逻辑 ==============
-def is_valid_abp_domain(domain: str) -> bool:
-    """验证域名合法性（符合ABP规则要求，避免无效规则）"""
-    domain = domain.rstrip('.')  # 移除可能的末尾点
-    if len(domain) > 253:  # DNS域名最大长度限制
-        return False
-    # 校验域名片段（仅允许字母、数字、-，且不允许首尾为-）
-    return all(re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$', part) 
-               for part in domain.split('.'))
-
-
-def convert_block_rule(line: str) -> str:
-    """将单行规则转换为ABP拦截规则格式"""
-    line = line.strip()
-    patterns = REGEX_PATTERNS["block"]
-
-    # 已符合ABP格式的规则直接保留
-    if patterns["abp_raw"].match(line):
-        return line
-
-    # 标准域名（转换为||domain^）
-    if (match := patterns["domain"].match(line)):
-        domain = match.group()
-        if is_valid_abp_domain(domain):
-            return f"||{domain}^"
-
-    # hosts格式（提取域名，转换为||domain^）
-    if (match := patterns["hosts"].match(line)):
-        domain = match.group(1)
-        if is_valid_abp_domain(domain):
-            return f"||{domain}^"
-
-    # 带路径的规则（补全为||domain/path^）
-    if (match := patterns["path"].match(line)):
-        path_rule = match.group()
-        # 拆分域名和路径（简单处理，假设首个/前为域名）
-        domain_part = path_rule.split('/')[0]
-        if is_valid_abp_domain(domain_part):
-            return f"||{path_rule}^"
-
-    # 未匹配的规则返回None（跳过）
-    return None
-
-
-def convert_allow_rule(line: str) -> str:
-    """将单行规则转换为ABP例外规则格式（白名单）"""
-    line = line.strip()
-    patterns = REGEX_PATTERNS["allow"]
-
-    # 已符合ABP例外格式的规则直接保留
-    if patterns["abp_raw"].match(line):
-        return line
-
-    # 标准域名（转换为@@||domain^）
-    if (match := patterns["domain"].match(line)):
-        domain = match.group()
-        if is_valid_abp_domain(domain):
-            return f"@@||{domain}^"
-
-    # 带路径的允许规则（补全为@@||domain/path^）
-    if (match := patterns["path"].match(line)):
-        path_rule = match.group()
-        domain_part = path_rule.split('/')[0]
-        if is_valid_abp_domain(domain_part):
-            return f"@@||{path_rule}^"
-
-    # 未匹配的规则返回None（跳过）
-    return None
-
-
-def process_rules(input_path: Path, rule_type: str) -> Set[str]:
-    """
-    处理输入文件：读取规则→转换为ABP格式→自动去重
-    rule_type: "block"（拦截规则）或 "allow"（允许规则）
-    """
-    if not input_path.exists():
-        logger.warning(f"输入文件不存在：{input_path}")
-        return set()
-
-    unique_rules: Set[str] = set()
-    total = 0  # 总处理行数
-    skipped = 0  # 跳过的行数（无效/不支持的规则）
-
-    with input_path.open('r', encoding='utf-8') as f:
-        for line in f:
-            total += 1
-            line_stripped = line.strip()
-
-            # 跳过注释、空行（确保输出纯净无冗余）
-            if REGEX_PATTERNS["skip"].match(line_stripped):
-                skipped += 1
-                continue
-
-            # 按规则类型转换
-            if rule_type == "block":
-                converted = convert_block_rule(line_stripped)
-            else:  # allow
-                converted = convert_allow_rule(line_stripped)
-
-            if converted:
-                unique_rules.add(converted)
-            else:
-                skipped += 1
-                logger.debug(f"跳过不支持的{rule_type}规则：{line_stripped}")
-
-    logger.info(
-        f"处理{rule_type}规则：共{total}行，有效转换{len(unique_rules)}条，跳过{skipped}条"
-    )
-    return unique_rules
-
-
-def write_abp_rules(rules: Set[str], output_path: Path):
-    """写入ABP规则文件（纯净格式，仅含有效规则，无注释/空行）"""
-    if not rules:
-        logger.warning(f"无有效规则可写入{output_path.name}")
-        return
-
-    # 排序后写入（规则按字母序排列，便于查看）
-    with output_path.open('w', encoding='utf-8') as f:
-        # 每行一条规则，最后一行无多余空行
-        f.write('\n'.join(sorted(rules)))
-
-    logger.info(f"已生成ABP规则文件：{output_path.name}（{len(rules)}条规则）")
-
-
-# ============== 主流程 ==============
-def main():
-    start_time = time.time()  # 耗时统计，与前序步骤对齐
-
-    # 先清理历史输出，再准备环境（与步骤3/4逻辑一致）
-    clean_history_outputs()
-
-    gh_group("规则转换准备")
-    # 验证目录存在性（确保临时目录和数据目录可用）
-    for dir in [TEMP_DIR, DATA_DIR]:
-        dir.mkdir(exist_ok=True, parents=True)
-    logger.info("ABP规则转换环境就绪")
-    gh_endgroup()
-
-    # 处理拦截规则（黑名单）
-    gh_group("处理拦截规则")
-    block_rules = process_rules(FILE_CONFIG["block_input"], "block")
-    write_abp_rules(block_rules, FILE_CONFIG["block_output"])
-    gh_endgroup()
-
-    # 处理允许规则（白名单）
-    gh_group("处理允许规则")
-    allow_rules = process_rules(FILE_CONFIG["allow_input"], "allow")
-    write_abp_rules(allow_rules, FILE_CONFIG["allow_output"])
-    gh_endgroup()
-
-    # 检查黑白名单冲突
-    gh_group("冲突规则检查")
-    conflicts = block_rules & allow_rules
-    if conflicts:
-        logger.warning(f"发现{len(conflicts)}条冲突规则（同时在拦截和允许列表中）")
-    else:
-        logger.info("未发现拦截与允许规则冲突")
-    gh_endgroup()
-
-    # 输出总耗时
-    elapsed = time.time() - start_time
-    logger.info(f"ABP规则转换完成 | 总耗时: {elapsed:.2f}s")
-
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    try:
+        splitter = AdblockPlusSplitter()
+        splitter.run()
+    except Exception as e:
+        logger.critical(f"运行失败：{str(e)}", exc_info=True)
+        sys.exit(1)
