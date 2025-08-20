@@ -11,8 +11,8 @@ from pathlib import Path
 # 配置参数
 GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
 TEMP_DIR = Path(GITHUB_WORKSPACE) / os.getenv('TEMP_DIR', 'tmp')
-OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "adguard_rules.txt"
-ALLOW_FILE = Path(GITHUB_WORKSPACE) / "adguard_allow.txt"
+OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "adblock_adg.txt"
+ALLOW_FILE = Path(GITHUB_WORKSPACE) / "allow_adg.txt"
 INPUT_FILE = TEMP_DIR / "adblock_merged.txt"
 
 # 预编译正则表达式
