@@ -75,19 +75,14 @@ logger = setup_logger()
 
 
 class AdblockPlusSplitter:
-    def __init__(self):
-        # 创建必要目录（适配GitHub环境权限）
-        for dir_path in [Config.TEMP_DIR, Path(Config.INPUT_DIR), Path(Config.OUTPUT_DIR)]:
-            dir_path.mkdir(parents=True, exist_ok=True)
-            # 确保GitHub环境下目录可写
-            if os.name != "nt":  # 非Windows环境（如GitHub Linux Runner）
-                os.chmod(dir_path, 0o755)
-
-        # 清理旧输出文件
-        for f in [Config.OUTPUT_BLACK, Config.OUTPUT_WHITE]:
-            if f.exists():
-                f.unlink()
-
+        def __init__(self):
+        Config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        # 清理原有输出文件
+        if Config.OUTPUT_FILE.exists():
+            Config.OUTPUT_FILE.unlink()
+        if Config.ALLOW_FILE.exists():
+            Config.ALLOW_FILE.unlink()
         self.regex = RegexPatterns()
         self.len_min, self.len_max = Config.RULE_LEN_RANGE
 
