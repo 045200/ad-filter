@@ -141,11 +141,15 @@ class ClashYamlConverter:
         self._write_yaml(Config.OUTPUT_BLOCK, new_block, "ad-filter", "REJECT")
         self._write_yaml(Config.OUTPUT_ALLOW, new_allow, "allow-list", "DIRECT")
 
-        # GitHub Actions输出参数
-        print(f"::set-output name=block_path::{Config.OUTPUT_BLOCK}")
-        print(f"::set-output name=allow_path::{Config.OUTPUT_ALLOW}")
-        print(f"::set-output name=block_count::{total_stats['block']}")
-        print(f"::set-output name=allow_count::{total_stats['allow']}")
+        # 替换已弃用的set-output，使用GITHUB_OUTPUT环境文件
+        if os.getenv('GITHUB_ACTIONS') == 'true':
+            github_output = os.getenv('GITHUB_OUTPUT')
+            if github_output:
+                with open(github_output, 'a', encoding='utf-8') as f:
+                    f.write(f"block_path={Config.OUTPUT_BLOCK}\n")
+                    f.write(f"allow_path={Config.OUTPUT_ALLOW}\n")
+                    f.write(f"block_count={total_stats['block']}\n")
+                    f.write(f"allow_count={total_stats['allow']}\n")
 
         # 总结日志
         logger.info(f"\n处理完成：\n拦截规则集：{total_stats['block']}条\n放行规则集：{total_stats['allow']}条")
