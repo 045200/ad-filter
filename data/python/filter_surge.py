@@ -17,10 +17,11 @@ from typing import Tuple, List, Set, Dict
 class Config:
     GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
     BASE_DIR = Path(GITHUB_WORKSPACE)
+    # 输入：根目录下的临时目录
     TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
-    OUTPUT_DIR = BASE_DIR / os.getenv('OUTPUT_DIR', 'output')
-    OUTPUT_FILE = OUTPUT_DIR / "adblock_surge.conf"  # 拦截规则
-    ALLOW_FILE = OUTPUT_DIR / "allow_surge.conf"     # 允许规则
+    # 输出：直接在根目录
+    OUTPUT_FILE = BASE_DIR / "adblock_surge.conf"  # 拦截规则
+    ALLOW_FILE = BASE_DIR / "allow_surge.conf"     # 允许规则
     MAX_WORKERS = min(os.cpu_count() or 4, 4)
     RULE_LEN_RANGE = (3, 4096)
     MAX_FILESIZE_MB = 50
@@ -41,12 +42,12 @@ def setup_logger():
     logger = logging.getLogger('SurgeMerger')
     logger.setLevel(logging.INFO)
     handler = logging.StreamHandler(sys.stdout)
-    
+
     if os.getenv('GITHUB_ACTIONS') == 'true':
         formatter = logging.Formatter('%(message)s')
     else:
         formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
-    
+
     handler.setFormatter(formatter)
     logger.handlers = [handler]
     return logger
@@ -77,9 +78,9 @@ def check_file_size(file_path: Path) -> bool:
 
 class SurgeMerger:
     def __init__(self):
+        # 确保临时目录存在（输入目录）
         Config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
-        Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        # 清理原有输出
+        # 清理根目录下的旧输出文件
         if Config.OUTPUT_FILE.exists():
             Config.OUTPUT_FILE.unlink()
         if Config.ALLOW_FILE.exists():
@@ -112,25 +113,25 @@ class SurgeMerger:
 
         with ProcessPoolExecutor(max_workers=Config.MAX_WORKERS) as executor:
             futures = {executor.submit(self._process_file, file): file for file in input_files}
-            
+
             for future in as_completed(futures):
                 file = futures[future]
                 try:
                     block, allow, stats = future.result()
                     new_block = [r for r in block if r not in block_cache]
                     new_allow = [r for r in allow if r not in allow_cache]
-                    
+
                     all_block.extend(new_block)
                     all_allow.extend(new_allow)
                     block_cache.update(new_block)
                     allow_cache.update(new_allow)
-                    
+
                     total_stats = self._merge_stats(total_stats, stats)
                     logger.info(f"处理完成 {file.name}：有效规则{stats['valid']}条")
                 except Exception as e:
                     logger.error(f"处理{file.name}失败: {str(e)}")
 
-        # 写入纯净Surge规则（无头部）
+        # 写入纯净Surge规则（无头部）到根目录
         with open(Config.OUTPUT_FILE, 'w', encoding='utf-8') as f:
             f.write('\n'.join(all_block) + '\n')
 
@@ -141,9 +142,13 @@ class SurgeMerger:
         logger.info(f"\n处理完成：拦截规则{len(all_block)}条，允许规则{len(all_allow)}条，耗时{elapsed:.2f}秒")
         gh_endgroup()
 
+        # 输出GitHub Actions变量（使用环境文件）
         if os.getenv('GITHUB_ACTIONS') == 'true':
-            logger.info(f"::set-output name=surge_file::{Config.OUTPUT_FILE}")
-            logger.info(f"::set-output name=surge_allow_file::{Config.ALLOW_FILE}")
+            github_output = os.getenv('GITHUB_OUTPUT')
+            if github_output:
+                with open(github_output, 'a') as f:
+                    f.write(f"surge_file={Config.OUTPUT_FILE}\n")
+                    f.write(f"surge_allow_file={Config.ALLOW_FILE}\n")
 
     def _process_file(self, file_path: Path) -> Tuple[List[str], List[str], Dict]:
         if not check_file_size(file_path):
