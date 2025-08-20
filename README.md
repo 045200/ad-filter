@@ -210,5 +210,3 @@
 <div align="center">
   <a href="https://github.com/045200/ad-filter/issues">问题反馈</a> | <a href="https://github.com/045200/ad-filter/discussions">讨论交流</a>
 </div>
-
-内容由 AI 生成
