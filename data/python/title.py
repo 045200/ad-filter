@@ -93,11 +93,9 @@ def process_file(path: Path, ab_info: Dict[str, str], is_allow: bool, timestamp:
             # 区分主规则和白名单的标题、描述、模板
             if is_allow:
                 title = ab_info.get("title_allow", f"{ab_info['name']} 白名单")
-                description = ab_info.get("desc_allow", f"{ab_info['name']}专用白名单规则")
                 header_template = ALLOW_HEADER
             else:
                 title = ab_info.get("title_rule", f"{ab_info['name']} 拦截规则")
-                description = ab_info.get("desc_rule", f"适用于{ab_info['name']}的拦截规则")
                 header_template = ADBLOCK_HEADER
 
             # 生成头信息并写入
