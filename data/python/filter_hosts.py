@@ -1,168 +1,210 @@
 #!/usr/bin/env python3
-"""
-Hosts规则提取与转换器（增强版）
-功能：1. 提取中间文件中的原始Hosts规则 2. 转换其他拦截器规则为Hosts格式
-输入: adblock_intermediate.txt
-输出: hosts.txt（纯规则，无头部）
-"""
+# -*- coding: utf-8 -*-
+
+"""Hosts规则转换工具（无头部信息）"""
 
 import os
+import sys
+import glob
 import re
 import logging
+import time
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from typing import Tuple, List, Set, Dict
 
-# 配置
-INPUT_FILE = "adblock_intermediate.txt"
-OUTPUT_FILE = "hosts.txt"
-TARGET_IP = "0.0.0.0"  # 默认黑洞IP，原始Hosts中的IP会被保留
 
-# 日志配置
+class Config:
+    GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
+    BASE_DIR = Path(GITHUB_WORKSPACE)
+    TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
+    OUTPUT_DIR = BASE_DIR / os.getenv('OUTPUT_DIR', 'output')
+    OUTPUT_FILE = OUTPUT_DIR / "hosts.txt"  # hosts格式拦截规则
+    MAX_WORKERS = min(os.cpu_count() or 4, 4)
+    RULE_LEN_RANGE = (3, 255)
+    MAX_FILESIZE_MB = 50
+    INPUT_PATTERNS = ["*.txt", "*.list"]
+    HOSTS_IP = "0.0.0.0"  # 统一使用0.0.0.0作为拦截IP
+
+
+class RegexPatterns:
+    ADBLOCK_DOMAIN = re.compile(r'^\|\|([\w.-]+)\^?$')
+    HOSTS_RULE = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')
+    PLAIN_DOMAIN = re.compile(r'^[\w.-]+\.[a-z]{2,}$')
+    COMMENT = re.compile(r'^[!#]')
+    EMPTY_LINE = re.compile(r'^\s*$')
+
+
 def setup_logger():
-    logger = logging.getLogger()
+    logger = logging.getLogger('HostsMerger')
     logger.setLevel(logging.INFO)
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter('[%(levelname)s] %(message)s'))
-    logger.addHandler(handler)
+    handler = logging.StreamHandler(sys.stdout)
+    
+    if os.getenv('GITHUB_ACTIONS') == 'true':
+        formatter = logging.Formatter('%(message)s')
+    else:
+        formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
+    
+    handler.setFormatter(formatter)
+    logger.handlers = [handler]
     return logger
 
 logger = setup_logger()
 
-# 无效域名/IP模式
-INVALID_DOMAIN_PATTERNS = [
-    r'^localhost$', r'^127\.0\.0\.1$', r'^::1$',
-    r'^(\w+\.)?local$', r'^(\w+\.)?lan$',
-    r'^[\*]+$',  # 纯通配符
-]
 
-# 有效IP地址正则（用于匹配原始Hosts中的IP）
-IP_PATTERN = r'^(?:\d{1,3}\.){3}\d{1,3}$|^[0-9a-fA-F:]+$'  # IPv4/IPv6
+def gh_group(name: str):
+    if os.getenv('GITHUB_ACTIONS') == 'true':
+        logger.info(f"::group::{name}")
 
-def is_valid_domain(domain: str) -> bool:
-    """验证域名有效性"""
-    for pattern in INVALID_DOMAIN_PATTERNS:
-        if re.match(pattern, domain, re.IGNORECASE):
-            return False
-    # 基础域名格式（支持多级域名）
-    return re.match(r'^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$', domain) is not None
+def gh_endgroup():
+    if os.getenv('GITHUB_ACTIONS') == 'true':
+        logger.info(f"::endgroup::")
 
-def is_valid_ip(ip: str) -> bool:
-    """验证IP地址有效性（用于原始Hosts规则）"""
-    return re.match(IP_PATTERN, ip) is not None
 
-def extract_raw_hosts(line: str) -> tuple:
-    """提取原始Hosts格式规则（IP 域名）"""
-    line = line.strip()
-    # 跳过注释（#开头）和空行
-    if not line or line.startswith('#'):
-        return None
-    # 匹配 Hosts 格式：IP + 空格 + 域名（支持多空格）
-    match = re.match(r'^(\S+)\s+(\S+)$', line)
-    if not match:
-        return None
-    ip, domain = match.groups()
-    # 验证IP和域名
-    if is_valid_ip(ip) and is_valid_domain(domain):
-        return (ip, domain)
-    return None
-
-def convert_to_hosts(line: str) -> list:
-    """将其他拦截器规则转换为Hosts兼容的域名列表"""
-    # 跳过白名单、元素隐藏、注释
-    if not line or line.startswith(('!', '@@')) or '##' in line or '#@#' in line or '+js' in line:
-        return []
-    
-    # 补充更多可转换的规则格式
-    domain_patterns = [
-        # AdBlock系列：||example.com、|example.com、*.example.com
-        r'\|{1,2}([a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)',
-        r'\*\.([a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)',
-        
-        # 修饰符中的域名：domain=example.com、domain=*.example.com
-        r'domain=(\*?[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)',
-        
-        # Clash/Surge/Pi-hole：直接域名或通配符域名
-        r'^([a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)$',
-        r'^@?([a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)$',  # 含@前缀的规则
-        
-        # URL中的域名：http://example.com/... 或 https://...
-        r'https?://([a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)',
-        
-        # 路径中的域名：/example.com/...
-        r'/([a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)/'
-    ]
-    
-    domains = []
-    for pattern in domain_patterns:
-        matches = re.findall(pattern, line)
-        for match in matches:
-            # 清理通配符和特殊字符
-            domain = match.lstrip('*.@').split('/')[0].split('^')[0].strip()
-            if is_valid_domain(domain) and domain not in domains:
-                domains.append(domain)
-    return domains
-
-def process_hosts_file(input_path: Path, output_path: Path):
-    """处理文件：提取原始Hosts + 转换其他规则"""
-    if not input_path.exists():
-        logger.warning(f"输入文件不存在: {input_path}")
-        return 0, 0, 0, 0
-
-    total_lines = 0
-    raw_hosts_count = 0  # 提取的原始Hosts数量
-    converted_count = 0  # 转换的规则数量
-    duplicates = 0
-    seen_entries = set()  # 去重：存储 "IP 域名" 字符串
-
+def check_file_size(file_path: Path) -> bool:
     try:
-        with input_path.open('r', encoding='utf-8') as infile, \
-             output_path.open('w', encoding='utf-8') as outfile:
-
-            for line in infile:
-                total_lines += 1
-                line = line.strip()
-
-                # 第一步：尝试提取原始Hosts规则
-                raw_hosts = extract_raw_hosts(line)
-                if raw_hosts:
-                    ip, domain = raw_hosts
-                    entry = f"{ip} {domain}"
-                    if entry in seen_entries:
-                        duplicates += 1
-                        continue
-                    outfile.write(f"{entry}\n")
-                    seen_entries.add(entry)
-                    raw_hosts_count += 1
-                    continue  # 提取到原始Hosts后跳过转换
-
-                # 第二步：转换其他拦截器规则为Hosts
-                domains = convert_to_hosts(line)
-                for domain in domains:
-                    # 转换的规则使用默认TARGET_IP
-                    entry = f"{TARGET_IP} {domain}"
-                    if entry in seen_entries:
-                        duplicates += 1
-                        continue
-                    outfile.write(f"{entry}\n")
-                    seen_entries.add(entry)
-                    converted_count += 1
-
+        size_mb = file_path.stat().st_size / (1024 * 1024)
+        if size_mb > Config.MAX_FILESIZE_MB:
+            logger.warning(f"跳过大文件 {file_path.name}（{size_mb:.1f}MB）")
+            return False
+        return True
     except Exception as e:
-        logger.error(f"处理文件失败: {str(e)}")
+        logger.error(f"获取文件大小失败 {file_path.name}: {str(e)}")
+        return False
 
-    return total_lines, raw_hosts_count, converted_count, duplicates
 
-def main():
-    repo_root = Path(os.getenv('GITHUB_WORKSPACE', os.getcwd()))
-    input_path = repo_root / INPUT_FILE
-    output_path = repo_root / OUTPUT_FILE
+class HostsMerger:
+    def __init__(self):
+        Config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        # 清理原有输出
+        if Config.OUTPUT_FILE.exists():
+            Config.OUTPUT_FILE.unlink()
+        self.regex = RegexPatterns()
+        self.len_min, self.len_max = Config.RULE_LEN_RANGE
 
-    total, raw, converted, duplicates = process_hosts_file(input_path, output_path)
-    logger.info(
-        f"处理完成: 总规则 {total} 条, "
-        f"提取原始Hosts {raw} 条, "
-        f"转换规则 {converted} 条, "
-        f"跳过重复 {duplicates} 条"
-    )
+    def run(self):
+        start_time = time.time()
+        gh_group("===== Hosts规则转换 =====")
+        logger.info(f"输入目录: {Config.TEMP_DIR}")
+        logger.info(f"输出文件: {Config.OUTPUT_FILE}（IP: {Config.HOSTS_IP}）")
 
-if __name__ == "__main__":
-    main()
+        input_files = []
+        for pattern in Config.INPUT_PATTERNS:
+            input_files.extend([Path(p) for p in glob.glob(str(Config.TEMP_DIR / pattern))])
+        if not input_files:
+            logger.error("未找到输入文件，退出")
+            gh_endgroup()
+            return
+
+        logger.info(f"发现{len(input_files)}个文件，开始处理...")
+
+        all_hosts: List[str] = []
+        hosts_cache: Set[str] = set()  # 用域名去重（忽略IP差异）
+        total_stats = self._empty_stats()
+
+        with ProcessPoolExecutor(max_workers=Config.MAX_WORKERS) as executor:
+            futures = {executor.submit(self._process_file, file): file for file in input_files}
+            
+            for future in as_completed(futures):
+                file = futures[future]
+                try:
+                    hosts, stats = future.result()
+                    # 去重逻辑：提取域名部分判断
+                    new_hosts = []
+                    for host_line in hosts:
+                        domain = host_line.split()[1]
+                        if domain not in hosts_cache:
+                            new_hosts.append(host_line)
+                            hosts_cache.add(domain)
+                    
+                    all_hosts.extend(new_hosts)
+                    total_stats = self._merge_stats(total_stats, stats)
+                    logger.info(f"处理完成 {file.name}：有效规则{stats['valid']}条")
+                except Exception as e:
+                    logger.error(f"处理{file.name}失败: {str(e)}")
+
+        # 写入纯净hosts规则（无头部，每行格式：IP 域名）
+        with open(Config.OUTPUT_FILE, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(all_hosts) + '\n')
+
+        elapsed = time.time() - start_time
+        logger.info(f"\n处理完成：共{len(all_hosts)}条hosts规则，耗时{elapsed:.2f}秒")
+        gh_endgroup()
+
+        if os.getenv('GITHUB_ACTIONS') == 'true':
+            logger.info(f"::set-output name=hosts_file::{Config.OUTPUT_FILE}")
+
+    def _process_file(self, file_path: Path) -> Tuple[List[str], Dict]:
+        if not check_file_size(file_path):
+            return [], self._empty_stats()
+
+        stats = self._empty_stats()
+        local_hosts: List[str] = []
+        local_cache: Set[str] = set()  # 按域名去重
+
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                for line in f:
+                    line = line.strip()
+                    host_line = self._process_line(line, stats)
+                    if host_line:
+                        domain = host_line.split()[1]
+                        if domain not in local_cache:
+                            local_hosts.append(host_line)
+                            local_cache.add(domain)
+        except Exception as e:
+            logger.error(f"读取{file_path.name}出错: {str(e)}")
+
+        return local_hosts, stats
+
+    def _process_line(self, line: str, stats: Dict) -> str:
+        stats['total'] += 1
+
+        if self.regex.EMPTY_LINE.match(line) or self.regex.COMMENT.match(line):
+            stats['filtered'] += 1
+            return None
+
+        # 转换Adblock域名规则为hosts
+        adblock_match = self.regex.ADBLOCK_DOMAIN.match(line)
+        if adblock_match:
+            domain = adblock_match.group(1)
+            if self._is_valid_domain(domain):
+                return f"{Config.HOSTS_IP} {domain}"
+
+        # 转换纯域名为hosts
+        if self.regex.PLAIN_DOMAIN.match(line):
+            if self._is_valid_domain(line):
+                return f"{Config.HOSTS_IP} {line}"
+
+        # 标准化现有hosts规则（统一IP）
+        hosts_match = self.regex.HOSTS_RULE.match(line)
+        if hosts_match:
+            domain = hosts_match.group(2)
+            if self._is_valid_domain(domain):
+                return f"{Config.HOSTS_IP} {domain}"
+
+        stats['unsupported'] += 1
+        return None
+
+    def _is_valid_domain(self, domain: str) -> bool:
+        return self.len_min <= len(domain) <= self.len_max
+
+    @staticmethod
+    def _empty_stats() -> Dict:
+        return {'total': 0, 'valid': 0, 'filtered': 0, 'unsupported': 0}
+
+    @staticmethod
+    def _merge_stats(total: Dict, new: Dict) -> Dict:
+        for key in total:
+            total[key] += new[key]
+        return total
+
+
+if __name__ == '__main__':
+    try:
+        merger = HostsMerger()
+        merger.run()
+    except Exception as e:
+        logger.critical(f"运行失败: {str(e)}", exc_info=not os.getenv('GITHUB_ACTIONS'))
+        sys.exit(1)
