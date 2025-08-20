@@ -4,15 +4,14 @@
 import os
 import sys
 import re
-import logging
 import time
 import hashlib
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Tuple, List, Set, Dict, Generator
+from typing import List, Generator
 
 
-# 配置参数（与下载脚本共享临时目录）
+# 配置参数
 GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
 BASE_DIR = Path(GITHUB_WORKSPACE)
 TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
@@ -21,8 +20,7 @@ OUTPUT_FILE = TEMP_DIR / "adblock_merged.txt"
 MAX_WORKERS = 4
 CHUNK_SIZE = 10000
 RULE_LEN_RANGE = (4, 253)
-MAX_FILESIZE_MB = 100
-INPUT_PATTERNS = ["adblock*.txt", "allow*.txt"]  # 仅处理下载脚本生成的规则文件
+INPUT_PATTERNS = ["adblock*.txt", "allow*.txt"]
 
 DOMAIN_BLACKLIST = {
     'localhost', 'localdomain', 'example.com', 'example.org', 
@@ -42,15 +40,6 @@ ADBLOCK_WHITELIST = re.compile(r'^@@\|\|([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[
 COMMENT = re.compile(r'^[!#]')
 EMPTY_LINE = re.compile(r'^\s*$')
 IP_ADDRESS = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
-
-
-# 日志配置
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(message)s' if os.getenv('GITHUB_ACTIONS') == 'true' else '[%(levelname)s] %(message)s',
-    stream=sys.stdout
-)
-logger = logging.getLogger('AdblockMerger')
 
 
 def file_chunk_reader(file_path: Path, chunk_size: int = CHUNK_SIZE) -> Generator[List[str], None, None]:
@@ -74,14 +63,14 @@ class AdblockMerger:
         TEMP_DIR.mkdir(parents=True, exist_ok=True)
         self.len_min, self.len_max = RULE_LEN_RANGE
         self.input_files = []
-        self.file_hashes = set()  # 用于文件去重
+        self.file_hashes = set()
 
     def run(self):
         start_time = time.time()
-        self._discover_input_files()  # 只加载adblockXX.txt和allowXX.txt
+        self._discover_input_files()
 
         if not self.input_files:
-            logger.error("未找到有效规则文件（adblock*.txt / allow*.txt）")
+            print("未找到有效规则文件")
             return
 
         all_rules, _ = self._process_files_parallel()
@@ -89,102 +78,82 @@ class AdblockMerger:
         self._github_actions_output()
 
         elapsed = time.time() - start_time
-        logger.info(f"合并完成 | 最终规则数: {len(all_rules)} | 耗时: {elapsed:.2f}s")
+        print(f"合并完成 | 最终规则数: {len(all_rules)} | 耗时: {elapsed:.2f}s")
 
     def _discover_input_files(self):
-        """仅加载下载脚本生成的adblockXX.txt和allowXX.txt"""
         for pattern in INPUT_PATTERNS:
             for file_path in TEMP_DIR.glob(pattern):
                 if file_path == OUTPUT_FILE:
                     continue
 
-                # 计算文件哈希去重
                 file_hash = self._calculate_file_hash(file_path)
                 if file_hash in self.file_hashes:
                     continue
 
                 self.file_hashes.add(file_hash)
                 self.input_files.append(file_path)
-        logger.info(f"发现规则文件: {len(self.input_files)}个")
+        print(f"发现规则文件: {len(self.input_files)}个")
 
     def _calculate_file_hash(self, file_path: Path) -> str:
         try:
             hasher = hashlib.md5()
             with open(file_path, 'rb') as f:
-                hasher.update(f.read(1024))  # 读取前1KB内容
-                hasher.update(str(file_path.stat().st_size).encode())  # 加入文件大小
+                hasher.update(f.read(1024))
+                hasher.update(str(file_path.stat().st_size).encode())
             return hasher.hexdigest()
         except Exception:
             return str(file_path)
 
-    def _process_files_parallel(self) -> Tuple[List[str], Dict]:
+    def _process_files_parallel(self):
         all_rules = []
-        global_cache = set()  # 全局去重缓存
+        global_cache = set()
 
         with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
             future_to_file = {executor.submit(self._process_file, fp): fp for fp in self.input_files}
-            
+
             for future in as_completed(future_to_file):
                 try:
                     rules, _ = future.result()
-                    # 全局去重
                     new_rules = []
                     for rule in rules:
                         rule_hash = efficient_hash(rule)
                         if rule_hash not in global_cache:
                             new_rules.append(rule)
                             global_cache.add(rule_hash)
-                    
+
                     all_rules.extend(new_rules)
 
-                    # 内存控制：超过阈值时写入临时文件
                     if len(all_rules) >= MAX_RULES_IN_MEMORY:
                         all_rules = self._merge_temp_rules(all_rules)
-                except Exception as e:
-                    logger.warning(f"文件处理失败: {e}")
+                except Exception:
+                    pass
 
         return all_rules, {}
 
-    def _process_file(self, file_path: Path) -> Tuple[List[str], Dict]:
-        """处理单个规则文件，返回有效规则"""
+    def _process_file(self, file_path: Path):
         rules = []
-        try:
-            # 过滤过大文件
-            if file_path.stat().st_size > MAX_FILESIZE_MB * 1024 * 1024:
-                return [], {}
-        except OSError:
-            return [], {}
-
-        # 分块处理文件
         for chunk in file_chunk_reader(file_path):
             for line in chunk:
-                # 过滤空行和注释
                 if not line or EMPTY_LINE.match(line) or COMMENT.match(line):
                     continue
-                # 长度过滤
                 if not (self.len_min <= len(line) <= self.len_max):
                     continue
-                # 转换为标准化规则
                 rule = self._to_adblock(line)
                 if rule:
                     rules.append(rule)
         return rules, {}
 
     def _to_adblock(self, line: str) -> str:
-        """转换为标准化Adblock规则"""
-        # 处理Hosts规则（如0.0.0.0 example.com）
         hosts_match = HOSTS_RULE.match(line)
         if hosts_match:
             domain = hosts_match.group(2)
             if self._is_valid_domain(domain):
                 return f"||{domain}^"
 
-        # 处理纯域名（如example.com）
         elif PLAIN_DOMAIN.match(line):
             if self._is_valid_domain(line):
                 return f"||{line}^"
 
-        # 处理Adblock格式规则（如||example.com^ 或 @@||example.com^）
         elif ADBLOCK_DOMAIN.match(line) or ADBLOCK_WHITELIST.match(line):
             domain_match = re.search(r'\|\|([a-z0-9.-]+)\^?', line, re.IGNORECASE)
             if domain_match and self._is_valid_domain(domain_match.group(1)):
@@ -193,7 +162,6 @@ class AdblockMerger:
         return ""
 
     def _is_valid_domain(self, domain: str) -> bool:
-        """验证域名有效性"""
         if domain in DOMAIN_BLACKLIST or IP_ADDRESS.match(domain):
             return False
         if len(domain) < 4 or len(domain) > 253:
@@ -203,27 +171,23 @@ class AdblockMerger:
         return True
 
     def _write_output(self, rules: List[str]):
-        """写入最终合并结果"""
         with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
             f.write('\n'.join(rules) + '\n')
-        logger.info(f"已写入合并规则: {OUTPUT_FILE}（{len(rules)}条）")
+        print(f"已写入合并规则: {OUTPUT_FILE}")
 
     def _merge_temp_rules(self, rules: List[str]) -> List[str]:
-        """内存超限时分批写入临时文件"""
         temp_file = TEMP_DIR / f"temp_{int(time.time())}.txt"
         with open(temp_file, 'w', encoding='utf-8') as f:
             f.write('\n'.join(rules) + '\n')
-        
-        # 合并所有临时文件
+
         merged = []
         for tf in TEMP_DIR.glob("temp_*.txt"):
             with open(tf, 'r', encoding='utf-8') as f:
                 merged.extend(f.read().splitlines())
-            tf.unlink()  # 删除已合并的临时文件
+            tf.unlink()
         return merged
 
     def _github_actions_output(self):
-        """输出GitHub Actions变量"""
         if github_output := os.getenv('GITHUB_OUTPUT'):
             with open(github_output, 'a') as f:
                 f.write(f"merged_file={OUTPUT_FILE}\n")
@@ -234,5 +198,5 @@ if __name__ == '__main__':
         AdblockMerger().run()
         sys.exit(0)
     except Exception as e:
-        logger.critical(f"执行失败: {e}")
+        print(f"执行失败: {e}")
         sys.exit(1)
