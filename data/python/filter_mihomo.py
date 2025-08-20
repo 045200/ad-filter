@@ -26,7 +26,7 @@ class Config:
     GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
     # 输入文件（位于仓库根目录）
     INPUT_BLOCK_FILE = os.getenv("BLOCK_INPUT", "clash_adblock.yaml")
-    INPUT_WHITELIST_FILE = os.getenv("WHITELIST_INPUT", "clash_allow.yaml")
+    INPUT_WHITELIST_FILE = os.getenv("WHITELIST_INPUT", "adblock_clash.yaml")
     # 输出文件（位于仓库根目录）
     OUTPUT_FILE = os.getenv("ADBLOCK_OUTPUT", "adb.mrs")
     COMPILER_PATH = os.getenv("COMPILER_PATH", "./data/mihomo-tool")
