@@ -3,8 +3,8 @@
 
 """
 AdBlock 规则转换器（增强版，含白名单过滤）
-输入: 步骤一生成的 Clash 拦截规则(clash_adblock.yaml)和放行规则(clash_allow.yaml)
-输出: 经过白名单过滤的 adb.mrs
+输入: 步骤一生成的 Clash 拦截规则(clash_adblock.yaml)和放行规则(clash_allow.yaml)（位于仓库根目录）
+输出: 经过白名单过滤的 adb.mrs（位于仓库根目录）
 适配GitHub Actions环境，支持规则过滤与错误处理
 """
 
@@ -22,11 +22,12 @@ from typing import List, Dict, Set
 
 
 class Config:
-    """配置管理（含前置验证与步骤一文件关联）"""
+    """配置管理（输入输出均在仓库根目录）"""
     GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
-    # 关联步骤一的输出文件（拦截规则和白名单/放行规则）
+    # 输入文件（位于仓库根目录）
     INPUT_BLOCK_FILE = os.getenv("BLOCK_INPUT", "clash_adblock.yaml")
     INPUT_WHITELIST_FILE = os.getenv("WHITELIST_INPUT", "clash_allow.yaml")
+    # 输出文件（位于仓库根目录）
     OUTPUT_FILE = os.getenv("ADBLOCK_OUTPUT", "adb.mrs")
     COMPILER_PATH = os.getenv("COMPILER_PATH", "./data/mihomo-tool")
     MAX_DOMAIN_LENGTH = 253  # RFC 1035 限制
@@ -48,7 +49,7 @@ class Config:
 
     @property
     def block_path(self) -> Path:
-        """步骤一生成的拦截规则文件路径"""
+        """步骤一生成的拦截规则文件路径（仓库根目录）"""
         path = Path(self.GITHUB_WORKSPACE) / self.INPUT_BLOCK_FILE
         if not path.exists():
             logger.critical(f"拦截规则文件不存在（步骤一生成失败？）: {path}")
@@ -57,11 +58,12 @@ class Config:
 
     @property
     def whitelist_path(self) -> Path:
-        """步骤一生成的白名单（放行规则）文件路径"""
+        """步骤一生成的白名单（放行规则）文件路径（仓库根目录）"""
         return Path(self.GITHUB_WORKSPACE) / self.INPUT_WHITELIST_FILE
 
     @property
     def output_path(self) -> Path:
+        """输出文件路径（仓库根目录）"""
         return Path(self.GITHUB_WORKSPACE) / self.OUTPUT_FILE
 
     @property
@@ -70,7 +72,7 @@ class Config:
 
 
 class DNSValidator:
-    """DNS格式验证工具（复用原有逻辑）"""
+    """DNS格式验证工具"""
     @staticmethod
     def is_valid_domain(domain: str) -> bool:
         domain = domain.strip().lower()
@@ -135,7 +137,7 @@ class AdblockConverter:
         self.whitelist_domains: Set[str] = set()  # 白名单域名集合
 
     def parse_input(self) -> List[Dict[str, str]]:
-        """解析步骤一生成的拦截规则文件"""
+        """解析步骤一生成的拦截规则文件（仓库根目录）"""
         logger.info(f"解析拦截规则文件: {self.config.block_path}")
         try:
             with self.config.block_path.open('r', encoding='utf-8') as f:
@@ -182,7 +184,7 @@ class AdblockConverter:
             return []
 
     def _load_whitelist(self) -> None:
-        """加载步骤一生成的白名单（放行规则）"""
+        """加载步骤一生成的白名单（放行规则，仓库根目录）"""
         if not self.config.whitelist_path.exists():
             logger.warning("白名单文件不存在，将跳过过滤")
             return
@@ -236,7 +238,7 @@ class AdblockConverter:
         return '\n'.join(yaml_lines)
 
     def compile_to_mrs(self, yaml_content: str) -> bool:
-        """编译为MRS格式"""
+        """编译为MRS格式（输出到仓库根目录）"""
         if not yaml_content:
             # 生成空文件避免下游错误
             with self.config.output_path.open('w', encoding='utf-8') as f:
@@ -296,7 +298,7 @@ class AdblockConverter:
 
     def run(self) -> int:
         """执行完整流程：解析拦截规则 → 加载白名单 → 过滤 → 编译"""
-        # 1. 解析步骤一的拦截规则
+        # 1. 解析步骤一的拦截规则（仓库根目录）
         valid_block_rules = self.parse_input()
         if not valid_block_rules:
             logger.error("无有效拦截规则，终止流程")
@@ -306,15 +308,20 @@ class AdblockConverter:
         self._load_whitelist()
         final_rules = self._filter_with_whitelist(valid_block_rules)
 
-        # 3. 生成编译内容并编译
+        # 3. 生成编译内容并编译（输出到仓库根目录）
         yaml_content = self.generate_compile_yaml(final_rules)
         if not self.compile_to_mrs(yaml_content):
             return 1
 
-        # 输出GitHub Action变量
-        print(f"::set-output name=mrs_path::{self.config.output_path}")
-        print(f"::set-output name=final_rule_count::{len(final_rules)}")
-        print(f"::set-output name=filtered_count::{self.stats['filtered_count']}")
+        # 输出GitHub Action变量（使用环境文件）
+        github_output = os.getenv('GITHUB_OUTPUT')
+        if github_output:
+            with open(github_output, 'a') as f:
+                f.write(f"mrs_path={self.config.output_path}\n")
+                f.write(f"final_rule_count={len(final_rules)}\n")
+                f.write(f"filtered_count={self.stats['filtered_count']}\n")
+        else:
+            logger.warning("未检测到GITHUB_OUTPUT环境变量，跳过变量输出")
 
         logger.info("步骤二转换流程完成")
         return 0
