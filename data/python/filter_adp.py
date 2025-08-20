@@ -15,20 +15,16 @@ from typing import Tuple, List, Set, Dict
 
 
 class Config:
-    # 优先读取GitHub环境变量，适配GitHub Actions
-    GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", "")  # GitHub工作目录
-    RUNNER_TEMP = os.getenv("RUNNER_TEMP", os.getenv("TEMP_DIR", "tmp"))  # Runner临时目录
-    INPUT_DIR = os.getenv("INPUT_DIR", f"{GITHUB_WORKSPACE}/input" if GITHUB_WORKSPACE else "input")  # 输入目录（支持GitHub Actions输入参数）
-    OUTPUT_DIR = os.getenv("OUTPUT_DIR", f"{GITHUB_WORKSPACE}/output" if GITHUB_WORKSPACE else "output")  # 输出目录
-
-    # 输出文件路径（基于输出目录）
-    OUTPUT_BLACK = Path(OUTPUT_DIR) / "adblock_adp.txt"
-    OUTPUT_WHITE = Path(OUTPUT_DIR) / "allow_adp.txt"
-    TEMP_DIR = Path(RUNNER_TEMP) / "adblock_processing"  # 临时处理目录（使用Runner临时目录）
-
-    MAX_WORKERS = int(os.getenv("MAX_WORKERS", str(min(os.cpu_count() or 4, 4))))  # 支持环境变量配置并发数
+    GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
+    BASE_DIR = Path(GITHUB_WORKSPACE)
+    TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
+    # 移除OUTPUT_DIR，直接在根目录输出文件
+    OUTPUT_FILE = BASE_DIR / "adblock_adp.txt"  # 拦截规则（根目录）
+    ALLOW_FILE = BASE_DIR / "allow_adp.txt"     # 白名单规则（根目录）
+    MAX_WORKERS = min(os.cpu_count() or 4, 4)
     RULE_LEN_RANGE = (3, 4096)
-    INPUT_PATTERNS = os.getenv("INPUT_PATTERNS", "*.txt,*.list").split(",")  # 支持环境变量配置输入文件格式
+    MAX_FILESIZE_MB = 50
+    INPUT_PATTERNS = ["*.txt", "*.list"]
 
 
 class RegexPatterns:
