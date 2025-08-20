@@ -17,10 +17,11 @@ from typing import Tuple, List, Set, Dict
 class Config:
     GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
     BASE_DIR = Path(GITHUB_WORKSPACE)
+    # 输入：根目录下的临时目录
     TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
-    OUTPUT_DIR = BASE_DIR / os.getenv('OUTPUT_DIR', 'output')
-    OUTPUT_FILE = OUTPUT_DIR / "adblock_pihole.txt"  # 拦截域名
-    ALLOW_FILE = OUTPUT_DIR / "allow_pihole.txt"     # 允许域名
+    # 输出：直接在根目录
+    OUTPUT_FILE = BASE_DIR / "adblock_pihole.txt"  # 拦截域名
+    ALLOW_FILE = BASE_DIR / "allow_pihole.txt"     # 允许域名
     MAX_WORKERS = min(os.cpu_count() or 4, 4)
     RULE_LEN_RANGE = (3, 255)  # Pi-hole域名长度限制
     MAX_FILESIZE_MB = 50
@@ -40,12 +41,12 @@ def setup_logger():
     logger = logging.getLogger('PiholeMerger')
     logger.setLevel(logging.INFO)
     handler = logging.StreamHandler(sys.stdout)
-    
+
     if os.getenv('GITHUB_ACTIONS') == 'true':
         formatter = logging.Formatter('%(message)s')
     else:
         formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
-    
+
     handler.setFormatter(formatter)
     logger.handlers = [handler]
     return logger
@@ -76,9 +77,9 @@ def check_file_size(file_path: Path) -> bool:
 
 class PiholeMerger:
     def __init__(self):
+        # 确保临时目录存在（输入目录）
         Config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
-        Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        # 清理原有输出
+        # 清理根目录下的旧输出文件
         if Config.OUTPUT_FILE.exists():
             Config.OUTPUT_FILE.unlink()
         if Config.ALLOW_FILE.exists():
@@ -111,25 +112,25 @@ class PiholeMerger:
 
         with ProcessPoolExecutor(max_workers=Config.MAX_WORKERS) as executor:
             futures = {executor.submit(self._process_file, file): file for file in input_files}
-            
+
             for future in as_completed(futures):
                 file = futures[future]
                 try:
                     block, allow, stats = future.result()
                     new_block = [d for d in block if d not in block_cache]
                     new_allow = [d for d in allow if d not in allow_cache]
-                    
+
                     all_block.extend(new_block)
                     all_allow.extend(new_allow)
                     block_cache.update(new_block)
                     allow_cache.update(new_allow)
-                    
+
                     total_stats = self._merge_stats(total_stats, stats)
                     logger.info(f"处理完成 {file.name}：有效域名{stats['valid']}个")
                 except Exception as e:
                     logger.error(f"处理{file.name}失败: {str(e)}")
 
-        # 写入纯净域名（无头部，每行一个域名）
+        # 写入纯净域名（无头部，每行一个域名）到根目录
         with open(Config.OUTPUT_FILE, 'w', encoding='utf-8') as f:
             f.write('\n'.join(all_block) + '\n')
 
@@ -140,9 +141,13 @@ class PiholeMerger:
         logger.info(f"\n处理完成：拦截域名{len(all_block)}个，允许域名{len(all_allow)}个，耗时{elapsed:.2f}秒")
         gh_endgroup()
 
+        # 输出GitHub Actions变量（使用环境文件）
         if os.getenv('GITHUB_ACTIONS') == 'true':
-            logger.info(f"::set-output name=pihole_file::{Config.OUTPUT_FILE}")
-            logger.info(f"::set-output name=pihole_allow_file::{Config.ALLOW_FILE}")
+            github_output = os.getenv('GITHUB_OUTPUT')
+            if github_output:
+                with open(github_output, 'a') as f:
+                    f.write(f"pihole_file={Config.OUTPUT_FILE}\n")
+                    f.write(f"pihole_allow_file={Config.ALLOW_FILE}\n")
 
     def _process_file(self, file_path: Path) -> Tuple[List[str], List[str], Dict]:
         if not check_file_size(file_path):
@@ -183,6 +188,7 @@ class PiholeMerger:
         if adblock_match:
             domain = adblock_match.group(1)
             if self._is_valid_domain(domain):
+                stats['valid'] += 1
                 return domain, False
 
         # 提取Adblock白名单域名
@@ -190,6 +196,7 @@ class PiholeMerger:
         if whitelist_match:
             domain = whitelist_match.group(1)
             if self._is_valid_domain(domain):
+                stats['valid'] += 1
                 return domain, True
 
         # 提取Hosts域名
@@ -197,11 +204,13 @@ class PiholeMerger:
         if hosts_match:
             domain = hosts_match.group(2)
             if self._is_valid_domain(domain):
+                stats['valid'] += 1
                 return domain, False
 
         # 纯域名直接使用
         if self.regex.PLAIN_DOMAIN.match(line):
             if self._is_valid_domain(line):
+                stats['valid'] += 1
                 return line, False
 
         stats['unsupported'] += 1
