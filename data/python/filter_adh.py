@@ -17,15 +17,15 @@ from typing import Tuple, List, Set, Dict
 class Config:
     GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
     BASE_DIR = Path(GITHUB_WORKSPACE)
-    TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
-    # 移除OUTPUT_DIR，直接在根目录输出文件
-    OUTPUT_FILE = BASE_DIR / "adblock_adh.txt"  # 拦截规则（根目录）
-    ALLOW_FILE = BASE_DIR / "allow_adh.txt"     # 白名单规则（根目录）
+    # 输入目录：使用临时目录（原TEMP_DIR，即输入文件存放处）
+    INPUT_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
+    # 输出文件（根目录）
+    OUTPUT_BLACK = BASE_DIR / "adblock_adh.txt"  # 黑名单（拦截规则）
+    OUTPUT_WHITE = BASE_DIR / "allow_adh.txt"     # 白名单（允许规则）
     MAX_WORKERS = min(os.cpu_count() or 4, 4)
     RULE_LEN_RANGE = (3, 4096)
     MAX_FILESIZE_MB = 50
     INPUT_PATTERNS = ["*.txt", "*.list"]
-
 
 
 class RegexPatterns:
@@ -71,11 +71,10 @@ logger = setup_logger()
 
 class AdGuardSplitter:
     def __init__(self):
-        # 创建目录（适配GitHub权限）
-        for dir_path in [Config.TEMP_DIR, Path(Config.INPUT_DIR), Path(Config.OUTPUT_DIR)]:
-            dir_path.mkdir(parents=True, exist_ok=True)
-            if os.name != "nt":
-                os.chmod(dir_path, 0o755)
+        # 创建输入目录（确保存在）
+        Config.INPUT_DIR.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            os.chmod(Config.INPUT_DIR, 0o755)
 
         # 清理旧文件
         for f in [Config.OUTPUT_BLACK, Config.OUTPUT_WHITE]:
@@ -89,10 +88,10 @@ class AdGuardSplitter:
         start_time = time.time()
         logger.info("===== AdGuard Home 黑白名单处理（GitHub环境适配） =====")
 
-        # 加载输入文件
+        # 加载输入文件（从INPUT_DIR读取）
         input_files = []
         for pattern in Config.INPUT_PATTERNS:
-            input_files.extend([Path(p) for p in glob.glob(str(Path(Config.INPUT_DIR) / pattern))])
+            input_files.extend([Path(p) for p in glob.glob(str(Config.INPUT_DIR / pattern))])
 
         if not input_files:
             logger.error(f"未在 {Config.INPUT_DIR} 找到文件（格式：{Config.INPUT_PATTERNS}）")
@@ -130,11 +129,15 @@ class AdGuardSplitter:
         with open(Config.OUTPUT_WHITE, 'w', encoding='utf-8') as f:
             f.write('\n'.join(white_cache) + '\n')
 
-        # 输出GitHub Actions变量
-        print(f"::set-output name=adguard_blacklist_path::{Config.OUTPUT_BLACK}")
-        print(f"::set-output name=adguard_whitelist_path::{Config.OUTPUT_WHITE}")
-        print(f"::set-output name=adguard_blacklist_count::{total_stats['black']}")
-        print(f"::set-output name=adguard_whitelist_count::{total_stats['white']}")
+        # 替换已弃用的set-output，使用GITHUB_OUTPUT环境文件
+        if os.getenv('GITHUB_ACTIONS') == 'true':
+            github_output = os.getenv('GITHUB_OUTPUT')
+            if github_output:
+                with open(github_output, 'a', encoding='utf-8') as f:
+                    f.write(f"adguard_blacklist_path={Config.OUTPUT_BLACK}\n")
+                    f.write(f"adguard_whitelist_path={Config.OUTPUT_WHITE}\n")
+                    f.write(f"adguard_blacklist_count={total_stats['black']}\n")
+                    f.write(f"adguard_whitelist_count={total_stats['white']}\n")
 
         logger.info(f"\n处理完成：\n黑名单：{total_stats['black']}条\n白名单：{total_stats['white']}条")
         logger.info(f"过滤无效规则：{total_stats['filtered']}条，不支持规则：{total_stats['unsupported']}条")
@@ -149,6 +152,12 @@ class AdGuardSplitter:
         file_white_cache: Set[str] = set()
 
         try:
+            # 检查文件大小
+            size_mb = file_path.stat().st_size / (1024 * 1024)
+            if size_mb > Config.MAX_FILESIZE_MB:
+                logger.warning(f"跳过大文件 {file_path.name}（{size_mb:.1f}MB）")
+                return (black_rules, white_rules), stats
+
             with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                 for line in f:
                     line = line.strip()
