@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Clash/Mihomo规则转换工具（输出.yaml规则集，适配GitHub环境）"""
+"""Clash/Mihomo规则转换工具（输出结构化.yaml规则集，适配GitHub环境）"""
 
 import os
 import sys
@@ -21,32 +21,34 @@ class Config:
     INPUT_DIR = os.getenv("INPUT_DIR", f"{GITHUB_WORKSPACE}/input" if GITHUB_WORKSPACE else "input")
     OUTPUT_DIR = os.getenv("OUTPUT_DIR", f"{GITHUB_WORKSPACE}/output" if GITHUB_WORKSPACE else "output")
 
-    # 输出文件改为.yaml（Clash规则集格式）
+    # 输出文件（Clash规则集格式）
     OUTPUT_BLOCK = Path(OUTPUT_DIR) / "clash_adblock.yaml"  # 拦截规则集
-    OUTPUT_ALLOW = Path(OUTPUT_DIR) / "clash_allow.yaml"  # 放行规则集
+    OUTPUT_ALLOW = Path(OUTPUT_DIR) / "clash_allow.yaml"    # 放行规则集
     TEMP_DIR = Path(RUNNER_TEMP) / "clash_processing"
 
+    # 规则处理配置
     MAX_WORKERS = int(os.getenv("MAX_WORKERS", str(min(os.cpu_count() or 4, 4))))
-    RULE_LEN_RANGE = (3, 4096)
+    RULE_LEN_RANGE = (3, 4096)  # 有效规则长度范围
     INPUT_PATTERNS = os.getenv("INPUT_PATTERNS", "*.txt,*.list").split(",")
+    SUPPORTED_RULE_TYPES = {'DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD'}  # 下游支持的规则类型
 
 
 class RegexPatterns:
     # 规则匹配正则
-    BLOCK_ADBLOCK = re.compile(r'^\|\|([\w.-]+)\^?$')
-    BLOCK_HOSTS = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')
-    BLOCK_WILDCARD = re.compile(r'^[\*a-z0-9\-\.]+$', re.IGNORECASE)
-    BLOCK_REGEX = re.compile(r'^/.*/$')
-    BLOCK_OPTIONS = re.compile(r'^[\w.-]+\$[\w,-]+$')
+    BLOCK_ADBLOCK = re.compile(r'^\|\|([\w.-]+)\^?$')          # AdBlock拦截规则（||example.com^）
+    BLOCK_HOSTS = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')  # Hosts拦截规则
+    BLOCK_WILDCARD = re.compile(r'^[\*a-z0-9\-\.]+$', re.IGNORECASE)  # 通配符规则（*.example.com）
+    BLOCK_REGEX = re.compile(r'^/.*/$')                        # 正则拦截规则（/example/）
+    BLOCK_OPTIONS = re.compile(r'^[\w.-]+\$[\w,-]+$')          # 带选项的拦截规则（example.com$third-party）
 
-    ALLOW_ADBLOCK = re.compile(r'^@@\|\|([\w.-]+)\^?$')
-    ALLOW_OPTIONS = re.compile(r'^@@[\w.-]+\$[\w,-]+$')
+    ALLOW_ADBLOCK = re.compile(r'^@@\|\|([\w.-]+)\^?$')        # AdBlock放行规则（@@||example.com^）
+    ALLOW_OPTIONS = re.compile(r'^@@[\w.-]+\$[\w,-]+$')        # 带选项的放行规则（@@example.com$domain=test.com）
 
-    PLAIN_DOMAIN = re.compile(r'^[\w.-]+\.[a.[]{2,}$')
+    PLAIN_DOMAIN = re.compile(r'^[\w.-]+\.[a-zA-Z]{2,}$')      # 纯域名（example.com）
 
-    COMMENT = re.compile(r'^[!#]')
-    EMPTY_LINE = re.compile(r'^\s*$')
-    UNSUPPORTED = re.compile(r'##\+js\(|\$csp=|\$redirect=')
+    COMMENT = re.compile(r'^[!#]')                             # 注释行（!或#开头）
+    EMPTY_LINE = re.compile(r'^\s*$')                          # 空行
+    UNSUPPORTED = re.compile(r'##\+js\(|\$csp=|\$redirect=')   # 不支持的脚本/跳转规则
 
 
 def setup_logger():
@@ -74,13 +76,13 @@ logger = setup_logger()
 
 class ClashYamlConverter:
     def __init__(self):
-        # 目录初始化
+        # 初始化目录
         for dir_path in [Config.TEMP_DIR, Path(Config.INPUT_DIR), Path(Config.OUTPUT_DIR)]:
             dir_path.mkdir(parents=True, exist_ok=True)
             if os.name != "nt":
                 os.chmod(dir_path, 0o755)
 
-        # 清理旧文件
+        # 清理旧输出文件
         for f in [Config.OUTPUT_BLOCK, Config.OUTPUT_ALLOW]:
             if f.exists():
                 f.unlink()
@@ -90,7 +92,7 @@ class ClashYamlConverter:
 
     def run(self):
         start_time = time.time()
-        logger.info("===== Clash/Mihomo .yaml规则集转换（GitHub适配） =====")
+        logger.info("===== Clash/Mihomo 结构化规则集生成工具 =====")
 
         # 收集输入文件
         input_files = []
@@ -101,9 +103,9 @@ class ClashYamlConverter:
             logger.error(f"未在输入目录 {Config.INPUT_DIR} 找到文件（格式：{Config.INPUT_PATTERNS}）")
             return
 
-        # 全局去重缓存
-        block_cache: Set[str] = set()
-        allow_cache: Set[str] = set()
+        # 全局去重缓存（基于规则类型+域名，避免误去重）
+        block_cache: Set[Tuple[str, str]] = set()  # (rule_type, domain)
+        allow_cache: Set[Tuple[str, str]] = set()
         total_stats = {'block': 0, 'allow': 0, 'filtered': 0, 'unsupported': 0}
 
         # 并发处理文件
@@ -113,10 +115,20 @@ class ClashYamlConverter:
                 file = futures[future]
                 try:
                     (block_rules, allow_rules), stats = future.result()
-                    new_block = [r for r in block_rules if r not in block_cache]
-                    new_allow = [r for r in allow_rules if r not in allow_cache]
-                    block_cache.update(new_block)
-                    allow_cache.update(new_allow)
+                    # 过滤全局重复规则
+                    new_block = []
+                    for rule in block_rules:
+                        rule_key = (rule['type'], rule['value'])
+                        if rule_key not in block_cache:
+                            block_cache.add(rule_key)
+                            new_block.append(rule)
+                    new_allow = []
+                    for rule in allow_rules:
+                        rule_key = (rule['type'], rule['value'])
+                        if rule_key not in allow_cache:
+                            allow_cache.add(rule_key)
+                            new_allow.append(rule)
+                    # 更新统计
                     total_stats['block'] += len(new_block)
                     total_stats['allow'] += len(new_allow)
                     total_stats['filtered'] += stats['filtered']
@@ -125,9 +137,9 @@ class ClashYamlConverter:
                 except Exception as e:
                     logger.error(f"处理{file.name}失败：{str(e)}")
 
-        # 写入.yaml规则集
-        self._write_yaml(Config.OUTPUT_BLOCK, block_cache)
-        self._write_yaml(Config.OUTPUT_ALLOW, allow_cache)
+        # 写入结构化YAML规则集
+        self._write_yaml(Config.OUTPUT_BLOCK, new_block, "ad-filter", "REJECT")
+        self._write_yaml(Config.OUTPUT_ALLOW, new_allow, "allow-list", "DIRECT")
 
         # GitHub Actions输出参数
         print(f"::set-output name=block_path::{Config.OUTPUT_BLOCK}")
@@ -140,13 +152,14 @@ class ClashYamlConverter:
         logger.info(f"过滤无效规则：{total_stats['filtered']}条，不支持规则：{total_stats['unsupported']}条")
         logger.info(f"耗时：{time.time() - start_time:.2f}秒")
 
-    def _process_file(self, file_path: Path) -> Tuple[Tuple[List[str], List[str]], Dict]:
-        """处理单个文件"""
-        block_rules: List[str] = []
-        allow_rules: List[str] = []
+    def _process_file(self, file_path: Path) -> Tuple[Tuple[List[Dict], List[Dict]], Dict]:
+        """处理单个文件，返回结构化规则（{type, value, policy}）"""
+        block_rules: List[Dict] = []  # 拦截规则
+        allow_rules: List[Dict] = []  # 放行规则
         stats = {'filtered': 0, 'unsupported': 0}
-        file_block_cache: Set[str] = set()
-        file_allow_cache: Set[str] = set()
+        # 文件内去重缓存（基于类型+域名）
+        file_block_cache: Set[Tuple[str, str]] = set()
+        file_allow_cache: Set[Tuple[str, str]] = set()
 
         try:
             with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
@@ -154,13 +167,18 @@ class ClashYamlConverter:
                     line = line.strip()
                     if not line:
                         continue
-                    rule_type, clash_rule = self._convert_rule(line)
-                    if rule_type == 'block' and clash_rule not in file_block_cache:
-                        file_block_cache.add(clash_rule)
-                        block_rules.append(clash_rule)
-                    elif rule_type == 'allow' and clash_rule not in file_allow_cache:
-                        file_allow_cache.add(clash_rule)
-                        allow_rules.append(clash_rule)
+                    # 转换规则为结构化字典（{type, value, policy}）
+                    rule_type, rule_data = self._convert_rule(line)
+                    if rule_type == 'block' and rule_data:
+                        key = (rule_data['type'], rule_data['value'])
+                        if key not in file_block_cache:
+                            file_block_cache.add(key)
+                            block_rules.append(rule_data)
+                    elif rule_type == 'allow' and rule_data:
+                        key = (rule_data['type'], rule_data['value'])
+                        if key not in file_allow_cache:
+                            file_allow_cache.add(key)
+                            allow_rules.append(rule_data)
                     elif rule_type == 'filtered':
                         stats['filtered'] += 1
                     else:
@@ -170,59 +188,101 @@ class ClashYamlConverter:
 
         return (block_rules, allow_rules), stats
 
-    def _convert_rule(self, line: str) -> Tuple[str, str]:
-        """转换规则为Clash格式"""
+    def _convert_rule(self, line: str) -> Tuple[str, Dict]:
+        """转换规则为结构化数据（{type, value, policy}）"""
+        # 过滤无效规则（注释、长度异常）
         if self.regex.COMMENT.match(line) or not (self.len_min <= len(line) <= self.len_max):
-            return ('filtered', '')
+            return ('filtered', {})
+        # 过滤不支持的规则（脚本、跳转等）
         if self.regex.UNSUPPORTED.search(line):
-            return ('unsupported', '')
+            logger.debug(f"不支持的规则内容：{line}")  # 仅调试模式显示
+            return ('unsupported', {})
 
-        # 放行规则（DIRECT）
+        # 处理放行规则（策略：DIRECT）
         if self.regex.ALLOW_ADBLOCK.match(line):
             domain = self.regex.ALLOW_ADBLOCK.match(line).group(1)
-            return ('allow', f"DOMAIN-SUFFIX,{domain},DIRECT")
+            return ('allow', {
+                'type': 'DOMAIN-SUFFIX',
+                'value': domain,
+                'policy': 'DIRECT'
+            })
         if self.regex.ALLOW_OPTIONS.match(line):
             domain = re.sub(r'^@@([\w.-]+)\$.*$', r'\1', line)
-            return ('allow', f"DOMAIN-SUFFIX,{domain},DIRECT")
+            return ('allow', {
+                'type': 'DOMAIN-SUFFIX',
+                'value': domain,
+                'policy': 'DIRECT'
+            })
 
-        # 拦截规则（REJECT）
+        # 处理拦截规则（策略：REJECT）
         if self.regex.BLOCK_ADBLOCK.match(line):
             domain = self.regex.BLOCK_ADBLOCK.match(line).group(1)
-            return ('block', f"DOMAIN-SUFFIX,{domain},REJECT,no-resolve")
+            return ('block', {
+                'type': 'DOMAIN-SUFFIX',
+                'value': domain,
+                'policy': 'REJECT,no-resolve'
+            })
         if self.regex.BLOCK_HOSTS.match(line):
             domain = self.regex.BLOCK_HOSTS.match(line).group(2)
-            return ('block', f"DOMAIN,{domain},REJECT,no-resolve")
+            return ('block', {
+                'type': 'DOMAIN',
+                'value': domain,
+                'policy': 'REJECT,no-resolve'
+            })
         if self.regex.BLOCK_WILDCARD.match(line):
             if line.startswith('*.'):
-                suffix = line[2:]
-                return ('block', f"DOMAIN-SUFFIX,{suffix},REJECT")
+                suffix = line[2:]  # 移除前缀*
+                return ('block', {
+                    'type': 'DOMAIN-SUFFIX',
+                    'value': suffix,
+                    'policy': 'REJECT'
+                })
             elif '*' in line:
-                keyword = line.replace('*', '')
-                return ('block', f"DOMAIN-KEYWORD,{keyword},REJECT")
-        if self.regex.BLOCK_REGEX.match(line):
-            pattern = line.strip('/')
-            return ('block', f"URL-REGEX,{pattern},REJECT")
+                keyword = line.replace('*', '')  # 提取关键词
+                return ('block', {
+                    'type': 'DOMAIN-KEYWORD',
+                    'value': keyword,
+                    'policy': 'REJECT'
+                })
         if self.regex.BLOCK_OPTIONS.match(line):
             domain = re.sub(r'^([\w.-]+)\$.*$', r'\1', line)
-            return ('block', f"DOMAIN-SUFFIX,{domain},REJECT")
+            return ('block', {
+                'type': 'DOMAIN-SUFFIX',
+                'value': domain,
+                'policy': 'REJECT'
+            })
         if self.regex.PLAIN_DOMAIN.match(line):
-            return ('block', f"DOMAIN-SUFFIX,{line},REJECT")
+            return ('block', {
+                'type': 'DOMAIN-SUFFIX',
+                'value': line,
+                'policy': 'REJECT'
+            })
 
-        return ('unsupported', '')
+        # 正则规则（下游可能不支持，标记为不支持）
+        if self.regex.BLOCK_REGEX.match(line):
+            logger.warning(f"检测到不支持的正则规则：{line}（下游MRS转换可能失败）")
+            return ('unsupported', {})
 
-    def _write_yaml(self, file_path: Path, rules: Set[str]):
-        """写入.yaml规则集（包含规则集引用头信息）"""
+        # 未匹配到任何规则类型
+        logger.debug(f"无法识别的规则：{line}")
+        return ('unsupported', {})
+
+    def _write_yaml(self, file_path: Path, rules: List[Dict], rule_set_name: str, default_policy: str):
+        """写入结构化YAML规则集（适配下游解析）"""
         with open(file_path, 'w', encoding='utf-8') as f:
-            # 添加规则集引用头信息
-            if file_path.name == "clash_adblock.yaml":
-                f.write("#RULE-SET,ad-filter,REJECT\n")
-            elif file_path.name == "clash_allow.yaml":
-                f.write("#RULE-SET,allow-list,DIRECT\n")
-            
-            # Clash规则集必须包含payload字段，规则列表缩进2空格
+            # 规则集引用头信息（Clash规范）
+            f.write(f"#RULE-SET,{rule_set_name},{default_policy}\n")
+            # 结构化payload（便于下游提取type/value）
             f.write("payload:\n")
             for rule in rules:
-                f.write(f"  - {rule}\n")  # 每条规则前加"- "和缩进
+                # 确保规则包含必要字段
+                rule_type = rule.get('type', '')
+                domain = rule.get('value', '')
+                policy = rule.get('policy', default_policy)
+                if rule_type and domain:
+                    f.write(f"  - type: {rule_type}\n")
+                    f.write(f"    value: {domain}\n")
+                    f.write(f"    policy: {policy}\n")
 
 
 if __name__ == '__main__':
