@@ -15,21 +15,16 @@ from typing import Tuple, List, Set, Dict
 
 
 class Config:
-    # GitHub环境变量适配
-    GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", "")
-    RUNNER_TEMP = os.getenv("RUNNER_TEMP", os.getenv("TEMP_DIR", "tmp"))
-    INPUT_DIR = os.getenv("INPUT_DIR", f"{GITHUB_WORKSPACE}/input" if GITHUB_WORKSPACE else "input")
-    OUTPUT_DIR = os.getenv("OUTPUT_DIR", f"{GITHUB_WORKSPACE}/output" if GITHUB_WORKSPACE else "output")
-
-    # 输出文件路径
-    OUTPUT_BLACK = Path(OUTPUT_DIR) / "adblock_ubo.txt"
-    OUTPUT_WHITE = Path(OUTPUT_DIR) / "allow_ubo.txt"
-    TEMP_DIR = Path(RUNNER_TEMP) / "ubo_processing"
-
-    # 可通过环境变量配置的参数
-    MAX_WORKERS = int(os.getenv("MAX_WORKERS", str(min(os.cpu_count() or 4, 4))))
-    RULE_LEN_RANGE = (3, 8192)  # uBO支持更长规则（如脚本拦截）
-    INPUT_PATTERNS = os.getenv("INPUT_PATTERNS", "*.txt,*.list").split(",")
+    GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
+    BASE_DIR = Path(GITHUB_WORKSPACE)
+    TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
+    # 移除OUTPUT_DIR，直接在根目录输出文件
+    OUTPUT_FILE = BASE_DIR / "adblock_ubo.txt"  # 拦截规则（根目录）
+    ALLOW_FILE = BASE_DIR / "allow_ubo.txt"     # 白名单规则（根目录）
+    MAX_WORKERS = min(os.cpu_count() or 4, 4)
+    RULE_LEN_RANGE = (3, 4096)
+    MAX_FILESIZE_MB = 50
+    INPUT_PATTERNS = ["*.txt", "*.list"]
 
 
 class RegexPatterns:
