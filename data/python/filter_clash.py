@@ -15,7 +15,7 @@ from typing import Tuple, List, Set, Dict
 
 
 class Config:
-    # 环境变量适配（同之前）
+    # 环境变量适配
     GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", "")
     RUNNER_TEMP = os.getenv("RUNNER_TEMP", os.getenv("TEMP_DIR", "tmp"))
     INPUT_DIR = os.getenv("INPUT_DIR", f"{GITHUB_WORKSPACE}/input" if GITHUB_WORKSPACE else "input")
@@ -32,7 +32,7 @@ class Config:
 
 
 class RegexPatterns:
-    # 规则匹配正则（同之前）
+    # 规则匹配正则
     BLOCK_ADBLOCK = re.compile(r'^\|\|([\w.-]+)\^?$')
     BLOCK_HOSTS = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')
     BLOCK_WILDCARD = re.compile(r'^[\*a-z0-9\-\.]+$', re.IGNORECASE)
@@ -74,7 +74,7 @@ logger = setup_logger()
 
 class ClashYamlConverter:
     def __init__(self):
-        # 目录初始化（同之前）
+        # 目录初始化
         for dir_path in [Config.TEMP_DIR, Path(Config.INPUT_DIR), Path(Config.OUTPUT_DIR)]:
             dir_path.mkdir(parents=True, exist_ok=True)
             if os.name != "nt":
@@ -125,7 +125,7 @@ class ClashYamlConverter:
                 except Exception as e:
                     logger.error(f"处理{file.name}失败：{str(e)}")
 
-        # 写入.yaml规则集（核心修改：添加Clash规则集格式）
+        # 写入.yaml规则集
         self._write_yaml(Config.OUTPUT_BLOCK, block_cache)
         self._write_yaml(Config.OUTPUT_ALLOW, allow_cache)
 
@@ -141,7 +141,7 @@ class ClashYamlConverter:
         logger.info(f"耗时：{time.time() - start_time:.2f}秒")
 
     def _process_file(self, file_path: Path) -> Tuple[Tuple[List[str], List[str]], Dict]:
-        """处理单个文件（逻辑同之前）"""
+        """处理单个文件"""
         block_rules: List[str] = []
         allow_rules: List[str] = []
         stats = {'filtered': 0, 'unsupported': 0}
@@ -171,7 +171,7 @@ class ClashYamlConverter:
         return (block_rules, allow_rules), stats
 
     def _convert_rule(self, line: str) -> Tuple[str, str]:
-        """转换规则为Clash格式（逻辑同之前）"""
+        """转换规则为Clash格式"""
         if self.regex.COMMENT.match(line) or not (self.len_min <= len(line) <= self.len_max):
             return ('filtered', '')
         if self.regex.UNSUPPORTED.search(line):
@@ -211,8 +211,14 @@ class ClashYamlConverter:
         return ('unsupported', '')
 
     def _write_yaml(self, file_path: Path, rules: Set[str]):
-        """写入.yaml规则集（核心调整：符合Clash Rule Set格式）"""
+        """写入.yaml规则集（包含规则集引用头信息）"""
         with open(file_path, 'w', encoding='utf-8') as f:
+            # 添加规则集引用头信息
+            if file_path.name == "clash_adblock.yaml":
+                f.write("#RULE-SET,ad-filter,REJECT\n")
+            elif file_path.name == "clash_allow.yaml":
+                f.write("#RULE-SET,allow-list,DIRECT\n")
+            
             # Clash规则集必须包含payload字段，规则列表缩进2空格
             f.write("payload:\n")
             for rule in rules:
