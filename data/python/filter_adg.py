@@ -18,9 +18,9 @@ class Config:
     GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
     BASE_DIR = Path(GITHUB_WORKSPACE)
     TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
-    OUTPUT_DIR = BASE_DIR / os.getenv('OUTPUT_DIR', 'output')
-    OUTPUT_FILE = OUTPUT_DIR / "adblock_adg.txt"  # 拦截规则
-    ALLOW_FILE = OUTPUT_DIR / "allow_adg.txt"     # 白名单规则
+    # 移除OUTPUT_DIR，直接在根目录输出文件
+    OUTPUT_FILE = BASE_DIR / "adblock_adg.txt"  # 拦截规则（根目录）
+    ALLOW_FILE = BASE_DIR / "allow_adg.txt"     # 白名单规则（根目录）
     MAX_WORKERS = min(os.cpu_count() or 4, 4)
     RULE_LEN_RANGE = (3, 4096)
     MAX_FILESIZE_MB = 50
