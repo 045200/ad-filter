@@ -136,25 +136,33 @@
 </div>
 
 
-## 📝 上游规则来源
-
 ### 🔒 拦截规则来源
 - 大萌主-接口广告规则：[https://raw.githubusercontent.com/damengzhu/banad/main/jiekouAD.txt](https://raw.githubusercontent.com/damengzhu/banad/main/jiekouAD.txt)
 - DD-AD去广告规则：[https://raw.githubusercontent.com/afwfv/DD-AD/main/rule/DD-AD.txt](https://raw.githubusercontent.com/afwfv/DD-AD/main/rule/DD-AD.txt)
+- GitHub加速hosts：[https://raw.hellogithub.com/hosts](https://raw.hellogithub.com/hosts)
+- Anti-AD通用规则：[https://anti-ad.net/easylist.txt](https://anti-ad.net/easylist.txt)
+- Cats-Team广告规则：[https://raw.githubusercontent.com/Cats-Team/AdRules/main/adblock.txt](https://raw.githubusercontent.com/Cats-Team/AdRules/main/adblock.txt)
+- 那个谁520广告hosts规则：[https://raw.githubusercontent.com/qq5460168/EasyAds/refs/heads/main/adblock.txt](https://raw.githubusercontent.com/qq5460168/EasyAds/refs/heads/main/adblock.txt)
+- 10007自动规则：[https://raw.githubusercontent.com/lingeringsound/10007_auto/adb.txt](https://raw.githubusercontent.com/lingeringsound/10007_auto/adb.txt)
 - 晴雅去广告规则：[https://raw.githubusercontent.com/790953214/qy-Ads-Rule/main/black.txt](https://raw.githubusercontent.com/790953214/qy-Ads-Rule/main/black.txt)
 - 海哥广告规则：[https://raw.githubusercontent.com/2771936993/HG/main/hg1.txt](https://raw.githubusercontent.com/2771936993/HG/main/hg1.txt)
+- FCM hosts规则：[https://raw.githubusercontent.com/entr0pia/fcm-hosts/fcm/fcm-hosts](https://raw.githubusercontent.com/entr0pia/fcm-hosts/fcm/fcm-hosts)
 - 秋风广告规则：[https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt](https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt)
+- SMAdHosts规则：[https://raw.githubusercontent.com/2Gardon/SM-Ad-FuckU-hosts/master/SMAdHosts](https://raw.githubusercontent.com/2Gardon/SM-Ad-FuckU-hosts/master/SMAdHosts)
 - 茯苓拦截规则：[https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingBlockList.txt](https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingBlockList.txt)
-- anti-ad混合名单：[https://anti-ad.net/easylist.txt](https://anti-ad.net/easylist.txt)
 
 ### ✅ 白名单规则来源
-- 那个谁520广告白名单：[https://raw.githubusercontent.com/qq5460168/EasyAds/refs/heads/main/allow.txt](https://raw.githubusercontent.com/qq5460168/EasyAds/refs/heads/main/allow.txt)
+- 那个谁520广告白名单：[https://raw.githubusercontent.com/qq5460168/EasyAds/main/allow.txt](https://raw.githubusercontent.com/qq5460168/EasyAds/main/allow.txt)
 - AdGuardHome通用白名单：[https://raw.githubusercontent.com/mphin/AdGuardHomeRules/main/Allowlist.txt](https://raw.githubusercontent.com/mphin/AdGuardHomeRules/main/Allowlist.txt)
 - 冷漠域名白名单：[https://file-git.trli.club/file-hosts/allow/Domains](https://file-git.trli.club/file-hosts/allow/Domains)
 - jhsvip白名单：[https://raw.githubusercontent.com/jhsvip/ADRuls/main/white.txt](https://raw.githubusercontent.com/jhsvip/ADRuls/main/white.txt)
+- liwenjie119白名单：[https://raw.githubusercontent.com/liwenjie119/adg-rules/master/white.txt](https://raw.githubusercontent.com/liwenjie119/adg-rules/master/white.txt)
+- 喵二白名单：[https://raw.githubusercontent.com/miaoermua/AdguardFilter/main/whitelist.txt](https://raw.githubusercontent.com/miaoermua/AdguardFilter/main/whitelist.txt)
 - 茯苓白名单：[https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingAllowList.txt](https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingAllowList.txt)
 - Cats-Team白名单：[https://raw.githubusercontent.com/Cats-Team/AdRules/script/script/allowlist.txt](https://raw.githubusercontent.com/Cats-Team/AdRules/script/script/allowlist.txt)
+- 浅笑白名单：[https://raw.githubusercontent.com/user001235/112/main/white.txt](https://raw.githubusercontent.com/user001235/112/main/white.txt)
 - 酷安cocieto白名单：[https://raw.githubusercontent.com/urkbio/adguardhomefilter/main/whitelist.txt](https://raw.githubusercontent.com/urkbio/adguardhomefilter/main/whitelist.txt)
+- anti-ad混合名单：[https://anti-ad.net/easylist.txt](https://anti-ad.net/easylist.txt)
 
 
 ## ❓ 常见问题  
