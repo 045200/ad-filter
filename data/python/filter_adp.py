@@ -18,21 +18,18 @@ class Config:
     # 优先读取GitHub环境变量，适配GitHub Actions
     GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", "")  # GitHub工作区根目录
     RUNNER_TEMP = os.getenv("RUNNER_TEMP", os.getenv("TEMP_DIR", "tmp"))  # GitHub Runner临时目录
-
-    # 输入目录：直接使用GitHub Runner临时目录根目录（而非子目录）
-    INPUT_DIR = os.getenv("INPUT_DIR", RUNNER_TEMP)
-    # 输出目录：直接使用GitHub工作区根目录
-    OUTPUT_DIR = os.getenv("OUTPUT_DIR", GITHUB_WORKSPACE if GITHUB_WORKSPACE else "output")
-
-    # 输出文件路径（直接放在工作区根目录）
-    OUTPUT_BLACK = Path(OUTPUT_DIR) / "adblock_adp.txt"
-    OUTPUT_WHITE = Path(OUTPUT_DIR) / "allow_adp.txt"
-    # 临时处理目录（使用Runner临时目录的子目录，避免污染根目录）
+    # 输入目录：仓库根目录的临时目录（tmp）
+    INPUT_DIR = Path(os.getenv("INPUT_DIR", Path(GITHUB_WORKSPACE) / "tmp" if GITHUB_WORKSPACE else "tmp"))
+    # 输出目录：仓库根目录
+    OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", GITHUB_WORKSPACE if GITHUB_WORKSPACE else "."))
+    # 输出文件（基于输出目录）
+    OUTPUT_BLACK = OUTPUT_DIR / "adblock_adp.txt"  # 黑名单规则
+    OUTPUT_WHITE = OUTPUT_DIR / "allow_adp.txt"    # 白名单规则
+    # 临时处理目录（使用Runner临时目录的子目录）
     TEMP_DIR = Path(RUNNER_TEMP) / "adblock_processing"
-
-    MAX_WORKERS = int(os.getenv("MAX_WORKERS", str(min(os.cpu_count() or 4, 4))))
+    MAX_WORKERS = min(os.cpu_count() or 4, 4)
     RULE_LEN_RANGE = (3, 4096)
-    INPUT_PATTERNS = os.getenv("INPUT_PATTERNS", "adblock_merged.txt").split(",")  # 输入文件格式
+    INPUT_PATTERNS = ["adblock_merged.txt"]  # 输入文件格式
 
 
 class RegexPatterns:
@@ -84,7 +81,7 @@ logger = setup_logger()
 class AdblockPlusSplitter:
     def __init__(self):
         # 创建必要目录（确保临时处理目录和输出目录存在）
-        for dir_path in [Config.TEMP_DIR, Path(Config.OUTPUT_DIR)]:
+        for dir_path in [Config.TEMP_DIR, Config.INPUT_DIR, Config.OUTPUT_DIR]:
             dir_path.mkdir(parents=True, exist_ok=True)
             # 确保Linux环境下可写权限
             if os.name != "nt":
@@ -101,15 +98,17 @@ class AdblockPlusSplitter:
     def run(self):
         start_time = time.time()
         logger.info("===== Adblock Plus 黑白名单处理（GitHub环境适配） =====")
+        logger.info(f"输入目录: {Config.INPUT_DIR}")
+        logger.info(f"输出黑名单: {Config.OUTPUT_BLACK}")
+        logger.info(f"输出白名单: {Config.OUTPUT_WHITE}")
 
-        # 读取输入文件（直接从GitHub Runner临时目录根目录读取）
+        # 读取输入文件
         input_files = []
         for pattern in Config.INPUT_PATTERNS:
-            # 拼接路径：临时目录 + 文件名模式（如 *.txt）
-            input_files.extend([Path(p) for p in glob.glob(str(Path(Config.INPUT_DIR) / pattern))])
+            input_files.extend([Path(p) for p in glob.glob(str(Config.INPUT_DIR / pattern))])
 
         if not input_files:
-            logger.error(f"未在GitHub临时目录 {Config.INPUT_DIR} 找到文件（格式：{Config.INPUT_PATTERNS}）")
+            logger.error(f"未在输入目录 {Config.INPUT_DIR} 找到文件（格式：{Config.INPUT_PATTERNS}）")
             return
 
         # 全局去重缓存
@@ -137,13 +136,13 @@ class AdblockPlusSplitter:
                 except Exception as e:
                     logger.error(f"处理{file.name}失败：{str(e)}")
 
-        # 写入输出文件（直接放在GitHub工作区根目录）
+        # 写入输出文件
         with open(Config.OUTPUT_BLACK, 'w', encoding='utf-8') as f:
             f.write('\n'.join(black_cache) + '\n')
         with open(Config.OUTPUT_WHITE, 'w', encoding='utf-8') as f:
             f.write('\n'.join(white_cache) + '\n')
 
-        # 替换已弃用的set-output，使用GITHUB_OUTPUT环境文件
+        # 输出GitHub Actions环境变量
         if os.getenv('GITHUB_ACTIONS') == 'true':
             github_output = os.getenv('GITHUB_OUTPUT')
             if github_output:
