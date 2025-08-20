@@ -30,7 +30,7 @@ class Config:
     MAX_WORKERS = min(os.cpu_count() or 4, 4)
     RULE_LEN_RANGE = (3, 2048)  # 限制合理长度，覆盖多数场景
     MAX_FILESIZE_MB = 50
-    INPUT_PATTERNS = ["*.txt", "*.list"]
+    INPUT_PATTERNS = ["adblock_merged.txt"]
 
 
 class RegexPatterns:
