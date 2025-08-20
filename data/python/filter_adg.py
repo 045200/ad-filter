@@ -32,16 +32,30 @@ class Config:
 
 
 class RegexPatterns:
-    ADBLOCK_DOMAIN = re.compile(r'^\|\|([\w.-]+)\^?$')
-    ADBLOCK_WHITELIST = re.compile(r'^@@\|\|([\w.-]+)\^?$')
-    ADBLOCK_ELEMENT = re.compile(r'^[\w.-]+##.+$')
-    ADBLOCK_ELEMENT_EXCEPT = re.compile(r'^[\w.-]+#@#+$')
-    HOSTS_RULE = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')
-    PLAIN_DOMAIN = re.compile(r'^[\w.-]+\.[a.[]{2,}$')
+    """预编译正则表达式集合"""
+    # Adblock标准规则
+    ADBLOCK_DOMAIN = re.compile(r'^\|\|([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\^?$', re.IGNORECASE)
+    ADBLOCK_WHITELIST = re.compile(r'^@@\|\|([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\^?$', re.IGNORECASE)
+    ADBLOCK_ELEMENT = re.compile(r'^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}##.+$', re.IGNORECASE)
+    ADBLOCK_ELEMENT_EXCEPT = re.compile(r'^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}#@#+$', re.IGNORECASE)
+    ADBLOCK_FILTER = re.compile(r'^(?:\|\|)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?:\$|$)', re.IGNORECASE)
+    
+    # Hosts规则
+    HOSTS_RULE = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$', re.IGNORECASE)
+    
+    # 纯域名
+    PLAIN_DOMAIN = re.compile(r'^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$', re.IGNORECASE)
+    
+    # 注释和空行
     COMMENT = re.compile(r'^[!#]')
     EMPTY_LINE = re.compile(r'^\s*$')
-    ADGUARD_CSP = re.compile(r'^[\w.-]+\$csp=')
-    ADGUARD_REDIRECT = re.compile(r'^[\w.-]+\$redirect=')
+    
+    # AdGuard特有规则
+    ADGUARD_CSP = re.compile(r'^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\$csp=', re.IGNORECASE)
+    ADGUARD_REDIRECT = re.compile(r'^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\$redirect=', re.IGNORECASE)
+    
+    # 修饰符匹配
+    MODIFIERS = re.compile(r'\$(?:[^$$|$]+|$)', re.IGNORECASE)
 
 
 def setup_logger():
@@ -207,28 +221,73 @@ class AdGuardMerger:
         # 白名单规则（@@开头）
         if line.startswith('@@'):
             normalized = line[2:]
+            # 处理AdGuard标准白名单
             if self.regex.ADBLOCK_DOMAIN.match(normalized):
                 return normalized, True
+            # 元素隐藏白名单
+            elif self.regex.ADBLOCK_ELEMENT_EXCEPT.match(normalized):
+                return normalized, True
+            # 其他白名单规则
             return line, True
 
         # Hosts规则转换
         hosts_match = self.regex.HOSTS_RULE.match(line)
         if hosts_match:
-            return f"||{hosts_match.group(2)}^", False
+            domain = hosts_match.group(2)
+            if self._is_valid_domain(domain):
+                return f"||{domain}^", False
 
         # 纯域名转换
         if self.regex.PLAIN_DOMAIN.match(line):
-            return f"||{line}^", False
+            if self._is_valid_domain(line):
+                return f"||{line}^", False
 
-        # 保留AdGuard特有规则
+        # AdGuard特有规则（CSP/Redirect）
         if self.regex.ADGUARD_CSP.match(line) or self.regex.ADGUARD_REDIRECT.match(line):
             return line, False
 
-        # 保留标准Adblock规则
-        if self.regex.ADBLOCK_DOMAIN.match(line) or self.regex.ADBLOCK_ELEMENT.match(line):
+        # 元素隐藏规则
+        if self.regex.ADBLOCK_ELEMENT.match(line):
+            return line, False
+
+        # 标准Adblock域名规则（直接保留）
+        if self.regex.ADBLOCK_DOMAIN.match(line):
+            return line, False
+
+        # 带修饰符的规则
+        if self.regex.ADBLOCK_FILTER.match(line):
             return line, False
 
         return None, False
+
+    def _is_valid_domain(self, domain: str) -> bool:
+        """验证域名有效性"""
+        # 过滤IP地址
+        if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', domain) or \
+           re.match(r'^$[a-f0-9:]+$$', domain):
+            return False
+
+        # 域名基本格式验证
+        if len(domain) < 4 or len(domain) > 253:
+            return False
+
+        if domain.startswith('.') or domain.endswith('.'):
+            return False
+
+        if '..' in domain:
+            return False
+
+        parts = domain.split('.')
+        if len(parts) < 2:
+            return False
+
+        for part in parts:
+            if not part or len(part) > 63:
+                return False
+            if not re.match(r'^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$' , part):
+                return False
+
+        return True
 
     @staticmethod
     def _empty_stats() -> Dict:
