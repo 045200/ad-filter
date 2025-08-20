@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Adblock Plus规则处理（支持GitHub环境变量，分黑白名单输出）"""
+"""
+Adblock Plus规则黑白名单分离器（GitHub Actions优化版）
+支持高性能并行处理与精准语法识别
+"""
 
 import os
 import sys
@@ -14,50 +17,57 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Tuple, List, Set, Dict
 
 
+# ============== 配置集中管理 ==============
 class Config:
-    # 优先读取GitHub环境变量，适配GitHub Actions
+    """GitHub环境变量适配的配置参数"""
     GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", "")  # GitHub工作区根目录
-    RUNNER_TEMP = os.getenv("RUNNER_TEMP", os.getenv("TEMP_DIR", "tmp"))  # GitHub Runner临时目录
-    # 输入目录：仓库根目录的临时目录（tmp）
+    RUNNER_TEMP = os.getenv("RUNNER_TEMP", os.getenv("TEMP_DIR", "tmp"))  # Runner临时目录
+    
+    # 输入/输出路径配置
     INPUT_DIR = Path(os.getenv("INPUT_DIR", Path(GITHUB_WORKSPACE) / "tmp" if GITHUB_WORKSPACE else "tmp"))
-    # 输出目录：仓库根目录
     OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", GITHUB_WORKSPACE if GITHUB_WORKSPACE else "."))
-    # 输出文件（基于输出目录）
-    OUTPUT_BLACK = OUTPUT_DIR / "adblock_adp.txt"  # 黑名单规则
-    OUTPUT_WHITE = OUTPUT_DIR / "allow_adp.txt"    # 白名单规则
-    # 临时处理目录（使用Runner临时目录的子目录）
+    
+    # 输出文件路径
+    OUTPUT_BLACK = OUTPUT_DIR / "adblock_adp.txt"
+    OUTPUT_WHITE = OUTPUT_DIR / "allow_adp.txt"
+    
+    # 临时处理目录
     TEMP_DIR = Path(RUNNER_TEMP) / "adblock_processing"
+    
+    # 并行处理配置
     MAX_WORKERS = min(os.cpu_count() or 4, 4)
-    RULE_LEN_RANGE = (3, 4096)
-    INPUT_PATTERNS = ["adblock_merged.txt"]  # 输入文件格式
+    RULE_LEN_RANGE = (4, 253)  # 域名长度范围（最小，最大）
 
 
+# ============== 预编译正则 ==============
 class RegexPatterns:
-    # 黑名单规则（Adblock Plus标准语法）
-    BLACK_DOMAIN = re.compile(r'^\|\|([\w.-]+)\^?$')  # ||domain.com^
-    BLACK_ELEMENT = re.compile(r'^[\w.-]+##.+$')  # domain.com##.ad
-    BLACK_WILDCARD = re.compile(r'^[\*a-z0-9\-\.]+$', re.IGNORECASE)  # *adserver*
-    BLACK_REGEX = re.compile(r'^/.*/$')  # /^https?:\/\/ad/
-    BLACK_OPTIONS = re.compile(r'^[\w.-]+\$[\w,-]+$')  # domain.com$script,third-party
-
-    # 白名单规则（Adblock Plus例外语法）
-    WHITE_DOMAIN = re.compile(r'^@@\|\|([\w.-]+)\^?$')  # @@||domain.com^
-    WHITE_ELEMENT = re.compile(r'^[\w.-]+#@#+$')  # domain.com#@#.ad
-    WHITE_OPTIONS = re.compile(r'^@@[\w.-]+\$[\w,-]+$')  # @@domain.com$script
-
-    # 可转换规则
-    HOSTS_RULE = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')  # Hosts -> 黑名单
-    PLAIN_DOMAIN = re.compile(r'^[\w.-]+\.[a.[]{2,}$')  # 纯域名 -> 黑名单
-
+    """预编译正则表达式集合"""
+    # 标准Adblock Plus规则
+    BLACK_DOMAIN = re.compile(r'^\|\|([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\^?$', re.IGNORECASE)
+    WHITE_DOMAIN = re.compile(r'^@@\|\|([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\^?$', re.IGNORECASE)
+    
+    # 元素隐藏规则
+    ELEMENT_HIDE = re.compile(r'^[a-z0-9-\.]+##[a-z0-9.#_:]+$')
+    
+    # 通配符规则
+    WILDCARD = re.compile(r'^[\*\$]?[a-z0-9\.\-]+\$$[a-z0-9\,\-]*$', re.IGNORECASE)
+    
+    # 正则表达式规则
+    REGEX_RULE = re.compile(r'^/(?:[^/\$|\\.|$(?:\^[0-9a-fA-F]?[^$]*$|[^$]+$)*)+/[a-z0-9\,\$\-]*$', re.IGNORECASE)
+    
+    # Hosts规则转换
+    HOSTS_RULE = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$', re.IGNORECASE)
+    
     # 过滤项
     COMMENT = re.compile(r'^[!#]')
     EMPTY_LINE = re.compile(r'^\s*$')
-    UNSUPPORTED = re.compile(r'##\+js\(|\$csp=|\$redirect=')
+    UNSUPPORTED = re.compile(r'##\+js$|\$csp=|\$redirect=')
 
 
+# ============== 日志配置 ==============
 def setup_logger():
-    """适配GitHub Actions的日志格式"""
-    logger = logging.getLogger('AdblockPlusSplit')
+    """GitHub Actions兼容的日志系统"""
+    logger = logging.getLogger('AdblockSplitter')
     logger.setLevel(logging.INFO)
 
     class GitHubFormatter(logging.Formatter):
@@ -78,12 +88,13 @@ def setup_logger():
 logger = setup_logger()
 
 
+# ============== 核心处理类 ==============
 class AdblockPlusSplitter:
     def __init__(self):
-        # 创建必要目录（确保临时处理目录和输出目录存在）
+        """初始化工作目录和缓存"""
+        # 创建必要目录
         for dir_path in [Config.TEMP_DIR, Config.INPUT_DIR, Config.OUTPUT_DIR]:
             dir_path.mkdir(parents=True, exist_ok=True)
-            # 确保Linux环境下可写权限
             if os.name != "nt":
                 os.chmod(dir_path, 0o755)
 
@@ -96,89 +107,79 @@ class AdblockPlusSplitter:
         self.len_min, self.len_max = Config.RULE_LEN_RANGE
 
     def run(self):
+        """主流程：黑白名单分离处理"""
         start_time = time.time()
-        logger.info("===== Adblock Plus 黑白名单处理（GitHub环境适配） =====")
+        logger.info("===== Adblock Plus黑白名单分离器 =====")
         logger.info(f"输入目录: {Config.INPUT_DIR}")
         logger.info(f"输出黑名单: {Config.OUTPUT_BLACK}")
         logger.info(f"输出白名单: {Config.OUTPUT_WHITE}")
 
-        # 读取输入文件
-        input_files = []
-        for pattern in Config.INPUT_PATTERNS:
-            input_files.extend([Path(p) for p in glob.glob(str(Config.INPUT_DIR / pattern))])
-
+        input_files = self._discover_input_files()
         if not input_files:
-            logger.error(f"未在输入目录 {Config.INPUT_DIR} 找到文件（格式：{Config.INPUT_PATTERNS}）")
+            logger.error(f"未找到输入文件（路径：{Config.INPUT_DIR}）")
             return
 
         # 全局去重缓存
-        black_cache: Set[str] = set()
-        white_cache: Set[str] = set()
+        black_cache, white_cache = set(), set()
         total_stats = {'black': 0, 'white': 0, 'filtered': 0, 'unsupported': 0}
 
         with ProcessPoolExecutor(max_workers=Config.MAX_WORKERS) as executor:
             futures = {executor.submit(self._process_file, f): f for f in input_files}
             for future in as_completed(futures):
-                file = futures[future]
+                file_path = futures[future]
                 try:
                     (black_rules, white_rules), stats = future.result()
-                    # 全局去重后添加
                     new_black = [r for r in black_rules if r not in black_cache]
                     new_white = [r for r in white_rules if r not in white_cache]
                     black_cache.update(new_black)
                     white_cache.update(new_white)
-                    # 累加统计
+                    
                     total_stats['black'] += len(new_black)
                     total_stats['white'] += len(new_white)
                     total_stats['filtered'] += stats['filtered']
                     total_stats['unsupported'] += stats['unsupported']
-                    logger.info(f"处理 {file.name}：新增黑名单{len(new_black)}条，白名单{len(new_white)}条")
+                    
+                    logger.info(f"处理 {file_path.name}："
+                                f"新增黑名单{len(new_black)}条，白名单{len(new_white)}条")
                 except Exception as e:
-                    logger.error(f"处理{file.name}失败：{str(e)}")
+                    logger.error(f"处理{file_path.name}失败：{str(e)}")
 
-        # 写入输出文件
-        with open(Config.OUTPUT_BLACK, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(black_cache) + '\n')
-        with open(Config.OUTPUT_WHITE, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(white_cache) + '\n')
+        # 写入最终结果
+        self._write_output(black_cache, white_cache)
 
-        # 输出GitHub Actions环境变量
+        # GitHub Actions输出
         if os.getenv('GITHUB_ACTIONS') == 'true':
-            github_output = os.getenv('GITHUB_OUTPUT')
-            if github_output:
-                with open(github_output, 'a', encoding='utf-8') as f:
-                    f.write(f"blacklist_path={Config.OUTPUT_BLACK}\n")
-                    f.write(f"whitelist_path={Config.OUTPUT_WHITE}\n")
-                    f.write(f"blacklist_count={total_stats['black']}\n")
-                    f.write(f"whitelist_count={total_stats['white']}\n")
+            self._github_actions_output(total_stats)
 
-        logger.info(f"\n处理完成：\n黑名单规则：{total_stats['black']}条（保存至 {Config.OUTPUT_BLACK}）")
+        logger.info("\n处理完成：")
+        logger.info(f"黑名单规则：{total_stats['black']}条（保存至 {Config.OUTPUT_BLACK}）")
         logger.info(f"白名单规则：{total_stats['white']}条（保存至 {Config.OUTPUT_WHITE}）")
         logger.info(f"过滤无效规则：{total_stats['filtered']}条，不支持规则：{total_stats['unsupported']}条")
         logger.info(f"耗时：{time.time()-start_time:.2f}秒")
 
-    def _process_file(self, file_path: Path) -> Tuple[Tuple[List[str], List[str]], Dict]:
-        """处理单个文件，返回（黑名单，白名单）及统计"""
-        black_rules: List[str] = []
-        white_rules: List[str] = []
-        stats = {'filtered': 0, 'unsupported': 0}
-        # 单文件内去重缓存
-        file_black_cache: Set[str] = set()
-        file_white_cache: Set[str] = set()
+    def _discover_input_files(self) -> List[Path]:
+        """发现输入文件"""
+        input_files = []
+        for pattern in ["*.txt", "*.list"]:
+            input_files.extend([Path(p) for p in glob.glob(str(Config.INPUT_DIR / pattern))])
+        return input_files
 
+    def _process_file(self, file_path: Path) -> Tuple[Tuple[List[str], List[str]], Dict]:
+        """处理单个文件"""
+        black_rules, white_rules = [], []
+        stats = {'filtered': 0, 'unsupported': 0}
+        
         try:
             with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                 for line in f:
                     line = line.strip()
                     if not line:
                         continue
-                    # 分类处理规则
+                    
                     rule_type, rule = self._classify_rule(line)
-                    if rule_type == 'black' and rule not in file_black_cache:
-                        file_black_cache.add(rule)
+                    if rule_type == 'black' and rule not in black_rules:
                         black_rules.append(rule)
-                    elif rule_type == 'white' and rule not in file_white_cache:
-                        file_white_cache.add(rule)
+                    elif rule_type == 'white' and rule not in white_rules:
                         white_rules.append(rule)
                     elif rule_type == 'filtered':
                         stats['filtered'] += 1
@@ -190,41 +191,54 @@ class AdblockPlusSplitter:
         return (black_rules, white_rules), stats
 
     def _classify_rule(self, line: str) -> Tuple[str, str]:
-        """判断规则类型（black/white/filtered/unsupported）"""
-        # 过滤注释和无效长度
+        """规则分类器"""
+        # 快速过滤
         if self.regex.COMMENT.match(line) or not (self.len_min <= len(line) <= self.len_max):
             return ('filtered', '')
-        # 过滤不支持的语法
         if self.regex.UNSUPPORTED.search(line):
             return ('unsupported', '')
 
         # 白名单规则
-        if (self.regex.WHITE_DOMAIN.match(line) or 
-            self.regex.WHITE_ELEMENT.match(line) or 
-            self.regex.WHITE_OPTIONS.match(line)):
+        if self.regex.WHITE_DOMAIN.match(line):
+            return ('white', line)
+        if self.regex.ELEMENT_HIDE.match(line) and line.startswith('#@#'):
+            return ('white', line)
+        if self.regex.WILDCARD.match(line) and line.startswith('@@'):
             return ('white', line)
 
-        # 黑名单规则（原生）
-        if (self.regex.BLACK_DOMAIN.match(line) or 
-            self.regex.BLACK_ELEMENT.match(line) or 
-            self.regex.BLACK_WILDCARD.match(line) or 
-            self.regex.BLACK_REGEX.match(line) or 
-            self.regex.BLACK_OPTIONS.match(line)):
+        # 黑名单规则
+        if self.regex.BLACK_DOMAIN.match(line):
+            return ('black', line)
+        if self.regex.ELEMENT_HIDE.match(line) and not line.startswith('#@#'):
+            return ('black', line)
+        if self.regex.WILDCARD.match(line) and not line.startswith('@@'):
+            return ('black', line)
+        if self.regex.REGEX_RULE.match(line) and not line.startswith('@@'):
             return ('black', line)
 
-        # 转换Hosts为黑名单
+        # Hosts规则转换
         hosts_match = self.regex.HOSTS_RULE.match(line)
         if hosts_match:
-            black_rule = f"||{hosts_match.group(2)}^"
-            return ('black', black_rule)
+            return ('black', f'||{hosts_match.group(2)}^')
 
-        # 转换纯域名为黑名单
-        if self.regex.PLAIN_DOMAIN.match(line):
-            black_rule = f"||{line}^"
-            return ('black', black_rule)
-
-        # 未匹配的规则
         return ('unsupported', '')
+
+    def _write_output(self, black_rules: Set[str], white_rules: Set[str]):
+        """写入输出文件"""
+        with open(Config.OUTPUT_BLACK, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(black_rules) + '\n')
+        with open(Config.OUTPUT_WHITE, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(white_rules) + '\n')
+
+    def _github_actions_output(self, stats: Dict):
+        """GitHub Actions输出"""
+        github_output = os.getenv('GITHUB_OUTPUT')
+        if github_output and os.getenv('GITHUB_ACTIONS') == 'true':
+            with open(github_output, 'a', encoding='utf-8') as f:
+                f.write(f"blacklist_path={Config.OUTPUT_BLACK}\n")
+                f.write(f"whitelist_path={Config.OUTPUT_WHITE}\n")
+                f.write(f"blacklist_count={stats['black']}\n")
+                f.write(f"whitelist_count={stats['white']}\n")
 
 
 if __name__ == '__main__':
