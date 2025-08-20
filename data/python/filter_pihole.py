@@ -10,7 +10,8 @@ from pathlib import Path
 # 基础配置
 GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
 INPUT_DIR = Path(GITHUB_WORKSPACE) / "tmp"
-OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "pihole.txt"
+BLOCK_FILE = Path(GITHUB_WORKSPACE) / "adblock_pihole.txt"
+ALLOW_FILE = Path(GITHUB_WORKSPACE) / "allow_pihole.txt"
 INPUT_FILE = INPUT_DIR / "adblock_merged.txt"
 
 # 预编译正则表达式
@@ -25,11 +26,12 @@ DOMAIN_ONLY = re.compile(r'^([\w.-]+)$')
 
 def process_file():
     """处理输入文件并生成Pi-hole规则"""
-    domains = set()
+    block_domains = set()
+    allow_domains = set()
     
     if not INPUT_FILE.exists():
         print(f"错误: 输入文件不存在 {INPUT_FILE}")
-        return domains
+        return block_domains, allow_domains
     
     with open(INPUT_FILE, 'r', encoding='utf-8', errors='ignore') as f:
         for line in f:
@@ -39,8 +41,12 @@ def process_file():
             if not line or EMPTY_LINE.match(line) or COMMENT.match(line):
                 continue
                 
-            # 跳过白名单规则(Pi-hole不支持白名单语法)
-            if ADBLOCK_WHITELIST.match(line):
+            # 处理白名单规则
+            whitelist_match = ADBLOCK_WHITELIST.match(line)
+            if whitelist_match:
+                domain = whitelist_match.group(1)
+                if not IP_ADDRESS.match(domain):
+                    allow_domains.add(domain)
                 continue
                 
             # 处理标准Adblock规则
@@ -48,7 +54,7 @@ def process_file():
             if adblock_match:
                 domain = adblock_match.group(1)
                 if not IP_ADDRESS.match(domain):
-                    domains.add(domain)
+                    block_domains.add(domain)
                 continue
                 
             # 处理Hosts规则
@@ -56,22 +62,28 @@ def process_file():
             if hosts_match:
                 domain = hosts_match.group(2)
                 if not IP_ADDRESS.match(domain):
-                    domains.add(domain)
+                    block_domains.add(domain)
                 continue
                 
             # 处理纯域名
             if DOMAIN_ONLY.match(line) and not IP_ADDRESS.match(line):
-                domains.add(line)
+                block_domains.add(line)
     
-    return domains
+    return block_domains, allow_domains
 
 
-def write_output(domains):
+def write_output(block_domains, allow_domains):
     """写入输出文件"""
-    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(sorted(domains)) + '\n')
+    # 写入拦截列表
+    with open(BLOCK_FILE, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(sorted(block_domains)) + '\n')
     
-    print(f"生成Pi-hole规则: {len(domains)} 条域名")
+    # 写入白名单
+    with open(ALLOW_FILE, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(sorted(allow_domains)) + '\n')
+    
+    print(f"生成Pi-hole拦截列表: {len(block_domains)} 条域名")
+    print(f"生成Pi-hole白名单: {len(allow_domains)} 条域名")
 
 
 if __name__ == '__main__':
@@ -79,7 +91,7 @@ if __name__ == '__main__':
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     
     # 处理文件
-    domains = process_file()
+    block_domains, allow_domains = process_file()
     
     # 写入输出
-    write_output(domains)
+    write_output(block_domains, allow_domains)
