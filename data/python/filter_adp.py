@@ -101,7 +101,7 @@ class AdblockPlusSplitter:
     def run(self):
         start_time = time.time()
         logger.info("===== Adblock Plus 黑白名单处理（GitHub环境适配） =====")
-        
+
         # 读取输入文件（直接从GitHub Runner临时目录根目录读取）
         input_files = []
         for pattern in Config.INPUT_PATTERNS:
@@ -143,11 +143,15 @@ class AdblockPlusSplitter:
         with open(Config.OUTPUT_WHITE, 'w', encoding='utf-8') as f:
             f.write('\n'.join(white_cache) + '\n')
 
-        # 输出GitHub Actions可识别的结果（用于后续步骤引用）
-        print(f"::set-output name=blacklist_path::{Config.OUTPUT_BLACK}")
-        print(f"::set-output name=whitelist_path::{Config.OUTPUT_WHITE}")
-        print(f"::set-output name=blacklist_count::{total_stats['black']}")
-        print(f"::set-output name=whitelist_count::{total_stats['white']}")
+        # 替换已弃用的set-output，使用GITHUB_OUTPUT环境文件
+        if os.getenv('GITHUB_ACTIONS') == 'true':
+            github_output = os.getenv('GITHUB_OUTPUT')
+            if github_output:
+                with open(github_output, 'a', encoding='utf-8') as f:
+                    f.write(f"blacklist_path={Config.OUTPUT_BLACK}\n")
+                    f.write(f"whitelist_path={Config.OUTPUT_WHITE}\n")
+                    f.write(f"blacklist_count={total_stats['black']}\n")
+                    f.write(f"whitelist_count={total_stats['white']}\n")
 
         logger.info(f"\n处理完成：\n黑名单规则：{total_stats['black']}条（保存至 {Config.OUTPUT_BLACK}）")
         logger.info(f"白名单规则：{total_stats['white']}条（保存至 {Config.OUTPUT_WHITE}）")
