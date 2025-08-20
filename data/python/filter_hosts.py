@@ -30,7 +30,7 @@ class Config:
 class RegexPatterns:
     ADBLOCK_DOMAIN = re.compile(r'^\|\|([\w.-]+)\^?$')
     HOSTS_RULE = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')
-    PLAIN_DOMAIN = re.compile(r'^[\w.-]+\.[a-z]{2,}$')
+    PLAIN_DOMAIN = re.compile(r'^[\w.-]+\.[a.[]{2,}$')
     COMMENT = re.compile(r'^[!#]')
     EMPTY_LINE = re.compile(r'^\s*$')
 
@@ -39,12 +39,12 @@ def setup_logger():
     logger = logging.getLogger('HostsMerger')
     logger.setLevel(logging.INFO)
     handler = logging.StreamHandler(sys.stdout)
-    
+
     if os.getenv('GITHUB_ACTIONS') == 'true':
         formatter = logging.Formatter('%(message)s')
     else:
         formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
-    
+
     handler.setFormatter(formatter)
     logger.handlers = [handler]
     return logger
@@ -105,7 +105,7 @@ class HostsMerger:
 
         with ProcessPoolExecutor(max_workers=Config.MAX_WORKERS) as executor:
             futures = {executor.submit(self._process_file, file): file for file in input_files}
-            
+
             for future in as_completed(futures):
                 file = futures[future]
                 try:
@@ -117,7 +117,7 @@ class HostsMerger:
                         if domain not in hosts_cache:
                             new_hosts.append(host_line)
                             hosts_cache.add(domain)
-                    
+
                     all_hosts.extend(new_hosts)
                     total_stats = self._merge_stats(total_stats, stats)
                     logger.info(f"处理完成 {file.name}：有效规则{stats['valid']}条")
@@ -132,8 +132,12 @@ class HostsMerger:
         logger.info(f"\n处理完成：共{len(all_hosts)}条hosts规则，耗时{elapsed:.2f}秒")
         gh_endgroup()
 
+        # 替换已弃用的set-output，使用GITHUB_OUTPUT环境文件
         if os.getenv('GITHUB_ACTIONS') == 'true':
-            logger.info(f"::set-output name=hosts_file::{Config.OUTPUT_FILE}")
+            github_output = os.getenv('GITHUB_OUTPUT')
+            if github_output:
+                with open(github_output, 'a', encoding='utf-8') as f:
+                    f.write(f"hosts_file={Config.OUTPUT_FILE}\n")
 
     def _process_file(self, file_path: Path) -> Tuple[List[str], Dict]:
         if not check_file_size(file_path):
@@ -170,11 +174,13 @@ class HostsMerger:
         if adblock_match:
             domain = adblock_match.group(1)
             if self._is_valid_domain(domain):
+                stats['valid'] += 1
                 return f"{Config.HOSTS_IP} {domain}"
 
         # 转换纯域名为hosts
         if self.regex.PLAIN_DOMAIN.match(line):
             if self._is_valid_domain(line):
+                stats['valid'] += 1
                 return f"{Config.HOSTS_IP} {line}"
 
         # 标准化现有hosts规则（统一IP）
@@ -182,6 +188,7 @@ class HostsMerger:
         if hosts_match:
             domain = hosts_match.group(2)
             if self._is_valid_domain(domain):
+                stats['valid'] += 1
                 return f"{Config.HOSTS_IP} {domain}"
 
         stats['unsupported'] += 1
