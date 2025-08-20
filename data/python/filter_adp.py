@@ -32,7 +32,7 @@ class Config:
 
     MAX_WORKERS = int(os.getenv("MAX_WORKERS", str(min(os.cpu_count() or 4, 4))))
     RULE_LEN_RANGE = (3, 4096)
-    INPUT_PATTERNS = os.getenv("INPUT_PATTERNS", "*.txt,*.list").split(",")  # 输入文件格式
+    INPUT_PATTERNS = os.getenv("INPUT_PATTERNS", "adblock_merged.txt").split(",")  # 输入文件格式
 
 
 class RegexPatterns:
