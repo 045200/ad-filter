@@ -15,10 +15,12 @@ from typing import Tuple, List, Set, Dict
 
 
 class Config:
-    GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
-    BASE_DIR = Path(GITHUB_WORKSPACE)
-    TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
-    # 移除OUTPUT_DIR，直接在根目录输出文件
+    # 优先读取GitHub环境变量，适配GitHub Actions
+    GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", "")  # GitHub工作区根目录
+    RUNNER_TEMP = os.getenv("RUNNER_TEMP", os.getenv("TEMP_DIR", "tmp"))  # GitHub Runner临时目录
+GITHUB_WORKSPACE/tmp
+    INPUT_DIR = os.getenv("INPUT_DIR", Path(GITHUB_WORKSPACE) / "tmp" if GITHUB_WORKSPACE else "tmp")
+    OUTPUT_DIR = os.getenv("OUTPUT_DIR", GITHUB_WORKSPACE if GITHUB_WORKSPACE else "output")
     OUTPUT_FILE = BASE_DIR / "adblock_adg.txt"  # 拦截规则（根目录）
     ALLOW_FILE = BASE_DIR / "allow_adg.txt"     # 白名单规则（根目录）
     MAX_WORKERS = min(os.cpu_count() or 4, 4)
