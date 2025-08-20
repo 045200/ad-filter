@@ -10,7 +10,8 @@ from pathlib import Path
 # 基础配置
 GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
 INPUT_DIR = Path(GITHUB_WORKSPACE) / "tmp"
-OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "adguard_home.txt"
+OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "adblock_adh.txt"
+ALLOW_FILE = Path(GITHUB_WORKSPACE) / "allow_adh.txt"
 INPUT_FILE = INPUT_DIR / "adblock_merged.txt"
 
 # 预编译正则表达式
@@ -32,10 +33,11 @@ UNSUPPORTED_MODIFIERS = {
 def process_file():
     """处理输入文件并生成AdGuard Home规则"""
     rules = set()
+    allows = set()
     
     if not INPUT_FILE.exists():
         print(f"错误: 输入文件不存在 {INPUT_FILE}")
-        return rules
+        return rules, allows
     
     with open(INPUT_FILE, 'r', encoding='utf-8', errors='ignore') as f:
         for line in f:
@@ -49,9 +51,9 @@ def process_file():
             if any(mod in line for mod in UNSUPPORTED_MODIFIERS):
                 continue
                 
-            # 处理白名单规则 (AdGuard Home 使用 @@ 前缀)
+            # 处理白名单规则
             if ADBLOCK_WHITELIST.match(line):
-                rules.add(line)
+                allows.add(line)
                 continue
                 
             # 处理标准Adblock规则
@@ -74,7 +76,7 @@ def process_file():
             if DOMAIN_ONLY.match(line) and not IP_ADDRESS.match(line):
                 rules.add(f"||{line}^")
     
-    return rules
+    return rules, allows
 
 
 def simplify_rule(rule):
@@ -95,12 +97,18 @@ def simplify_rule(rule):
     return rule
 
 
-def write_output(rules):
-    """写入输出文件"""
+def write_output(rules, allows):
+    """写入输出文件，不包含头信息"""
+    # 写入拦截规则
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         f.write('\n'.join(sorted(rules)) + '\n')
     
-    print(f"生成AdGuard Home规则: {len(rules)} 条")
+    # 写入白名单规则
+    with open(ALLOW_FILE, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(sorted(allows)) + '\n')
+    
+    print(f"生成拦截规则: {len(rules)} 条")
+    print(f"生成白名单规则: {len(allows)} 条")
 
 
 def github_actions_output():
@@ -108,6 +116,7 @@ def github_actions_output():
     if github_output := os.getenv('GITHUB_OUTPUT'):
         with open(github_output, 'a') as f:
             f.write(f"adguard_home_file={OUTPUT_FILE}\n")
+            f.write(f"adguard_home_allow_file={ALLOW_FILE}\n")
 
 
 if __name__ == '__main__':
@@ -115,10 +124,10 @@ if __name__ == '__main__':
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     
     # 处理文件
-    rules = process_file()
+    rules, allows = process_file()
     
     # 写入输出
-    write_output(rules)
+    write_output(rules, allows)
     
     # GitHub Actions输出
     github_actions_output()
