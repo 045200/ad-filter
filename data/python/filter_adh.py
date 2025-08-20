@@ -22,8 +22,8 @@ class Config:
     OUTPUT_DIR = os.getenv("OUTPUT_DIR", f"{GITHUB_WORKSPACE}/output" if GITHUB_WORKSPACE else "output")
 
     # 输出文件路径
-    OUTPUT_BLACK = Path(OUTPUT_DIR) / "adguard_blacklist.txt"
-    OUTPUT_WHITE = Path(OUTPUT_DIR) / "adguard_whitelist.txt"
+    OUTPUT_BLACK = Path(OUTPUT_DIR) / "adblock_adh.txt"
+    OUTPUT_WHITE = Path(OUTPUT_DIR) / "allow_adh.txt"
     TEMP_DIR = Path(RUNNER_TEMP) / "adguard_processing"
 
     # 可配置参数
