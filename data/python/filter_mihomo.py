@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 
 """
-AdBlock 规则转换器（增强版）
-输入: 已去重、格式合规的 Clash YAML 规则文件
-输出: adb.mrs
-适配GitHub Actions环境，支持多规则类型转换与完善的错误处理
+AdBlock 规则转换器（增强版，含白名单过滤）
+输入: 步骤一生成的 Clash 拦截规则(clash_adblock.yaml)和放行规则(clash_allow.yaml)
+输出: 经过白名单过滤的 adb.mrs
+适配GitHub Actions环境，支持规则过滤与错误处理
 """
 
 import os
@@ -18,13 +18,15 @@ import yaml
 import logging
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Set
 
 
 class Config:
-    """配置管理（含前置验证）"""
+    """配置管理（含前置验证与步骤一文件关联）"""
     GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
-    INPUT_FILE = os.getenv("ADBLOCK_INPUT", "adblock_clash.yaml")
+    # 关联步骤一的输出文件（拦截规则和白名单/放行规则）
+    INPUT_BLOCK_FILE = os.getenv("BLOCK_INPUT", "clash_adblock.yaml")
+    INPUT_WHITELIST_FILE = os.getenv("WHITELIST_INPUT", "clash_allow.yaml")
     OUTPUT_FILE = os.getenv("ADBLOCK_OUTPUT", "adb.mrs")
     COMPILER_PATH = os.getenv("COMPILER_PATH", "./data/mihomo-tool")
     MAX_DOMAIN_LENGTH = 253  # RFC 1035 限制
@@ -45,12 +47,18 @@ class Config:
             sys.exit(1)
 
     @property
-    def input_path(self) -> Path:
-        path = Path(self.GITHUB_WORKSPACE) / self.INPUT_FILE
+    def block_path(self) -> Path:
+        """步骤一生成的拦截规则文件路径"""
+        path = Path(self.GITHUB_WORKSPACE) / self.INPUT_BLOCK_FILE
         if not path.exists():
-            logger.critical(f"输入文件不存在: {path}")
+            logger.critical(f"拦截规则文件不存在（步骤一生成失败？）: {path}")
             sys.exit(1)
         return path
+
+    @property
+    def whitelist_path(self) -> Path:
+        """步骤一生成的白名单（放行规则）文件路径"""
+        return Path(self.GITHUB_WORKSPACE) / self.INPUT_WHITELIST_FILE
 
     @property
     def output_path(self) -> Path:
@@ -62,12 +70,10 @@ class Config:
 
 
 class DNSValidator:
-    """DNS格式验证工具"""
+    """DNS格式验证工具（复用原有逻辑）"""
     @staticmethod
     def is_valid_domain(domain: str) -> bool:
-        """验证域名格式合法性（基于RFC规范）"""
         domain = domain.strip().lower()
-        # 基础长度校验
         if not domain or len(domain) > Config.MAX_DOMAIN_LENGTH:
             return False
         # 排除IP地址
@@ -93,7 +99,7 @@ class DNSValidator:
 
 def setup_logger():
     """配置GitHub风格日志"""
-    logger = logging.getLogger("AdblockConverter")
+    logger = logging.getLogger("AdblockConverterWithWhitelist")
     logger.setLevel(logging.INFO)
 
     class GitHubFormatter(logging.Formatter):
@@ -117,131 +123,133 @@ logger = setup_logger()
 
 
 class AdblockConverter:
-    """规则转换器核心逻辑"""
+    """规则转换器（含白名单过滤逻辑）"""
     def __init__(self, config: Config):
         self.config = config
         self.stats = {
-            'total': 0,       # 总规则数
-            'valid': 0,       # 有效规则数
-            'invalid': 0,     # 无效规则数（格式错误）
-            'unsupported': 0, # 不支持的规则类型
-            'duplicate': 0    # 重复规则数
+            'total_block': 0,    # 步骤一拦截规则总数
+            'valid_block': 0,    # 有效拦截规则数
+            'whitelist_count': 0,  # 白名单域名数量
+            'filtered_count': 0   # 被白名单过滤的规则数
         }
-
-    def _clean_yaml_content(self) -> str:
-        """清理YAML内容（移除注释和空行）"""
-        with self.config.input_path.open('r', encoding='utf-8') as f:
-            lines = []
-            for line in f:
-                stripped = line.strip()
-                if not stripped or stripped.startswith('#'):
-                    continue  # 跳过空行和注释行
-                lines.append(line.rstrip('\n'))  # 保留原始缩进
-        return '\n'.join(lines)
+        self.whitelist_domains: Set[str] = set()  # 白名单域名集合
 
     def parse_input(self) -> List[Dict[str, str]]:
-        """解析输入文件并提取有效规则"""
-        logger.info(f"解析输入文件: {self.config.input_path}")
-
+        """解析步骤一生成的拦截规则文件"""
+        logger.info(f"解析拦截规则文件: {self.config.block_path}")
         try:
-            cleaned_content = self._clean_yaml_content()
-            data = yaml.safe_load(cleaned_content)
-
+            with self.config.block_path.open('r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
             if not data or 'payload' not in data:
-                logger.error("文件缺少'payload'节点（可能来自上游生成脚本）")
+                logger.error("拦截规则文件缺少'payload'节点（步骤一格式错误）")
                 return []
 
             valid_rules: List[Dict[str, str]] = []
-            seen = set()  # 用于去重的标记集合 (type, value)
+            seen = set()  # 去重标记
 
             for rule in data['payload']:
-                self.stats['total'] += 1
-
-                # 基础格式校验
+                self.stats['total_block'] += 1
                 if not isinstance(rule, dict):
-                    self.stats['invalid'] += 1
-                    continue
+                    continue  # 跳过无效格式
 
-                # 提取规则类型和值
                 rule_type = rule.get('type', '').upper()
                 domain = rule.get('value', '').strip().lower()
 
-                # 规则类型校验
+                # 校验规则类型和域名格式
                 if rule_type not in self.config.SUPPORTED_TYPES:
-                    self.stats['unsupported'] += 1
                     continue
-
-                # 域名值校验
-                if not domain:
-                    self.stats['invalid'] += 1
-                    continue
-
-                # DNS格式校验
                 if not DNSValidator.is_valid_domain(domain):
-                    self.stats['invalid'] += 1
                     continue
 
-                # 去重校验
+                # 去重
                 rule_key = (rule_type, domain)
                 if rule_key in seen:
-                    self.stats['duplicate'] += 1
                     continue
-
-                # 通过所有校验
                 seen.add(rule_key)
                 valid_rules.append({'type': rule_type, 'value': domain})
-                self.stats['valid'] += 1
+                self.stats['valid_block'] += 1
 
-            # 输出统计信息
             logger.info(
-                f"解析完成: 总规则{self.stats['total']}, "
-                f"有效{self.stats['valid']}, "
-                f"无效{self.stats['invalid']}, "
-                f"不支持{self.stats['unsupported']}, "
-                f"重复{self.stats['duplicate']}"
+                f"拦截规则解析完成: 总规则{self.stats['total_block']}, "
+                f"有效{self.stats['valid_block']}"
             )
             return valid_rules
-
         except yaml.YAMLError as e:
-            logger.error(f"YAML格式错误（可能来自上游生成脚本）: {str(e)}")
+            logger.error(f"拦截规则YAML格式错误: {str(e)}")
             return []
         except Exception as e:
-            logger.error(f"解析失败: {str(e)}")
+            logger.error(f"解析拦截规则失败: {str(e)}")
             return []
 
+    def _load_whitelist(self) -> None:
+        """加载步骤一生成的白名单（放行规则）"""
+        if not self.config.whitelist_path.exists():
+            logger.warning("白名单文件不存在，将跳过过滤")
+            return
+        try:
+            with self.config.whitelist_path.open('r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+            if not data or 'payload' not in data:
+                logger.warning("白名单文件缺少'payload'节点（步骤一格式错误）")
+                return
+
+            # 提取所有白名单域名（忽略类型，仅保留值）
+            for rule in data['payload']:
+                if isinstance(rule, dict) and 'value' in rule:
+                    domain = rule['value'].strip().lower()
+                    if DNSValidator.is_valid_domain(domain):
+                        self.whitelist_domains.add(domain)
+            self.stats['whitelist_count'] = len(self.whitelist_domains)
+            logger.info(f"白名单加载完成: 有效域名 {self.stats['whitelist_count']} 个")
+        except yaml.YAMLError as e:
+            logger.error(f"白名单YAML格式错误: {str(e)}")
+        except Exception as e:
+            logger.error(f"加载白名单失败: {str(e)}")
+
+    def _filter_with_whitelist(self, rules: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """用白名单过滤拦截规则"""
+        if not self.whitelist_domains:
+            return rules  # 无白名单时直接返回原规则
+        filtered_rules = []
+        for rule in rules:
+            domain = rule['value']
+            if domain in self.whitelist_domains:
+                self.stats['filtered_count'] += 1
+            else:
+                filtered_rules.append(rule)
+        logger.info(
+            f"白名单过滤完成: 过滤前{len(rules)}条, 过滤后{len(filtered_rules)}条, "
+            f"被过滤{self.stats['filtered_count']}条"
+        )
+        return filtered_rules
+
     def generate_compile_yaml(self, rules: List[Dict[str, str]]) -> str:
-        """生成用于编译的YAML内容（保留原始规则类型）"""
+        """生成用于编译的YAML内容"""
         if not rules:
             return ""
-
-        # 按域名排序（增强可读性）
         sorted_rules = sorted(rules, key=lambda x: x['value'])
-
-        # 构建YAML行
         yaml_lines = ["payload:"]
         for rule in sorted_rules:
             yaml_lines.append(f"  - type: {rule['type']}")
             yaml_lines.append(f"    value: {rule['value']}")
-
         logger.info(f"生成编译用YAML: 包含{len(sorted_rules)}条规则")
         return '\n'.join(yaml_lines)
 
     def compile_to_mrs(self, yaml_content: str) -> bool:
-        """使用编译器将YAML转换为MRS格式"""
+        """编译为MRS格式"""
         if not yaml_content:
-            logger.error("无有效内容可编译")
-            return False
+            # 生成空文件避免下游错误
+            with self.config.output_path.open('w', encoding='utf-8') as f:
+                f.write("")
+            logger.warning("无有效规则，生成空MRS文件")
+            return True
 
         temp_file = None
         try:
-            # 创建临时文件
             with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False, encoding='utf-8') as f:
                 f.write(yaml_content)
                 temp_file = f.name
-                logger.debug(f"临时文件创建: {temp_file}")
 
-            # 执行编译命令
-            logger.info(f"开始编译: {self.config.compiler_abs_path}")
             result = subprocess.run(
                 [
                     str(self.config.compiler_abs_path),
@@ -257,22 +265,15 @@ class AdblockConverter:
                 text=True
             )
 
-            # 处理编译结果
             if result.returncode != 0:
-                error_msg = (
-                    f"编译失败(返回码: {result.returncode})\n"
-                    f"标准输出: {result.stdout[:500]}...\n"
-                    f"标准错误: {result.stderr[:500]}..."
+                logger.error(
+                    f"编译失败(返回码{result.returncode}):\n"
+                    f"stdout: {result.stdout[:500]}\nstderr: {result.stderr[:500]}"
                 )
-                logger.error(error_msg)
                 return False
 
-            # 验证输出文件
-            if not self.config.output_path.exists():
-                logger.error("编译成功但未生成输出文件")
-                return False
-            if self.config.output_path.stat().st_size == 0:
-                logger.error("输出文件为空")
+            if not self.config.output_path.exists() or self.config.output_path.stat().st_size == 0:
+                logger.error("编译成功但输出文件为空")
                 return False
 
             logger.info(
@@ -280,7 +281,6 @@ class AdblockConverter:
                 f"({self.config.output_path.stat().st_size / 1024:.1f}KB)"
             )
             return True
-
         except subprocess.TimeoutExpired:
             logger.error("编译超时（>300秒）")
             return False
@@ -288,38 +288,35 @@ class AdblockConverter:
             logger.error(f"编译异常: {str(e)}")
             return False
         finally:
-            # 清理临时文件
             if temp_file and os.path.exists(temp_file):
                 try:
                     os.unlink(temp_file)
-                    logger.debug(f"临时文件已清理: {temp_file}")
                 except Exception as e:
                     logger.warning(f"临时文件清理失败: {str(e)}")
 
     def run(self) -> int:
-        """执行完整转换流程"""
-        # 解析并提取规则
-        valid_rules = self.parse_input()
-        if not valid_rules:
-            logger.error("无有效规则可处理，终止流程")
+        """执行完整流程：解析拦截规则 → 加载白名单 → 过滤 → 编译"""
+        # 1. 解析步骤一的拦截规则
+        valid_block_rules = self.parse_input()
+        if not valid_block_rules:
+            logger.error("无有效拦截规则，终止流程")
             return 1
 
-        # 生成编译用YAML
-        yaml_content = self.generate_compile_yaml(valid_rules)
-        if not yaml_content:
-            logger.error("生成编译内容失败")
-            return 1
+        # 2. 加载白名单并过滤
+        self._load_whitelist()
+        final_rules = self._filter_with_whitelist(valid_block_rules)
 
-        # 编译为MRS
+        # 3. 生成编译内容并编译
+        yaml_content = self.generate_compile_yaml(final_rules)
         if not self.compile_to_mrs(yaml_content):
-            logger.error("编译流程失败")
             return 1
 
         # 输出GitHub Action变量
         print(f"::set-output name=mrs_path::{self.config.output_path}")
-        print(f"::set-output name=rule_count::{self.stats['valid']}")
+        print(f"::set-output name=final_rule_count::{len(final_rules)}")
+        print(f"::set-output name=filtered_count::{self.stats['filtered_count']}")
 
-        logger.info("转换流程完成")
+        logger.info("步骤二转换流程完成")
         return 0
 
 
