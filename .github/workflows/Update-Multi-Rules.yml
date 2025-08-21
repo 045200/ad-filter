@@ -48,23 +48,25 @@ jobs:
             ${{ env.PYTHON_SCRIPTS }}/**
             ${{ env.DATA_DIR }}/mod/**
 
-      # 4. 设置Python环境
+      # 4. 设置Python环境（始终执行，轻量操作）
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      # 5. 安装依赖
+      # 5. 安装依赖（仅手动/定时执行时运行）
       - name: Install dependencies
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
           sudo apt-get update
           sudo apt-get install -y jq moreutils  # 系统工具
           pip install --upgrade pip
-          pip install requests aiodns pyyaml beautifulsoup4 pytz chardet aiohttp psutil tldextract # 添加aiohttp和psutil
+          pip install requests aiodns pyyaml beautifulsoup4 pytz chardet aiohttp psutil tldextract
 
-      # 6. 更新Mihomo
+      # 6. 更新Mihomo（仅手动/定时执行时运行）
       - name: Update Mihomo
         id: mihomo
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
           LATEST_VERSION=$(curl -sL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name' | sed 's/v//')
           echo "Latest version: $LATEST_VERSION"
@@ -89,23 +91,28 @@ jobs:
           echo "$LATEST_VERSION" > "${{ env.DATA_DIR }}/.mihomo_version"
           echo "LATEST_VERSION=$LATEST_VERSION" >> $GITHUB_ENV
 
-      # 7. 处理基础规则
+      # 7. 处理基础规则（添加id，用于后续步骤依赖判断）
       - name: Process base rules
+        id: process_base_rules
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
           python ${{ env.PYTHON_SCRIPTS }}/dl.py
           python ${{ env.PYTHON_SCRIPTS }}/merge.py
-        continue-on-error: true
+        continue-on-error: false  # 基础规则处理失败时直接中断后续依赖步骤
 
-      # 8. 运行广告拦截规则清理（新增步骤）
+      # 8. 运行广告拦截规则清理（依赖基础规则处理成功）
       - name: Run adblock cleaner
-        if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        if: |
+          (steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') &&
+          steps.process_base_rules.success()
         run: |
-          python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py  # 路径与第一个工作流保持一致
+          python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py
 
-      # 9. 生成多格式规则（multi分支特有）
+      # 9. 生成多格式规则（依赖基础规则处理成功）
       - name: Generate multi-format rules
-        if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        if: |
+          (steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') &&
+          steps.process_base_rules.success()
         run: |
           python ${{ env.PYTHON_SCRIPTS }}/filter_adp.py   # Adblock Plus
           python ${{ env.PYTHON_SCRIPTS }}/filter_pihole.py   # Pihole
@@ -116,9 +123,11 @@ jobs:
           python ${{ env.PYTHON_SCRIPTS }}/filter_clash.py # Clash
           python ${{ env.PYTHON_SCRIPTS }}/filter_mihomo.py # Mihomo扩展规则
 
-      # 10. 更新文档
+      # 10. 更新文档（依赖基础规则处理成功）
       - name: Update documentation
-        if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        if: |
+          (steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') &&
+          steps.process_base_rules.success()
         run: python ${{ env.PYTHON_SCRIPTS }}/title.py
 
       # 11. 提交变更
@@ -156,7 +165,7 @@ jobs:
           # 清理构建过程中可能产生的临时文件
           rm -rf "${{ github.workspace }}/tmp*" "${{ github.workspace }}/temp*" "${{ github.workspace }}/.tmp*" "${{ github.workspace }}/.temp*" 2>/dev/null || true
 
-      # 15. 清理旧工件（使用替代方案）
+      # 15. 清理旧工件
       - name: Cleanup old artifacts
         uses: c-hive/gha-remove-artifacts@v1.4.0
         with:
