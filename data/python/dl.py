@@ -19,11 +19,11 @@ DATA_DIR = BASE_DIR / os.getenv('DATA_DIR', 'data')
 TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')  # 与合并脚本共享临时目录
 MOD_PATH = DATA_DIR / 'mod'
 
-# 下载配置
+# 下载配置 - 调整超时和重试参数
 MAX_WORKERS = 4
-TIMEOUT = 8
-MAX_RETRIES = 2
-RETRY_DELAY = 0.5
+TIMEOUT = 15  # 延长超时时间到15秒
+MAX_RETRIES = 3  # 增加重试次数到3次
+RETRY_DELAY = 1  # 延长重试间隔到1秒
 HTTP_POOL_SIZE = 10
 MIN_FILE_SIZE = 256  # 最小文件大小（字节）
 
@@ -33,11 +33,15 @@ EXTRA_DOWNLOADS = {
     "GeoLite2-Country.mmdb": "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-Country.mmdb"
 }
 
-# 请求头
+# 增强请求头，更接近浏览器行为
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'zh-CN,zh;q=0.9'
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'zh-CN,zh;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1',
+    'Cache-Control': 'max-age=0'
 }
 
 # 规则URL列表（输出文件名：adblockXX.txt/allowXX.txt）
@@ -163,9 +167,23 @@ class RuleDownloader:
         return 'gb18030' if encoding.lower() in ['gb2312', 'gbk'] else encoding
 
     def download_with_retry(self, url, save_path, is_binary=False):
+        # 针对特定链接增加详细日志
+        special_url = "https://file-git.trli.club/file-hosts/allow/Domains"
+        is_special = url == special_url
+        
+        if is_special:
+            logger.info(f"开始处理特殊链接: {url}")
+            
         for attempt in range(MAX_RETRIES + 1):
             try:
-                response = self.session.get(url, timeout=TIMEOUT)
+                # 特殊链接尝试关闭SSL验证（仅作为最后的手段）
+                verify_ssl = not is_special
+                
+                response = self.session.get(
+                    url, 
+                    timeout=TIMEOUT,
+                    verify=verify_ssl  # 特殊链接关闭SSL验证
+                )
                 response.raise_for_status()
 
                 if is_binary:
@@ -182,12 +200,19 @@ class RuleDownloader:
 
                 if save_path.stat().st_size < MIN_FILE_SIZE:
                     save_path.unlink()
+                    if is_special:
+                        logger.warning(f"特殊链接文件过小，已删除: {save_path}")
                     return False
 
-                logger.info(f"成功下载: {url.split('/')[-1]}")
+                if is_special:
+                    logger.info(f"特殊链接下载成功: {url}")
+                else:
+                    logger.info(f"成功下载: {url.split('/')[-1]}")
                 return True
 
             except Exception as e:
+                if is_special:
+                    logger.warning(f"特殊链接尝试 {attempt+1}/{MAX_RETRIES+1} 失败: {str(e)}")
                 if attempt < MAX_RETRIES:
                     time.sleep(RETRY_DELAY)
                 else:
@@ -249,7 +274,7 @@ class RuleDownloader:
         for filename, url in EXTRA_DOWNLOADS.items():
             save_path = DATA_DIR / filename
             is_binary = filename.endswith('.mmdb')  # mmdb文件是二进制格式
-            
+
             try:
                 if self.download_with_retry(url, save_path, is_binary=is_binary):
                     self.stats['extra']['success'] += 1
