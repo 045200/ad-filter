@@ -1,0 +1,92 @@
+name: Update Mihomo Tool
+on:
+  workflow_dispatch:  # 手动触发
+  schedule:
+    - cron: '0 0 * * *'  # 每天检查一次更新
+
+permissions:
+  contents: write        # 用于提交更新的mihomo二进制文件
+  actions: write         # 用于清理工作流记录
+
+jobs:
+  update-mihomo:
+    runs-on: ubuntu-latest
+    env:
+      MIHOMO_BIN: ${{ github.workspace }}/data/mihomo-tool  # 与原工作流保持一致的路径
+      DATA_DIR: ${{ github.workspace }}/data              # 版本文件保存目录
+      MAIN_BRANCH: multi                                  # 关联multi分支
+
+    steps:
+      # 1. 拉取代码（获取当前分支的mihomo版本和目录结构）
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.MAIN_BRANCH }}
+
+      # 2. 检查并更新Mihomo
+      - name: Check and update Mihomo
+        id: mihomo
+        run: |
+          # 获取最新版本号
+          LATEST_VERSION=$(curl -sL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name' | sed 's/v//')
+          echo "检测到最新版本: v$LATEST_VERSION"
+          
+          # 获取当前版本号（若文件存在）
+          if [ -f "${{ env.MIHOMO_BIN }}" ]; then
+            CURRENT_VERSION=$("${{ env.MIHOMO_BIN }}" -v 2>/dev/null | awk '{print $2}' | sed 's/v//' || echo "0.0.0")
+          else
+            CURRENT_VERSION="0.0.0"
+            echo "未检测到现有Mihomo，将进行首次安装"
+          fi
+          echo "当前版本: v$CURRENT_VERSION"
+          
+          # 版本对比，决定是否更新
+          if [ "$CURRENT_VERSION" != "$LATEST_VERSION" ]; then
+            echo "开始更新Mihomo（v$CURRENT_VERSION -> v$LATEST_VERSION）"
+            # 创建存放目录（若不存在）
+            mkdir -p $(dirname "${{ env.MIHOMO_BIN }}")
+            # 下载并解压最新版本
+            curl -sL "https://github.com/MetaCubeX/mihomo/releases/latest/download/mihomo-linux-amd64-v${LATEST_VERSION}.gz" | gzip -d > "${{ env.MIHOMO_BIN }}"
+            # 添加执行权限
+            chmod +x "${{ env.MIHOMO_BIN }}"
+            # 保存版本号到文件（用于后续检查）
+            echo "$LATEST_VERSION" > "${{ env.DATA_DIR }}/.mihomo_version"
+            # 输出更新状态
+            echo "mihomo_updated=true" >> $GITHUB_OUTPUT
+            echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "Mihomo已为最新版本（v$LATEST_VERSION），无需更新"
+            echo "mihomo_updated=false" >> $GITHUB_OUTPUT
+            echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+          fi
+
+      # 3. 提交更新（仅当有新版本时）
+      - name: Commit changes
+        if: steps.mihomo.outputs.mihomo_updated == 'true'
+        run: |
+          cd ${{ github.workspace }}
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Actions"
+          git add ${{ env.MIHOMO_BIN }} ${{ env.DATA_DIR }}/.mihomo_version
+          git commit -m "Update Mihomo to v${{ steps.mihomo.outputs.latest_version }} [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
+
+      # 4. 推送更新（仅当有新版本时）
+      - name: Push changes
+        if: steps.mihomo.outputs.mihomo_updated == 'true'
+        run: |
+          cd ${{ github.workspace }}
+          # 重试机制避免推送冲突
+          for i in 1 2 3; do
+            git pull --rebase origin ${{ env.MAIN_BRANCH }}
+            git push origin ${{ env.MAIN_BRANCH }} && break || sleep 5
+          done
+
+      # 5. 清理旧工作流记录
+      - name: Cleanup old workflows
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          retain_days: 0
+          keep_minimum_runs: 3  # 保留最近3条记录
