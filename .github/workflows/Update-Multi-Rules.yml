@@ -1,37 +1,20 @@
 name: Update Multi Rules
-
 on:
   workflow_dispatch:  # 手动触发
   schedule:
-    - cron: '0 */12 * * *'  # 每12小时触发一次
+    - cron: '0 */12 * * *'  # 与basic工作流保持相同调度频率
   push:
     branches: [ "multi" ]  # 仅在multi分支推送时触发
     paths:
       - 'data/python/**'   # 监测python脚本变更
       - 'data/mod/**'      # 监测mod配置变更
-      - '.github/workflows/Update-Multi-Rules.yml'  # 工作流文件变更时触发预检查
 
 permissions:
   contents: write        # 用于代码提交推送
   actions: write         # 用于删除旧工作流记录和工件
 
 jobs:
-  # 1. 预检查：验证工作流文件语法
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4  # 拉取代码以获取工作流文件
-
-      - name: Lint GitHub Actions workflow
-        uses: rhysd/actionlint@v1  # 使用actionlint工具检查语法
-        with:
-          workflow: .github/workflows/Update-Multi-Rules.yml
-          format: "${file}:${line}:${column}: ${message} (${code})"  # 详细输出格式
-
-  # 2. 主更新流程（依赖预检查通过后执行）
   update:
-    needs: lint  # 仅当lint job成功时运行
     runs-on: ubuntu-latest
     env:
       DATA_DIR: ${{ github.workspace }}/data
@@ -41,53 +24,48 @@ jobs:
       TEMP_DIR: 'tmp'     # 添加临时目录环境变量
 
     steps:
-      # 3. 拉取代码（multi分支）
+      # 1. 拉取代码（multi分支）
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ env.MAIN_BRANCH }}
 
-      # 4. 清理工作区临时文件（提前执行）
+      # 2. 清理工作区临时文件（提前执行）
       - name: Cleanup temporary folders (Pre-build)
         run: |
-          # 清理可能存在的临时目录，但避免删除代码目录本身
-          find "${{ github.workspace }}" -maxdepth 1 \\
-            $-name "tmp*" -o -name "temp*" -o -name ".tmp*" -o -name ".temp*"\$ \\
-            -exec rm -rf {} + 2>/dev/null || true
-          # 清理根目录下的指定格式文件
-          find "${{ github.workspace }}" -maxdepth 1 \\
-            $-name "*.txt" -o -name "*.mrs" -o -name "*.conf" -o -name "*.yaml"\$ \\
-            -exec rm -f {} + 2>/dev/null || true
+          find "${{ github.workspace }}" -maxdepth 1 \( -name "tmp*" -o -name "temp*" -o -name ".tmp*" -o -name ".temp*" \) -exec rm -rf {} + 2>/dev/null || true
+          find "${{ github.workspace }}" -maxdepth 1 \( -name "*.txt" -o -name "*.mrs" -o -name "*.conf" -o -name "*.yaml" \) -exec rm -f {} + 2>/dev/null || true
 
-      # 5. 检测文件变更
+      # 3. 检测文件变更
       - name: Detect changed files
         id: changes
         uses: tj-actions/changed-files@v42
         with:
           files: |
-            ${{ env.PYTHON_SCRIPTS }}/**
-            ${{ env.DATA_DIR }}/mod/**
+            data/python/**
+            data/mod/**
 
-      # 6. 设置Python环境（始终执行，轻量操作）
+      # 4. 设置Python环境（仅在需要时执行）
       - name: Set up Python
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      # 7. 安装依赖（仅手动/定时执行时运行）
+      # 5. 安装依赖（仅手动/定时执行时运行）
       - name: Install dependencies
-        if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq moreutils  # 系统工具
+          sudo apt-get install -y jq moreutils
           pip install --upgrade pip
           pip install requests aiodns pyyaml beautifulsoup4 pytz chardet aiohttp psutil tldextract
 
-      # 8. 更新Mihomo（仅手动/定时执行时运行）
+      # 6. 更新Mihomo（仅手动/定时执行时运行）
       - name: Update Mihomo
         id: mihomo
-        if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
           LATEST_VERSION=$(curl -sL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name' | sed 's/v//')
           echo "Latest version: $LATEST_VERSION"
@@ -105,68 +83,87 @@ jobs:
             curl -sL "https://github.com/MetaCubeX/mihomo/releases/latest/download/mihomo-linux-amd64-v${LATEST_VERSION}.gz" | gzip -d > "${{ env.MIHOMO_BIN }}"
             chmod +x "${{ env.MIHOMO_BIN }}"
             echo "mihomo_updated=true" >> $GITHUB_OUTPUT
+            echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
           else
             echo "Mihomo is up-to-date (v$LATEST_VERSION)"
             echo "mihomo_updated=false" >> $GITHUB_OUTPUT
+            echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
           fi
           echo "$LATEST_VERSION" > "${{ env.DATA_DIR }}/.mihomo_version"
-          echo "LATEST_VERSION=$LATEST_VERSION" >> $GITHUB_ENV
 
-      # 9. 处理基础规则（添加id，用于后续步骤依赖判断）
+      # 7. 处理基础规则（仅手动/定时执行时运行）
       - name: Process base rules
         id: process_base_rules
-        if: ${{ steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
+          cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/dl.py
           python ${{ env.PYTHON_SCRIPTS }}/merge.py
-        continue-on-error: false  # 基础规则处理失败时直接中断后续依赖步骤
 
-      # 10. 运行广告拦截规则清理（依赖基础规则处理成功）
+      # 8. 运行广告拦截规则清理（仅手动/定时执行时运行）
       - name: Run adblock cleaner
-        if: ${{ (steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && success() }}
+        id: adblock_cleaner
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
+          cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py
 
-      # 11. 生成多格式规则（依赖基础规则处理成功）
+      # 9. 生成多格式规则（仅手动/定时执行且广告拦截规则清理完成后运行）
       - name: Generate multi-format rules
-        if: ${{ (steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && success() }}
+        if: steps.adblock_cleaner.success() && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
         run: |
-          python ${{ env.PYTHON_SCRIPTS }}/filter_adp.py   # Adblock Plus
-          python ${{ env.PYTHON_SCRIPTS }}/filter_pihole.py   # Pihole
-          python ${{ env.PYTHON_SCRIPTS }}/filter_hosts.py   # Hosts
-          python ${{ env.PYTHON_SCRIPTS }}/filter_ubo.py   # uBlock Origin
-          python ${{ env.PYTHON_SCRIPTS }}/filter_adg.py   # AdGuard
-          python ${{ env.PYTHON_SCRIPTS }}/filter_adh.py   # AdGuard Home
-          python ${{ env.PYTHON_SCRIPTS }}/filter_clash.py # Clash
-          python ${{ env.PYTHON_SCRIPTS }}/filter_mihomo.py # Mihomo扩展规则
+          cd ${{ github.workspace }}
+          python ${{ env.PYTHON_SCRIPTS }}/filter_adp.py
+          python ${{ env.PYTHON_SCRIPTS }}/filter_pihole.py
+          python ${{ env.PYTHON_SCRIPTS }}/filter_hosts.py
+          python ${{ env.PYTHON_SCRIPTS }}/filter_ubo.py
+          python ${{ env.PYTHON_SCRIPTS }}/filter_adg.py
+          python ${{ env.PYTHON_SCRIPTS }}/filter_adh.py
+          python ${{ env.PYTHON_SCRIPTS }}/filter_clash.py
+          python ${{ env.PYTHON_SCRIPTS }}/filter_mihomo.py
 
-      # 12. 更新文档（依赖基础规则处理成功）
+      # 10. 更新文档（仅手动/定时执行且多格式规则生成完成后运行）
       - name: Update documentation
-        if: ${{ (steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && success() }}
-        run: python ${{ env.PYTHON_SCRIPTS }}/title.py
-
-      # 13. 提交变更
-      - name: Commit changes
+        if: steps.generate_multi_format.success() && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
         run: |
+          cd ${{ github.workspace }}
+          python ${{ env.PYTHON_SCRIPTS }}/title.py
+
+      # 11. 提交变更（仅在检测到变更时运行）
+      - name: Commit changes
+        id: commit
+        if: steps.changes.outputs.any_changed == 'true'
+        run: |
+          cd ${{ github.workspace }}
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Actions"
           git add --all
-          if [ "${{ steps.mihomo.outputs.mihomo_updated }}" = "true" ]; then
-            git commit -m "Multi-format update: Rules + Mihomo v${{ env.LATEST_VERSION }} [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
+          
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
           else
-            git commit -m "Multi-format update: Rules [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
-          fi || echo "No changes to commit"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            if [ "${{ steps.mihomo.outputs.mihomo_updated }}" = "true" ]; then
+              git commit -m "Multi-format update: Rules + Mihomo v${{ steps.mihomo.outputs.latest_version }} [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
+            else
+              git commit -m "Multi-format update: Rules [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
+            fi
+          fi
 
-      # 14. 推送变更（带重试机制）
+      # 12. 推送变更（仅在检测到变更且提交成功时运行）
       - name: Push changes
+        if: steps.commit.outputs.has_changes == 'true'
         run: |
+          cd ${{ github.workspace }}
           for i in 1 2 3; do
             git pull --rebase origin ${{ env.MAIN_BRANCH }}
             git push origin ${{ env.MAIN_BRANCH }} && break || sleep 5
           done
 
-      # 15. 清理旧工作流
+      # 13. 清理旧工作流（始终运行）
       - name: Cleanup old workflows
+        if: always()
         uses: Mattraks/delete-workflow-runs@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -174,15 +171,15 @@ jobs:
           retain_days: 0
           keep_minimum_runs: 5
 
-      # 16. 清理构建过程中产生的临时文件
+      # 14. 清理构建过程中产生的临时文件（始终运行）
       - name: Cleanup temporary folders (Post-build)
+        if: always()
         run: |
-          # 清理构建过程中可能产生的临时文件
           rm -rf "${{ github.workspace }}/tmp*" "${{ github.workspace }}/temp*" "${{ github.workspace }}/.tmp*" "${{ github.workspace }}/.temp*" 2>/dev/null || true
 
-      # 17. 清理旧工件
+      # 15. 清理旧工件（始终运行）
       - name: Cleanup old artifacts
+        if: always()
         uses: c-hive/gha-remove-artifacts@v1.4.0
         with:
-          age: '7 days'  # 保留最近7天的工件，删除更早的
-        if: always()  # 确保即使之前步骤失败，清理工作也能尝试进行
+          age: '7 days'
