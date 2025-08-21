@@ -38,7 +38,7 @@ class Config:
     OUTPUT_DIR = TEMP_DIR
     
     # 核心输出文件
-    CLEANED_FILE = TEMP_DIR / "adblock_merged.txt"
+    CLEANED_FILE = TEMP_DIR / "adblock_merged.txt"  # 修改输出文件名
     
     # 无效域名备份文件
     INVALID_DOMAINS_BACKUP = BASE_DIR / "data" / "mod" / "adblock_update.txt"
@@ -54,7 +54,7 @@ class Config:
     DNS_WORKERS = 100  # DNS查询的并发数（提高IO密集型任务并发）
     RULE_LEN_RANGE = (3, 2048)
     MAX_FILESIZE_MB = 100  # 增加文件大小限制
-    INPUT_PATTERNS = ["adblock_filter.txt"]
+    INPUT_PATTERNS = ["adblock_filter.txt"]  # 修改输入模式以匹配AdblockMerger的输出
     
     # DNS解析设置
     DNS_TIMEOUT = 3  # 稍微增加超时时间
@@ -96,9 +96,10 @@ class Config:
 
 class RegexPatterns:
     """Adblock语法模式"""
-    # 域名提取模式
-    DOMAIN_EXTRACT = re.compile(r'^(?:@@\|\|)?([\w.-]+)(?:\^|\$|/|$)')
+    # 域名提取模式 - 增强版，支持更多Adblock格式
+    DOMAIN_EXTRACT = re.compile(r'^(?:@@)?\|{1,2}([\w.-]+)[\^\$\|\/]')
     HOSTS_RULE = re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')
+    ADBLOCK_OPTIONS = re.compile(r'\$[a-zA-Z0-9~,=+_-]+')
     
     # 过滤项
     COMMENT = re.compile(r'^[!#]')
@@ -620,22 +621,32 @@ class AdblockCleanerCI:
         # 尝试匹配Adblock域名规则
         domain_match = self.regex.DOMAIN_EXTRACT.match(rule)
         if domain_match:
-            return domain_match.group(1)
+            domain = domain_match.group(1)
+            # 移除可能包含的选项部分
+            if '$' in domain:
+                domain = domain.split('$')[0]
+            logger.debug(f"从Adblock规则 '{rule}' 中提取到域名: {domain}")
+            return domain
             
         # 尝试匹配Hosts规则
         hosts_match = self.regex.HOSTS_RULE.match(rule)
         if hosts_match:
-            return hosts_match.group(1)
+            domain = hosts_match.group(1)
+            logger.debug(f"从Hosts规则 '{rule}' 中提取到域名: {domain}")
+            return domain
             
         # 尝试从URL规则中提取域名
         if rule.startswith(('http://', 'https://')):
             try:
                 parsed = urlparse(rule)
                 if parsed.netloc:
-                    return parsed.netloc.split(':')[0]  # 移除端口号
+                    domain = parsed.netloc.split(':')[0]  # 移除端口号
+                    logger.debug(f"从URL规则 '{rule}' 中提取到域名: {domain}")
+                    return domain
             except:
                 pass
                 
+        logger.debug(f"无法从规则 '{rule}' 中提取域名")
         return None
 
     async def _validate_domains_batch(self, domains: List[str]) -> Set[str]:
@@ -658,7 +669,10 @@ class AdblockCleanerCI:
                 if isinstance(result, Exception):
                     logger.debug(f"验证域名 {domain} 时出错: {str(result)}")
                 elif result:
+                    logger.debug(f"域名 {domain} 验证成功")
                     valid_domains.add(domain)
+                else:
+                    logger.debug(f"域名 {domain} 验证失败")
                     
         return valid_domains
 
