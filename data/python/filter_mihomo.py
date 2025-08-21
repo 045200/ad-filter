@@ -10,6 +10,239 @@ from datetime import datetime
 
 
 class Config:
+    """基于GITHUB_WORKSPACE的路径配置（优先使用工作区变量）"""
+    # 从环境变量获取工作区（GitHub Actions中自动设置）
+    GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())  # 本地调试时 fallback 到当前目录
+    INPUT_FILE = os.getenv("ADBLOCK_INPUT", "adblock_clash.yaml")  # 输入文件名/相对路径
+    OUTPUT_FILE = os.getenv("ADBLOCK_OUTPUT", "adb.mrs")  # 输出文件名/相对路径
+    COMPILER_PATH = os.getenv("COMPILER_PATH", "data/mihomo-tool")  # 编译器相对路径
+
+    @property
+    def workspace_path(self) -> Path:
+        """获取工作区绝对路径"""
+        path = Path(self.GITHUB_WORKSPACE).resolve()
+        if not path.exists():
+            logger.error(f"工作区不存在: {path}")
+            sys.exit(1)
+        return path
+
+    @property
+    def input_path(self) -> Path:
+        """输入文件路径（基于工作区）"""
+        # 若输入路径是绝对路径则直接使用，否则拼接工作区
+        if os.path.isabs(self.INPUT_FILE):
+            path = Path(self.INPUT_FILE).resolve()
+        else:
+            path = self.workspace_path / self.INPUT_FILE
+        return path
+
+    @property
+    def output_path(self) -> Path:
+        """输出文件路径（基于工作区）"""
+        if os.path.isabs(self.OUTPUT_FILE):
+            path = Path(self.OUTPUT_FILE).resolve()
+        else:
+            path = self.workspace_path / self.OUTPUT_FILE
+        return path
+
+    @property
+    def compiler_path(self) -> Path:
+        """编译器路径（基于工作区）"""
+        if os.path.isabs(self.COMPILER_PATH):
+            path = Path(self.COMPILER_PATH).resolve()
+        else:
+            path = self.workspace_path / self.COMPILER_PATH
+        return path
+
+
+def setup_github_logger():
+    """符合GitHub Action规范的日志格式"""
+    logger = logging.getLogger("GitHubWorkspaceCompiler")
+    logger.setLevel(logging.INFO)
+
+    class GitHubFormatter(logging.Formatter):
+        def format(self, record):
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            if record.levelno == logging.INFO:
+                return f"[{timestamp}] ::notice:: {record.getMessage()}"
+            elif record.levelno == logging.WARNING:
+                return f"[{timestamp}] ::warning:: {record.getMessage()}"
+            elif record.levelno == logging.ERROR:
+                return f"[{timestamp}] ::error:: {record.getMessage()}"
+            return f"[{timestamp}] {record.getMessage()}"
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(GitHubFormatter())
+    logger.handlers = [handler]
+    return logger
+
+
+logger = setup_github_logger()
+
+
+def calculate_file_hash(file_path: Path) -> str:
+    """计算文件SHA256哈希"""
+    sha256_hash = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(chunk)
+        return sha256_hash.hexdigest()
+    except Exception as e:
+        logger.error(f"哈希计算失败: {str(e)}")
+        return ""
+
+
+def write_github_output(vars: dict):
+    """写入GitHub环境变量（供后续步骤使用）"""
+    github_output = os.getenv("GITHUB_OUTPUT")
+    if not github_output:
+        logger.warning("未检测到GITHUB_OUTPUT，跳过环境变量写入")
+        return
+    try:
+        with open(github_output, "a") as f:
+            for key, value in vars.items():
+                f.write(f"{key}={value}\n")
+        logger.info(f"已写入GitHub环境变量: {list(vars.keys())}")
+    except Exception as e:
+        logger.warning(f"环境变量写入失败: {str(e)}")
+
+
+def main():
+    config = Config()
+    rule_count = 0
+
+    # 打印工作区信息（便于调试路径问题）
+    logger.info(f"使用工作区: {config.workspace_path}")
+    logger.info(f"输入文件路径: {config.input_path}")
+    logger.info(f"输出文件路径: {config.output_path}")
+    logger.info(f"编译器路径: {config.compiler_path}")
+
+    # 验证核心文件存在性
+    if not config.input_path.exists():
+        logger.error(f"输入文件不存在: {config.input_path}")
+        return 1
+    if not config.compiler_path.exists():
+        logger.error(f"Mihomo工具不存在: {config.compiler_path}")
+        return 1
+    if not os.access(config.compiler_path, os.X_OK):
+        logger.error(f"Mihomo工具无执行权限: {config.compiler_path}")
+        return 1
+
+    # 读取原始payload（基于工作区路径）
+    try:
+        with config.input_path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        payload = data.get("payload", [])
+        rule_count = len(payload)
+        if rule_count == 0:
+            logger.error("payload为空，无内容可编译")
+            return 1
+        logger.info(f"成功读取 {rule_count} 条规则（原始payload未修改）")
+    except yaml.YAMLError as e:
+        logger.error(f"YAML格式错误: {str(e)}")
+        return 1
+    except Exception as e:
+        logger.error(f"读取输入文件失败: {str(e)}")
+        return 1
+
+    # 写入临时文件（工作区内或系统临时目录）
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+        ) as f:
+            yaml.dump({"payload": payload}, f, allow_unicode=True, sort_keys=False)
+            temp_path = f.name
+        logger.info(f"生成临时编译文件: {temp_path}")
+    except Exception as e:
+        logger.error(f"生成临时文件失败: {str(e)}")
+        return 1
+
+    # 执行编译命令
+    try:
+        cmd = [
+            str(config.compiler_path),
+            "convert-ruleset",
+            "domain",
+            "yaml",
+            temp_path,
+            str(config.output_path)
+        ]
+        logger.info(f"执行编译命令: {' '.join(cmd)}")
+
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=300
+        )
+
+        if result.returncode != 0:
+            logger.error(
+                f"编译失败（返回码{result.returncode}）\n"
+                f"标准输出: {result.stdout[:500]}\n"
+                f"错误输出: {result.stderr[:500]}"
+            )
+            return 1
+
+        # 验证输出文件
+        if not config.output_path.exists():
+            logger.error("编译成功但输出文件不存在")
+            return 1
+        if config.output_path.stat().st_size == 0:
+            logger.error("编译成功但输出文件为空")
+            return 1
+
+        # 计算哈希并输出结果
+        file_hash = calculate_file_hash(config.output_path)
+        file_size = config.output_path.stat().st_size / 1024
+
+        logger.info(
+            f"编译成功！\n"
+            f"输出文件: {config.output_path}\n"
+            f"大小: {file_size:.2f} KB | SHA256: {file_hash}"
+        )
+
+        # 写入GitHub环境变量（包含工作区信息）
+        write_github_output({
+            "mrs_path": str(config.output_path),
+            "mrs_relative_path": str(config.output_path.relative_to(config.workspace_path)),  # 相对工作区的路径
+            "rule_count": str(rule_count),
+            "mrs_sha256": file_hash,
+            "mrs_size_kb": f"{file_size:.2f}",
+            "github_workspace": str(config.workspace_path)  # 工作区路径变量
+        })
+
+        return 0
+
+    except subprocess.TimeoutExpired:
+        logger.error("编译超时（>300秒）")
+        return 1
+    except Exception as e:
+        logger.error(f"编译过程异常: {str(e)}")
+        return 1
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+            logger.info("临时文件已清理")
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+import os
+import sys
+import tempfile
+import subprocess
+import yaml
+import logging
+import hashlib
+from pathlib import Path
+from datetime import datetime
+
+
+class Config:
     """配置管理（输入输出均在仓库根目录）"""
     GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
     INPUT_FILE = os.getenv("ADBLOCK_INPUT", "adblock_clash.yaml")
