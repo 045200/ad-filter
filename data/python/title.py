@@ -15,6 +15,7 @@ ADBLOCKERS: Dict[str, Dict[str, str]] = {
     "clash": {"name": "Clash", "suffix": ".yaml", "comment": "#", "has_allow": False},
     "surge": {"name": "Surge", "suffix": ".conf", "comment": "#", "has_allow": False},
     "pihole": {"name": "Pi-hole", "suffix": ".txt", "comment": "#", "has_allow": True}
+}
 
 # 头信息模板（整合通用规则配置，通过变量动态适配）
 ADBLOCK_HEADER = """{comment} Title: {title}
