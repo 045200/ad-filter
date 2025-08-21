@@ -6,7 +6,6 @@ on:
   push:
     branches: [ "multi" ]  # 仅在multi分支推送时触发
     paths:
-      - 'data/python/**'   # 监测python脚本变更
       - 'data/mod/**'      # 监测mod配置变更
 
 permissions:
@@ -43,7 +42,6 @@ jobs:
         uses: tj-actions/changed-files@v42
         with:
           files: |
-            data/python/**
             data/mod/**
 
       # 4. 设置Python环境
