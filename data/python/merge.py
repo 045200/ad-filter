@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
 BASE_DIR = Path(GITHUB_WORKSPACE)
 TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
-OUTPUT_FILE = TEMP_DIR / "adblock_merged.txt"
+OUTPUT_FILE = TEMP_DIR / "adblock_filter.txt"
 
 MAX_WORKERS = int(os.getenv('MAX_WORKERS', 4))
 CHUNK_SIZE = 10000
