@@ -1,3 +1,9 @@
+! Title: AdGuard 拦截规则
+! Homepage: https://github.com/045200/ad-filter
+! Expires: 12 Hours
+! Version: 2025-08-21 18:30:15（北京时间）
+! Description: 适用于 AdGuard 的广告拦截规则
+! Total count: 1906
 $cookie=/^AMCVS?_.*AdobeOrg/
 $cookie=/mp_.*_mixpanel/
 $csp=child-src 'none'; frame-src 'self' *; worker-src 'none',domain=fileone.tv|theappguruz.com
@@ -784,12 +790,18 @@ yahoocs.my.salesforce.com/s.gif$image
 ||0.loader.gutefrage.net/article^$script,domain=gutefrage.net
 ||011st.com/js/rake/*/Log11stClientSentinelShuttle-*.js$domain=~buy.11st.co.kr
 ||101.qq.com/js/base.js$replace=/(el\.getAttribute\("type"\) === "text\/javascript")/\(\$1 &&
+||101.ru^$cookie=incomeUrl
+||101.ru^$cookie=sid_101_ru
+||101.ru^$cookie=statDaySession
+||101.ru^$cookie=uniqClientId
+||1024mzs.pw^$popup,~third-party
 ||114la.com^~third-party,domain=~ylmf.com
 ||119xiazai.com^$subdocument
 ||11st.co.kr^$cookie=/RAKE_SID/
 ||1339.cf/yuzrmji.js$script,domain=imgnova.xyz
 ||17173cdn.com/20*.mp4$redirect=noopmp3-0.1s,domain=17173.com
 ||1qboss9.ejuslehq.com^$script,xmlhttprequest,domain=pch.com
+||1u0oqad.diqx.namemc.com^$domain=namemc.com
 ||1win.com^$ping
 ||21buttons.com^$cookie=21b.user.generated.id
 ||220-volt.ru^$cookie=_userGUID
@@ -801,7 +813,9 @@ yahoocs.my.salesforce.com/s.gif$image
 ||2d2r7.com^$script,domain=2d2r7.com
 ||2ip.*/member_photo/$domain=~2ip.com|~2ip.ru
 ||33-news.ru^$cookie=uniqueid
+||336t.com/img/boss/*.gif$domain=wmsj.pw
 ||33img.com^$domain=18board.com|18p2p.com
+||360buyimg.com^$domain=chdbits.co|qianggou5.com
 ||3dnews.ru^$cookie=3d-viewer-id
 ||3dnews.ru^$cookie=lastvisit
 ||4gamers.com.tw^$cookie=_pkc
@@ -818,6 +832,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||85po.com/player/stats.php?event=$image,redirect=1x1-transparent.gif,domain=85po.com
 ||8maple.ru/dzcm$redirect=1x1-transparent.gif,domain=8maple.ru
 ||9129666tp.com^$domain=9xav.cc
+||a6.hujiang.com^$domain=~class.hujiang.com
 ||aamulehti.fi^$cookie=sa1pid
 ||ab.blogs.es/abtest.png$image,redirect=1x1-transparent.gif,domain=xataka.com|trendencias.com,important
 ||ab.blogs.es/abtest.png?editorialRecommendations$image,redirect=2x2-transparent.png,domain=applesfera.com
@@ -831,9 +846,17 @@ yahoocs.my.salesforce.com/s.gif$image
 ||ad.mail.ru^$image,~~third-party
 ||adblock-tester.com/banners/$domain=adblock-tester.com
 ||adc.nine.com.au/?token=$redirect=nooptext,important,domain=9now.com.au
+||addthiscdn.com^$domain=~addthis.com
 ||adform.net/banners/scripts/adx.js$domain=delfi.lt,rewrite=abp-resource:blank-js
 ||adform.net^$cookie=/uid|TPC/
+||adfox.ru^$cookie=cryptouid
+||adfox.ru^$cookie=cryptouid_sign
+||adfox.ru^$cookie=luid1
+||adfox.ru^$cookie=luid1_ts
+||adgarden.market^$domain=factfeed.com|mdrntoday.com|travelroo.com
+||adkrazy.com^$popup,domain=javso.com
 ||adobedtm.com^~third-party,domain=~adobe.com|~costco.com
+||adoberesources.net^~third-party,domain=~adobe.com
 ||adpai.thepaper.cn^$xmlhttprequest,redirect-rule=nooptext,domain=thepaper.cn
 ||ads-api.twitter.com^$app=com.twitter.android
 ||ads.adaptv.advertising.com/*roll&pageUrl=4gtv.tv$script,xmlhttprequest,other,redirect=noopvast-2.0
@@ -851,6 +874,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||airportinfo.live^$cookie=adsplit
 ||aiyifan.tv/app/*.js$replace=/this\.shouldSkipAds\|\|/
 ||ajax.googleapis.com/ajax/libs/jquery/$domain=darkcomet-rat.com
+||akamaihd.net^$image,domain=globalnews.ca|nycgo.com|stcatharinesstandard.ca
 ||alaskaair.com/javascripts/adrum.js$script,redirect=noopjs,domain=alaskaair.com
 ||alicdn.com/img/ibank/*_1746120392.$domain=~rmdown.com
 ||alicdn.com^$domain=2c2.website|2p8.space|adultgao.com|caopop.com|caoporn.com|caouoo.com|caox.cc|h3e.pw|h3y.pw|k88.club|me88.pw|p5p.space|se88.space|t2p.space|tb001.xyz|te88.pw|vwan.xyz|xhao1.com
@@ -859,8 +883,10 @@ yahoocs.my.salesforce.com/s.gif$image
 ||alicdn.com^$domain=t66y.com
 ||alicdn.com^$image,domain=m.k1k.cc|thcdy.co|27k.cc|1024pa.com|hg6384.com-www.6u7u.com|dy686.net
 ||alicdn.com^*yksdk/*sdk.js$script,domain=youku.com
+||alimama.cn^~third-party,domain=~alimama.com|~foctop.com|~meidebi.com|~qinqintejia.com|~tanx.com|~taobao.com|~youhuiyouhui.com.cn
 ||alimama.com^$domain=~alimama.com
 ||aliyuncs.com^$domain=5kym.com
+||allanalpass.com^$popup,domain=imgnova.xyz
 ||allercdn.net/randomurl.js$script,domain=seoghoer.dk
 ||allrecipes.com^$cookie=/^_sharedid/
 ||amazon.com/1/events/$domain=~aws.amazon.com
@@ -905,10 +931,13 @@ yahoocs.my.salesforce.com/s.gif$image
 ||api2.coolapk.com/v6/main/init$replace=/{&quot;id&quot;:1170.*?}\,/ /
 ||api2.coolapk.com/v6/page/dataList$replace=/{"entityType":"card"\,"entityTemplate":"apkImageCard".*?\\u0022}"}\,/ /
 ||api2.coolapk.com/v6/page/dataList$replace=/{&quot;entityType&quot;:&quot;card&quot;\,&quot;entityTemplate&quot;:&quot;apkImageCard&quot;.*?\\u0022}&quot;}\,/ /
+||apm-engine.meteor.com^~third-party,xmlhttprequest
 ||app.adjust.com^$app=com.microsoft.bing
 ||app.launchdarkly.com/sdk/evalx/*/contexts/$domain=epicgames.com
 ||app.link^$cookie=_s
 ||applesfera.com^$cookie=NID
+||applicationinsights.azure.com^$domain=~azure.net
+||applicationinsights.azure.com^~third-party,domain=~azure.net
 ||applinzi.com^$domain=soyunpan.com
 ||ark.tubi.video/v2/*.mp4^$domain=tubitv.com
 ||as.uncn.jp/uwt/$script,redirect=noopjs,domain=nissan.co.jp
@@ -919,23 +948,33 @@ yahoocs.my.salesforce.com/s.gif$image
 ||assets.prod.abebookscdn.com/cdn/com/scripts/abepixel-$domain=abebooks.com
 ||assets.thdstatic.com/analytics/core/*/appMeasure$domain=homedepot.com
 ||at-s.com^$cookie=_rld_u
+||authedwebmine.cz^~third-party,domain=~webmine.cz
+||avxwcuaagfcdn.net^$domain=dagens.dk
 ||ax1x.com^$domain=caibaojian.com|hktvyb.com|zzvips.com
 ||azcentral.com^$cookie=/^gnt_/
 ||azcentral.com^$cookie=gup_anonid
 ||azcentral.com^$cookie=gup_clientid
 ||b.dk/sites/all/libraries/messaging/adblock-messager.js$script,domain=b.dk
+||b2b.rocketcrm.bz^$domain=fitness-pro.ru
 ||baidu.com/*/track.gif?$image,redirect=1x1-transparent.gif
 ||baidu.com/ecom$image,script
 ||baidu.com/tb/zt/$subdocument,domain=tieba.baidu.com
 ||baidu.com^$cookie=baikeVisitId
 ||baidu.com^$domain=pos.baidu.com
 ||baidu.com^$subdocument,domain=dm5.com|dm5.hk
+||bamgrid.com/dust$domain=~disneyplus.com
 ||bance.jp/bnc*^$script,domain=himanatokiniyaruo.com|vippers.jp|matomeantena.com|anige-sokuhouvip.com
+||bance.jp^$domain=zozovideo.com
 ||bbcgoodfood.com/stitcher-assets/gpt/tag/js/gpt.js$script,redirect=noopjs
+||bcbits.com/bundle/bundle/1/analytics-$domain=bandcamp.com
 ||bet365.de/Members/*&affiliate=$subdocument,~third-party
+||bgr.in^$cookie=traffic_medium
+||bgr.in^$cookie=traffic_source
+||bgro41vnmb.execute-api.us-east-2.amazonaws.com/production$domain=masterworks.com
 ||bi.medscape.com^$app=~com.medscape.android
 ||bigw.com.au^$cookie=ir-clickid
 ||bilanx.dcard.tw^$app=com.sparkslab.dcardreader
+||bilanx.dtto.com^$app=com.dtto.app
 ||bild.de^$cookie=_sp_su
 ||bild.de^$cookie=ioam2018
 ||bild.de^$cookie=kameleoonVisitorCode
@@ -952,6 +991,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||breakdownexpress.com^$cookie=DV
 ||btloader.com/tag?$redirect=noopjs,domain=voici.fr
 ||buildtheearth.net^$cookie=/^_pk_id./
+||business-agence.eu^$domain=footstream.tv
 ||businessinsider.com^$cookie=/traffic_src|^_sp_/
 ||businessinsider.jp^$cookie=mgppid
 ||businessinsider.jp^$cookie=ppid
@@ -959,6 +999,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||bwbx.io/s3/javelin/public/hub/js/abba/$script,domain=bloomberg.co.jp|bloomberg.com
 ||bytedance.com^$popup
 ||bytedance.com^$script
+||bytegecko.com^~third-party
 ||c.imedia.cz/js/scripts.js$script,domain=rychlost.cz
 ||c.ypcdn.com^$domain=yellowpages.com
 ||cc.naver.com/cc$image,redirect=2x2-transparent.png
@@ -1004,6 +1045,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||cloudflare.com^$cookie=cfz_facebook-pixel
 ||cloudfront.net^$script,domain=croydonguardian.co.uk
 ||cloudfront.net^$script,domain=gentside.com
+||cloudfunctions.net/webtraffic$domain=eurocampings.nl
 ||clustrmaps.com^$image,redirect=1x1-transparent.gif,~third-party
 ||cnc.cdn.dopc.cz^*?format=js$script,domain=ahaonline.cz|info.cz|onetv.cz
 ||cnc.cdn.dopc.cz^*?format=js$script,domain=auto.cz|autorevue.cz|maminka.cz|reflex.cz|blesk.cz|dama.cz|e15.cz|mojezdravi.cz|zeny.cz|zive.cz
@@ -1013,6 +1055,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||connect.cointent.com^$domain=themarysue.com
 ||connect.facebook.net/en_US/fbevents.js$script,redirect=noopjs,domain=linetv.tw
 ||connectormwi.laterpay.net^$script,domain=schoener-wohnen.de
+||containers.appdomain.cloud/api/send-log$domain=ibm.com
 ||content.sinpartycdn.com/*pre-roll-ads/*$media,rewrite=abp-resource:blank-mp4,domain=sinparty.com
 ||coolapk.com/v6/feed/detail?$replace=/detailSponsorCard//
 ||coolapk.com/v6/feed/detail?$replace=/extra_title//
@@ -1021,8 +1064,10 @@ yahoocs.my.salesforce.com/s.gif$image
 ||coolapk.com/v6/main/indexV8?$replace=/\{"entityType":"card"\,"entityTemplate":"listCard".*?\}\,\{"id/{"id/
 ||coolapk.com/v6/page/dataList?$replace=/extra_entities//
 ||coolapk.com/v6/search?type=hotSearch$replace=/\{"data":\[.*\]/{"data":[]/
+||corrosif.science^$domain=filerev.cc|pencurimovie.pw
 ||cpro.baidu.com/cpro/ui/rt.js$script,redirect=noopjs,domain=rjno1.com
 ||cpro.baidustatic.com^$script,domain=sohu.com
+||cq.ru^$xmlhttprequest,header=cq-cache-bypassed
 ||cr-eec.etp-prod.com^$domain=crunchyroll.com
 ||criteo.com^$domain=spiegel.de
 ||csi.gstatic.com^$domain=promiflash.de,redirect=nooptext,important
@@ -1063,17 +1108,21 @@ yahoocs.my.salesforce.com/s.gif$image
 ||depop.com^$cookie=_px2
 ||depop.com^$cookie=_pxvid
 ||depop.com^$cookie=pxcts
+||developers.oxylabs.io^$cookie=/^intercom-/
+||dhresource.com/dhs/fob/js/common/track/$domain=dhgate.com
 ||diag.pl^$cookie=/incap_/
 ||dickssportinggoods.com^$cookie=BVBRANDID
 ||dickssportinggoods.com^$cookie=RES_TRACKINGID
 ||dict.youdao.com/vip/privilege/show/V*?bannerType=fanyiTop$domain=fanyi.youdao.com
 ||digidip.net^$domain=gofeminin.de
+||dioimg.net^$domain=18board.com|18board.net|18p2p.com
 ||discord.com/api/v*/users/@me?with_analytics_token=true$domain=~discord.com
 ||disqus.com/api/ping?$domain=autobild.de
 ||disqus.com^$cookie=disqus_unique
 ||disqus.com^$cookie=zeta-ssp-user-id
 ||diyibanzhu*/js/cdn.js$~~third-party
 ||dl.reg.163.com^$subdocument,redirect-rule=noopframe
+||dmtgvn.com/wrapper/js/common-engine.js$domain=rt.com
 ||doko.moe^$domain=pantsu.cat
 ||dpm.demdex.net/id$redirect=nooptext,important,domain=stuff.co.nz|bt.com|nhl.com|business.hsbc.uk
 ||dpm.zebestof.com/*/tag.js$script,redirect=noopjs,important,domain=commentcamarche.net
@@ -1083,13 +1132,18 @@ yahoocs.my.salesforce.com/s.gif$image
 ||drop.com^$cookie=md.etag
 ||drop.com^$cookie=md.visitId
 ||dropbox.com^$cookie=dbx_js_analytics_id
+||drugs.com/api/log/$xmlhttprequest,redirect-rule=noopjson
 ||duapp.com^$domain=bjmama.com|ccav1.com|gzmama.com
 ||duckdns.org^~third-party,websocket
+||dw.cbsi.com^$domain=~cbsi.com
 ||dynatrace.com^$domain=~dynatracelabs.com|~dynatrace.com
 ||dynatrace.com^~third-party,domain=~dynatracelabs.com
 ||dzxxxg6ij9u99.cloudfront.net/wb.js$script,domain=cwtv.com
 ||e-goi.com^~third-party,domain=~e-goi.com.br|~e-goi.pt
 ||e.zg-api.com/event$domain=zillow.com
+||e1.ru^$cookie=jtnews_adblock
+||e1.ru^$cookie=ngs_analytics_uid
+||e1.ru^$cookie=ngs_uid
 ||e9377f.com^$redirect=noopmp3-0.1s,domain=eastday.com
 ||e95da74cd9.*.js^$domain=animefenix.tv
 ||eastday.com^$subdocument,~~third-party
@@ -1104,6 +1158,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||error-report.com^$domain=sourceforge.net|bab.la|pons.com|loawa.com|gazetaprawna.pl|malaymail.com|tz.de|winfuture.de|gutefrage.net|dictionary.cambridge.org|huffpost.com|collinsdictionary.com|sankei.com|timesofindia.indiatimes.com
 ||events.*/takeaway/takeaway.com/*/*.gif$domain=thuisbezorgd.nl|takeaway.com|just-eat.ch|lieferando.at|lieferando.de|just-eat.fr|pyszne.pl|just-eat.dk|just-eat.no
 ||events.jianshu.io^*/sa.gif$image,redirect=1x1-transparent.gif,important
+||events.release.narrativ.com^$subdocument,xmlhttprequest
 ||events.split.io^$domain=~collegeboard.org
 ||execute-api.us-east-*.amazonaws.com/default/pAnalytics$domain=takimag.com
 ||exelator.com^$domain=disqus.com
@@ -1133,6 +1188,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||frog.wix.com^$image,ping,xmlhttprequest
 ||ft.com^$cookie=spoor-id
 ||fuimg.com^$domain=678cn.com|cfzhushou.com
+||fullscreen.nz/v1/tracking/$domain=threenow.co.nz
 ||fun8.us^$domain=cartoonmad.com
 ||fusionmovies.to^$cookie=/^_tezer_|_on_page/
 ||fvedio.kuwo.cn^$app=cn.kuwo.player
@@ -1239,6 +1295,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||googletagmanager.com/gtm.js~third-party,script,redirect=google-analytics,domain=~corsair.com|~olx.*|~simon.com|~bethesda.net|~paddle.com
 ||googletagmanager.com/ns.html$subdocument,redirect=nooptext,domain=pool.binance.com
 ||googletagmanager.com^$app=app.shinagawa.listentonovels.androidApp
+||googletagservices.com/tag/js/gpt.js$domain=epaper.timesgroup.com,redirect=googletagservices-gpt,important
 ||googletagservices.com/tag/js/gpt.js$script,redirect=googletagservices-gpt,domain=ani.gamer.com.tw
 ||googletagservices.com/tag/js/gpt.js$script,redirect=googletagservices-gpt,domain=dafiti.com.co
 ||googletagservices.com/tag/js/gpt.js$script,redirect=googletagservices-gpt,domain=gamer.com.tw,important
@@ -1246,6 +1303,8 @@ yahoocs.my.salesforce.com/s.gif$image
 ||googletagservices.com/tag/js/gpt.js$xmlhttprequest,script,redirect=googletagservices-gpt
 ||googletagservices.com/tag/js/gpt.js$xmlhttprequest,script,redirect=googletagservices-gpt,domain=thedailybeast.com,badfilter
 ||graph.facebook.com^$app=cl.android|com.shorts.wave.drama|com.drama.happy.look|com.enjoy.fancynovel.better|com.novel.eromance.ugs|com.novel.estory.free.reader.dreame.gp.us|com.fatix.fatixpro|com.coupang.mobile.eats
+||grlnpmbc.goar.justjared.com^$domain=justjared.com
+||gtimg.com/adb/$domain=okooo.com
 ||gulfnews.com^$cookie=/incap_|NEW_VISITOR|nlbi_|___utmv/
 ||h.seznam.cz/js/dot-small.js$domain=~stream.cz
 ||hankookilbo.com/service/kt/trk.js$script,domain=koreatimes.co.kr
@@ -1260,6 +1319,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||hdslb.com/bfs/cm/cm-sdk/static/js/bili-collect.js$script,redirect=noopjs,domain=bilibili.com,important
 ||hdtube.porn/hdt/hdt.js^$domain=hdtube.porn
 ||healf.com^$cookie=/^ig-/
+||hellocenter.xyz^*.mp4$redirect=noopmp4-1s,domain=localmv1.com
 ||herogame.com^$subdocument,domain=gamer.com.tw
 ||hindustantimes.com^$cookie=_ht_fp
 ||hiveworkscomics.com^$script,domain=egscomics.com
@@ -1272,6 +1332,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||hpplus.jp^$cookie=fw_se
 ||hpplus.jp^$cookie=fw_uid
 ||hsbcglobalcmb.sc.omtrdc.net/id?$redirect=nooptext,important,domain=business.hsbc.uk
+||huaren.live/player/$replace=/let ConFig/var ConFig/,document
 ||hubspot.com/collected-forms/$xmlhttprequest,domain=confection.io
 ||hulu.com^$cookie=metrics_tracker_session_manager
 ||huohuo1.huamuwo.com^$domain=knowbaike.com
@@ -1279,6 +1340,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||hwbusters.com^$cookie=advanced_ads_page_impressions
 ||hwbusters.com^$cookie=advanced_ads_visitor
 ||hwupgrade.it^$cookie=bblastvisit
+||hxjs.tool.hexun.com$domain=~quote.hexun.com
 ||hybbs.com/i/$image,object
 ||hyvyd.com/count$image,domain=mobile.de
 ||i-tm.com.tw/api/itm-tracker.js$domain=pixnet.net
@@ -1305,6 +1367,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||img.ferlie.net^$domain=wangchao.net.cn
 ||img.meituan.net/video/$domain=338i.com
 ||img.scupio.com$domain=briian.com
+||img.uu1001.cn^~third-party,domain=~1688.com|~alimama.com|~taobao.com
 ||img.vim-cn.com^$domain=522dy.com
 ||img.xixik.net/custom/section/*/banner-$domain=xixik.com
 ||img999.com^$popup,domain=tt1069.com
@@ -1315,6 +1378,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||imgsrc.baidu.com/*/pic/*.jpg$domain=8727ck.cc|8726ck.cc
 ||imgur.com^$domain=histock.tw|wgun.net
 ||imgur.com^*.gif$domain=18p2p.com
+||imgxr.com^$domain=xiuren.org
 ||imp.snapdeal.biz/pub/imp?$domain=snapdeal.com
 ||independent.co.uk^$cookie=/^esi-/
 ||indiatimes.com^$cookie=/deviceid|lgc_deviceid|ak_bmsc/
@@ -1326,12 +1390,14 @@ yahoocs.my.salesforce.com/s.gif$image
 ||insider.com^$cookie=/anonymous_id|fenrir_anonymous_id/
 ||instagram.com^$removeparam=igshid
 ||instapage.com^~third-party,domain=~pagedemo.co
+||inte.sogoucdn.com^$domain=~index.sogou.com|~zhishu.sogou.com
 ||intercomcdn.com/intercom*.js$domain=unblocked.la
 ||investing.com^$cookie=adBlockerNewUserDomains
 ||investing.com^$cookie=smd
 ||investing.com^$cookie=udid
 ||ioam.de^$domain=autobild.de|spiegel.de
 ||ip-approval.com/*/ip-checker-js$script,domain=amiga.sk
+||ip.ws.126.net^$domain=~fxingw.com
 ||iplogger.org^~third-party,domain=~iplogger.com
 ||istories.media^$cookie=latest_viewed_material
 ||izi.ua$cookie=statz_unique_id
@@ -1353,6 +1419,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||justjoin.it^$cookie=userUid
 ||jwpsrv.com/content/conversions/*/videos/*.mp4?token=$media,domain=ahaonline.cz|info.cz|onetv.cz
 ||jwpsrv.com/content/conversions/*/videos/*.mp4?token=$media,domain=auto.cz|autorevue.cz|maminka.cz|reflex.cz|blesk.cz|dama.cz|e15.cz|mojezdravi.cz|zeny.cz|zive.cz
+||kamp.daum.net^$xmlhttprequest,domain=~kakaotv.daum.net|~video.daum.net
 ||kari.com^$cookie=/^sid_/
 ||kari.com^$cookie=did
 ||kari.com^$cookie=rees46_device_id
@@ -1363,6 +1430,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||kayak.co.kr^$cookie=kmkid
 ||keen.io^~third-party,domain=~keen.github.io|~keen.io
 ||kemono.su^$csp=script-src-attr 'none'
+||kfc.com.cn^$popup,domain=iqiyi.com
 ||kiees.com^$image,subdocument,~third-party
 ||kkuriren.se^$cookie=adksid
 ||kkuriren.se^$cookie=adkvid
@@ -1384,6 +1452,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||lf-webcast-*.bytegecko.com^$media
 ||lianmeng.360.cn^$domain=~lianmeng.360.cn
 ||lien-torrent.com/eticilbup/$image,subdocument,script
+||lifehacker.com^$cookie=gtagSessionId
 ||live.prismamediadigital.com/ops/TRA/ab_ban/$image,domain=voici.fr
 ||liveinternet.ru^$xmlhttprequest,header=Uniformat-Product-Type
 ||ljc.coupang.com^$app=com.coupang.mobile
@@ -1426,17 +1495,23 @@ yahoocs.my.salesforce.com/s.gif$image
 ||medicalnewstoday.com^$cookie=traveler_tglr_tenant_id
 ||meetup.com^$cookie=MEETUP_BROWSER_ID
 ||meetup.com^$cookie=MEETUP_TRACK
+||meixincdn.com^$domain=novipnoad.com
 ||mesh.if.iqiyi.com/portal/*/recommend?$xmlhttprequest,removeparam=ad
 ||mesh.if.iqiyi.com/portal/*/recommend?$xmlhttprequest,removeparam=adExt
 ||metrics.swap.gg^$xmlhttprequest,script
 ||mgmanager.gr^$cookie=VisitorGUID
 ||mgmanager.gr^$cookie=VisitorState
 ||migros.com.tr^$cookie=VSTR_ID
+||mindbox.ru^$cookie=deviceUUID
 ||missevan.com^$domain=jijidown.com
 ||mixproxy.epoch.cloud^$domain=theepochtimes.com
 ||mmdm.ru/static/users/js/login.*.js$replace=/yaCounter\d+\.reachGoal\('\w+'\);//
+||mobatory.com^$domain=rapid8.com
 ||mobile01.com^$cookie=/^MID-uuid/
 ||mobile01.com^$cookie=HobbyCatuuid
+||modnakiecka.pl^$cookie=smcfds
+||modnakiecka.pl^$cookie=smuuid
+||modnakiecka.pl^$cookie=smvr
 ||momoshop.com.tw/league/$domain=beephone.com.tw
 ||money.hu^$cookie=UserUuid
 ||mtcs.nhk-ondemand.jp/b/ss/nhkodmain/$image,redirect=1x1-transparent.gif,domain=nhk-ondemand.jp
@@ -1460,6 +1535,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||newsweekjapan.jp^$cookie=is_visiter
 ||newsweekjapan.jp^$cookie=site_visited
 ||niadd.com^$cookie=protocol_country_code
+||nimg.jp/nicoad/instream/video/*.mp4$media,domain=nicovideo.jp
 ||nitroscripts.com^$script,domain=pcguide.com
 ||nlog.naver.com^$domain=~shopping.naver.com|~smartstore.naver.com|~brand.naver.com
 ||nordvpn.com^$cookie=CurrentSession
@@ -1467,6 +1543,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||nordvpn.com^$cookie=nextbid
 ||noticiasurgente.in/embed/p2/Controller/DesktopViewControladorMicki.js$script,domain=megatorrentshd.com
 ||npo.nl/divolte/tt/web-event?$domain=zapp.nl
+||nttcoms.com^$cookie=visitorid
 ||nu.nl^$cookie=temptation-id
 ||nv.ua^$cookie=browser_id
 ||nyt.com/ads/tpc-check.html$domain=nytimes.com
@@ -1482,6 +1559,8 @@ yahoocs.my.salesforce.com/s.gif$image
 ||okko.tv^$cookie=_sa
 ||okko.tv^$cookie=odid
 ||older-women-porn.com/black-credit-71cc^$domain=older-women-porn.com
+||omtrdc.net/id^$redirect=nooptext,important
+||omtrdc.net/rest/v*/delivery?client=$replace=/^\{[\s\S]*\}\$/{}/,domain=~kia.com|~pccomponentes.com|~acrobat.adobe.com|~elcomercio.es|~eldiariomontanes.es|~elcorreo.com|~lasprovincias.es|~hoy.es|~ideal.es|~ups.com
 ||onelink.me^$image,script,~third-party
 ||onesignal.com^$domain=androidauthority.com|iphoneincanada.ca|rockpapershotgun.com|senpa.io|shineads.org
 ||onet.pl^$removeparam=utm_medium
@@ -1490,6 +1569,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||opera.com^$cookie=opref
 ||otakufr.co^$cookie=_uc_referrer
 ||otakufr.co^$cookie=session_id
+||ott.cibntv.net/*/ad/*.ts?ccode=$xmlhttprequest,domain=v.youku.com
 ||outbrain.com^$domain=wenxuecity.com
 ||outdoorsy.com^$cookie=odc-aid
 ||outdoorsy.com^$cookie=odc-d
@@ -1498,6 +1578,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||p.mprd.se/js/bscripts*.js$script,domain=emuparadise.me
 ||p.pstatp.com/origin/$domain=pianba.tv|pianba.net
 ||p.qlogo.cn^$domain=jumi.tv
+||p0y.cn^$image,domain=~ipinyou.com.cn
 ||pagead2.googlesyndication.com/pagead/js/adsbygoogle.js$redirect=googlesyndication-adsbygoogle,domain=youneed.win
 ||pagead2.googlesyndication.com/pagead/js/adsbygoogle.js$script,redirect=googlesyndication-adsbygoogle,domain=wuyong.fun,important
 ||pagead2.googlesyndication.com/pagead/js/adsbygoogle.js$script,redirect=googlesyndication-adsbygoogle,domain=xiebruce.top
@@ -1530,12 +1611,15 @@ yahoocs.my.salesforce.com/s.gif$image
 ||plus.nl^$cookie=/^nr[12]Users\$/
 ||plus.nl^$cookie=/^osVisit/
 ||pokernews.com^$cookie=anid_pnuser_uuid
+||popin.cc^$cookie=__mguid_
+||popin.cc^$cookie=_ss_pp_id
 ||popt.in^~third-party,domain=~poptin.com
 ||porndoe.com/movie/preroll/*$media,rewrite=abp-resource:blank-mp4,domain=porntrex.com
 ||producthunt.com^$cookie=/visitor_id|track_code|first_visit/
 ||productreview.com.au^$cookie=pr_guest_id
 ||productreview.com.au^$cookie=pr_visitor_id
 ||prothomalo.com^$cookie=uuid_v2
+||pstatp.com^$domain=5217kdy1.xyz
 ||pubads.g.doubleclick.net/gampad/ads?*&description_url=https%3A%2F%2Fani.gamer.com.tw$xmlhttprequest,redirect=noopvast-3.0,important
 ||puma.com^$popup,domain=hupu.com
 ||purple-hit.com^~third-party,script,domain=patriotnationpress.com
@@ -1543,10 +1627,15 @@ yahoocs.my.salesforce.com/s.gif$image
 ||pv.sohu.com^$domain=chinafund.cn
 ||pvtag.yahoo.co.jp^$script,redirect=noopjs,domain=paypayfleamarket.yahoo.co.jp
 ||qdp.qidian.com^$$noopjs
+||qhimgs4.com/*.gif$domain=hdmoli.com
+||qhimgs4.com/*.gif$domain=www.jiaozi.me
 ||qiyukf.com/webda/da.gif$domain=youdao.com
+||qlogo.cn^$domain=chichiav1.xyz
 ||quantserve.com^$cookie=mc
 ||questionpro.com^~third-party,domain=~questionpro.com.au|~questionpro.eu
 ||r.stripe.com^$ping,script,xmlhttprequest
+||r10s.jp/com/img/home/t.gif?$image,redirect=1x1-transparent.gif,domain=rakuten.co.jp,important
+||rackcdn.com/htv/banners/$domain=hanime.tv
 ||rail.bankofamerica.com^$script,~~third-party,xmlhttprequest
 ||rarejob.com^$cookie=guest_id_ads
 ||rarejob.com^$cookie=guest_id_marketing
@@ -1565,6 +1654,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||remarkable.com^$cookie=rmMetaV2-utm_parameters
 ||res.psy-1.com/music/recommend^$app=com.psyone.brainmusic
 ||researchnow.co.uk^~third-party,domain=~dynata.com
+||reutersmedia.net/*/js/analytics/win-GTM.js$domain=mobile.reuters.com
 ||richrelevance.com^$cookie=uc
 ||ridestore.com^$cookie=/^google-analytics_v4__/
 ||riju.com/pr/$domain=jpfans.com|jpseek.com
@@ -1616,6 +1706,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||seznam.cz/*/*/js/*?nocache=1^$domain=www.seznam.cz
 ||seznamzpravy.cz/*/static/js/*^$domain=seznamzpravy.cz
 ||sf-syn.com/conversion_outbound_tracker$subdocument,domain=sourceforge.net
+||sftcdn.net/acmp^$image,domain=softonic.com
 ||sharethrough.com^$cookie=stx_user_id
 ||shemale6.com/player/stats.php?event=Init$image,redirect=1x1-transparent.gif,domain=shemale6.com
 ||shiksha.com^$cookie=visitorId
@@ -1647,12 +1738,14 @@ yahoocs.my.salesforce.com/s.gif$image
 ||spbvedomosti.ru^$cookie=/^BITRIX_/
 ||sport-express.ru^$cookie=_se_site_counter
 ||sport.cz/*&*=$subdocument,domain=sport.cz
+||sportingbet-affiliate.host.bannerflow.com/core_bannerviewer.swf$domain=record.xl.pt
 ||sports.ru^$script,header=x-robots-tag
 ||sportskeeda.com^$cookie=KEEDA_SESSION_ID
 ||sportskeeda.com^$cookie=keeda-session-uuid
 ||sportskeeda.com^$cookie=unique_browser_id
 ||sportskeeda.com^$cookie=unique_user_id
 ||sravni.ru^$cookie=_FP_
+||ssl-images-amazon.com/images/I/31YXrY93hfL.js$domain=imdb.com
 ||ssl.pstatic.net/static.gn/js/clickcrD.js$domain=~search.naver.com
 ||sstats.bitdefender.com^$xmlhttprequest,redirect=nooptext,~~third-party,important
 ||static.chartbeat.com/js/chartbeat_brightcove_plugin.js$script,redirect=noopjs,important,domain=m2o.it|deejay.it|capital.it
@@ -1661,6 +1754,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||static.olx.pl/static/*/js/tracking/ninja.js$important,domain=olx.pl
 ||static.stands4.com/*/page.analytics.min.js$domain=lyrics.com
 ||stats.externulls.com^$domain=beeg.com
+||stats.live-video.net^$domain=kick.com
 ||stocksy.com^$cookie=stocksylytics_anon_id
 ||strip.chat/widgets/$domain=tktube.com
 ||stripchat.com^$cookie=stripchat_com_affiliateId
@@ -1676,6 +1770,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||t.cn^$domain=28kys.com|92kvip.com
 ||t.co^$cookie=muc_ads
 ||t1.daumcdn.net/brunch/static/prod/*/production/tiaraEventHandler.min.js$domain=~brunch.co.kr
+||t2.picb.cc^$image,domain=dmxq1.com
 ||taboola.com^$domain=spaste.com
 ||tag.aticdn.net/*/at.js$script,redirect=ati-smarttag,domain=tv5monde.com
 ||tag.aticdn.net/*/smarttag.js$script,redirect=ati-smarttag,domain=rte.ie,important
@@ -1688,6 +1783,8 @@ yahoocs.my.salesforce.com/s.gif$image
 ||taobao.com^$popup,domain=dlkoo.com
 ||taobaocdn.com^$image,domain=cnblogs.com
 ||taplytics.com^$cookie=/^_tl_/
+||tarotmood.com/img/banner$domain=ixdzs.tw
+||tekproxy.com/$popup,domain=turkdown.com
 ||temu.com^$cookie=_bee
 ||temu.com^$cookie=_nano_fp
 ||temu.com^$cookie=_ttc
@@ -1701,6 +1798,7 @@ yahoocs.my.salesforce.com/s.gif$image
 ||theindex.moe/api/ip-info$redirect=noopjson
 ||themanual.com^$cookie=dtLastActive
 ||themanual.com^$cookie=dtPageViewId
+||tiimg.com^$domain=678cn.com
 ||time.is^$cookie=c
 ||timeweb.cloud^$cookie=aors_fc
 ||tinypic.com^$domain=fdzone.org|jandown.com|mimima.com
@@ -1710,13 +1808,16 @@ yahoocs.my.salesforce.com/s.gif$image
 ||tnc*.zijieapi.com^$app
 ||today.line.me/dist/80980ed1/app.80980ed1.js$replace=/Vt={isLoaded:\
 ||topicimg.1234567.com.cn/product/2021/1/11/b914f8b6-fb61-4c85-834f-863b67c13a45.gif$domain=fund.eastmoney.com
+||topthink.com/uploads/assistant/$image,domain=doc.thinkphp.cn
 ||touimg.com^$domain=dyzd1.com
+||toyokeizai.net^$cookie=ismuc
 ||tpcs.payu.in/pixelwithcookie.gif$domain=hindustantimes.com
 ||tractorsupply.com^$cookie=/WC_USERACTIVITY_/
 ||tractorsupply.com^$cookie=WC_ACTIVEPOINTER
 ||tractorsupply.com^$cookie=WC_GENERIC_ACTIVITYDATA
 ||tradedoubler.com^$cookie=GUID
 ||travelpayouts.com/whereami$domain=lapkins.ru
+||tripcdn.com/bee/collect$domain=trip.com
 ||truvidplayer.com^$domain=technews.tw
 ||tubesafari.com/*/new_popunder.js$domain=tubesafari.com
 ||tvnoviny.sk^$cookie=MS_PPID
@@ -1759,11 +1860,14 @@ yahoocs.my.salesforce.com/s.gif$image
 ||wafmedia3.com^$script,domain=online.dramacafe.in
 ||wallapop.com^$cookie=device_id
 ||wallapop.com^$cookie=rl_anonymous_id
+||walmartimages.com/dfw/4ff9c6c9-d9a0/$domain=walmart.com
+||wan.sogoucdn.com/cdn/flash/$domain=~sogou.com
 ||warnermedia.com/api/v1/events?*=ad-break*^$xmlhttprequest,domain=cnn.com
 ||web.snrbox.com/tck/$domain=komputronik.pl
 ||webd-assets.cdn4dd.com/s.js$domain=doordash.com
 ||webdock.io^$cookie=Webdock-Internal-Ad-Tracker
 ||webdock.io^$cookie=Webdock-Internal-Ad-Two
+||wfinterface.com/tracking/$domain=wellsfargo.com
 ||whistleout.com.au^$cookie=ARRAffinity
 ||whistleout.com.au^$cookie=ARRAffinitySameSite
 ||widget.fitanalytics.com/widget.js$script,redirect=noopjs,domain=pullandbear.com
@@ -1785,18 +1889,21 @@ yahoocs.my.salesforce.com/s.gif$image
 ||www.kupi.cz/*&*=$subdocument,domain=www.kupi.cz
 ||x6img.com^$domain=picturedata.org
 ||xanimu.com/*.php$domain=xanimu.com
+||xc.zhongguohao123.com^$important
 ||xiaohongshu.com^$cookie=xhsTrackerId
 ||xiaohongshu.com^$cookie=xhsTrackerId.sig
 ||xnxx-sexfilme.com/*==/^$domain=xnxx-sexfilme.com
 ||xyimg.net^$domain=~xy.com
 ||yahoo.com^$cookie=APIDTS
 ||yahoo.com^$cookie=GUC
+||yes1.feng.com^$domain=feng.com
 ||yimg.com/aaq/vzm/$script,domain=news.yahoo.com
 ||yimg.com/no/$domain=~yahoo.com
 ||yitongkan.com/splash.xml$redirect=noopjs,domain=yitongkan.com
 ||youdo.com^$cookie=/^_utm_/
 ||youdo.com^$cookie=/id/
 ||youtube.com/iframe_api$domain=nownews.com
+||ywxi.net^~third-party,domain=~trustedsite.com
 ||z4a.net^$domain=aotu43.com
 ||zhuashi.oss-cn-beijing.aliyuncs.com^$domain=~zhuashi.com
 ||zillowstatic.com/contact-pixel/$image,domain=zillow.com

@@ -41,20 +41,20 @@
 ## 📊 规则统计（实时更新）
 
 ## 统计信息
-- 最后更新时间：2025-08-21 16:45:30
-- Hosts规则数量：3200
+- 最后更新时间：2025-08-21 18:30:15
+- Hosts规则数量：8519
 
 ### 各拦截器规则数量
-- Adblock Plus 混合规则数量：1850
-- uBlock Origin 混合规则数量：2300
-- AdGuard 拦截规则数量：2100
-- AdGuard 白名单数量：150
-- AdGuard Home 拦截规则数量：1950
-- AdGuard Home 白名单数量：120
-- Clash 混合规则数量：0（若文件不存在）
+- Adblock Plus 混合规则数量：992
+- uBlock Origin 混合规则数量：3148
+- AdGuard 拦截规则数量：1906
+- AdGuard 白名单数量：3055
+- AdGuard Home 拦截规则数量：1033
+- AdGuard Home 白名单数量：2110
+- Clash 混合规则数量：11（若文件不存在）
 - Surge 混合规则数量：0（若文件不存在）
-- Pi-hole 拦截规则数量：1700
-- Pi-hole 白名单数量：90
+- Pi-hole 拦截规则数量：8519
+- Pi-hole 白名单数量：997
 
 
 ## 📥 规则订阅
