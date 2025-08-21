@@ -33,7 +33,6 @@ jobs:
       # 2. 清理工作区临时文件
       - name: Cleanup temporary folders
         run: |
-          find "${{ github.workspace }}" -maxdepth 1 \( -name "tmp*" -o -name "temp*" -o -name ".tmp*" -o -name ".temp*" \) -exec rm -rf {} + 2>/dev/null || true
           find "${{ github.workspace }}" -maxdepth 1 \( -name "*.txt" -o -name "*.mrs" -o -name "*.conf" -o -name "*.yaml" \) -exec rm -f {} + 2>/dev/null || true
 
       # 3. 检测文件变更
@@ -100,11 +99,7 @@ jobs:
             echo "has_changes=false" >> $GITHUB_OUTPUT
           else
             echo "has_changes=true" >> $GITHUB_OUTPUT
-            if [ "${{ steps.mihomo.outputs.mihomo_updated }}" = "true" ]; then
-              git commit -m "Multi-format update: Rules + Mihomo v${{ steps.mihomo.outputs.latest_version }} [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
-            else
-              git commit -m "Multi-format update: Rules [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
-            fi
+             git commit -m "Multi-format update: Rules [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
           fi
 
       # 11. 推送变更
@@ -123,12 +118,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           retain_days: 0
-          keep_minimum_runs: 5
-
-      # 13. 清理临时文件
-      - name: Cleanup temporary folders
-        run: |
-          rm -rf "${{ github.workspace }}/tmp*" "${{ github.workspace }}/temp*" "${{ github.workspace }}/.tmp*" "${{ github.workspace }}/.temp*" 2>/dev/null || true
+          keep_minimum_runs: 3
 
       # 14. 清理旧工件
       - name: Cleanup old artifacts
