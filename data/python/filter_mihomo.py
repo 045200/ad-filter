@@ -3,7 +3,7 @@
 
 """
 AdBlock 规则转换器（增强版，含白名单过滤）
-输入: 步骤一生成的 Clash 拦截规则(clash_adblock.yaml)和放行规则(clash_allow.yaml)（位于仓库根目录）
+输入: 包含拦截规则和白名单规则的 adblock_clash.yaml（位于仓库根目录）
 输出: 经过白名单过滤的 adb.mrs（位于仓库根目录）
 适配GitHub Actions环境，支持规则过滤与错误处理
 """
@@ -25,8 +25,7 @@ class Config:
     """配置管理（输入输出均在仓库根目录）"""
     GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
     # 输入文件（位于仓库根目录）
-    INPUT_BLOCK_FILE = os.getenv("BLOCK_INPUT", "clash_adblock.yaml")
-    INPUT_WHITELIST_FILE = os.getenv("WHITELIST_INPUT", "adblock_clash.yaml")
+    INPUT_FILE = os.getenv("ADBLOCK_INPUT", "adblock_clash.yaml")
     # 输出文件（位于仓库根目录）
     OUTPUT_FILE = os.getenv("ADBLOCK_OUTPUT", "adb.mrs")
     COMPILER_PATH = os.getenv("COMPILER_PATH", "./data/mihomo-tool")
@@ -48,18 +47,13 @@ class Config:
             sys.exit(1)
 
     @property
-    def block_path(self) -> Path:
-        """步骤一生成的拦截规则文件路径（仓库根目录）"""
-        path = Path(self.GITHUB_WORKSPACE) / self.INPUT_BLOCK_FILE
+    def input_path(self) -> Path:
+        """输入文件路径（仓库根目录）"""
+        path = Path(self.GITHUB_WORKSPACE) / self.INPUT_FILE
         if not path.exists():
-            logger.critical(f"拦截规则文件不存在（步骤一生成失败？）: {path}")
+            logger.critical(f"输入文件不存在: {path}")
             sys.exit(1)
         return path
-
-    @property
-    def whitelist_path(self) -> Path:
-        """步骤一生成的白名单（放行规则）文件路径（仓库根目录）"""
-        return Path(self.GITHUB_WORKSPACE) / self.INPUT_WHITELIST_FILE
 
     @property
     def output_path(self) -> Path:
@@ -129,7 +123,7 @@ class AdblockConverter:
     def __init__(self, config: Config):
         self.config = config
         self.stats = {
-            'total_block': 0,    # 步骤一拦截规则总数
+            'total_block': 0,    # 拦截规则总数
             'valid_block': 0,    # 有效拦截规则数
             'whitelist_count': 0,  # 白名单域名数量
             'filtered_count': 0   # 被白名单过滤的规则数
@@ -137,13 +131,14 @@ class AdblockConverter:
         self.whitelist_domains: Set[str] = set()  # 白名单域名集合
 
     def parse_input(self) -> List[Dict[str, str]]:
-        """解析步骤一生成的拦截规则文件（仓库根目录）"""
-        logger.info(f"解析拦截规则文件: {self.config.block_path}")
+        """解析输入文件，提取拦截规则和白名单规则"""
+        logger.info(f"解析输入文件: {self.config.input_path}")
         try:
-            with self.config.block_path.open('r', encoding='utf-8') as f:
+            with self.config.input_path.open('r', encoding='utf-8') as f:
                 data = yaml.safe_load(f)
+            
             if not data or 'payload' not in data:
-                logger.error("拦截规则文件缺少'payload'节点（步骤一格式错误）")
+                logger.error("输入文件缺少'payload'节点")
                 return []
 
             valid_rules: List[Dict[str, str]] = []
@@ -172,27 +167,25 @@ class AdblockConverter:
                 self.stats['valid_block'] += 1
 
             logger.info(
-                f"拦截规则解析完成: 总规则{self.stats['total_block']}, "
+                f"规则解析完成: 总规则{self.stats['total_block']}, "
                 f"有效{self.stats['valid_block']}"
             )
             return valid_rules
         except yaml.YAMLError as e:
-            logger.error(f"拦截规则YAML格式错误: {str(e)}")
+            logger.error(f"输入文件YAML格式错误: {str(e)}")
             return []
         except Exception as e:
-            logger.error(f"解析拦截规则失败: {str(e)}")
+            logger.error(f"解析输入文件失败: {str(e)}")
             return []
 
     def _load_whitelist(self) -> None:
-        """加载步骤一生成的白名单（放行规则，仓库根目录）"""
-        if not self.config.whitelist_path.exists():
-            logger.warning("白名单文件不存在，将跳过过滤")
-            return
+        """从输入文件中提取白名单规则"""
         try:
-            with self.config.whitelist_path.open('r', encoding='utf-8') as f:
+            with self.config.input_path.open('r', encoding='utf-8') as f:
                 data = yaml.safe_load(f)
+            
             if not data or 'payload' not in data:
-                logger.warning("白名单文件缺少'payload'节点（步骤一格式错误）")
+                logger.warning("输入文件缺少'payload'节点")
                 return
 
             # 提取所有白名单域名（忽略类型，仅保留值）
@@ -204,7 +197,7 @@ class AdblockConverter:
             self.stats['whitelist_count'] = len(self.whitelist_domains)
             logger.info(f"白名单加载完成: 有效域名 {self.stats['whitelist_count']} 个")
         except yaml.YAMLError as e:
-            logger.error(f"白名单YAML格式错误: {str(e)}")
+            logger.error(f"输入文件YAML格式错误: {str(e)}")
         except Exception as e:
             logger.error(f"加载白名单失败: {str(e)}")
 
@@ -297,14 +290,14 @@ class AdblockConverter:
                     logger.warning(f"临时文件清理失败: {str(e)}")
 
     def run(self) -> int:
-        """执行完整流程：解析拦截规则 → 加载白名单 → 过滤 → 编译"""
-        # 1. 解析步骤一的拦截规则（仓库根目录）
+        """执行完整流程：解析输入文件 → 提取白名单 → 过滤 → 编译"""
+        # 1. 解析输入文件（仓库根目录）
         valid_block_rules = self.parse_input()
         if not valid_block_rules:
             logger.error("无有效拦截规则，终止流程")
             return 1
 
-        # 2. 加载白名单并过滤
+        # 2. 提取白名单并过滤
         self._load_whitelist()
         final_rules = self._filter_with_whitelist(valid_block_rules)
 
