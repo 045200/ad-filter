@@ -38,7 +38,7 @@ class Config:
     OUTPUT_DIR = TEMP_DIR
     
     # 核心输出文件
-    CLEANED_FILE = TEMP_DIR / "adblock_merged_cleaned.txt"
+    CLEANED_FILE = TEMP_DIR / "adblock_merged.txt"
     
     # 无效域名备份文件
     INVALID_DOMAINS_BACKUP = BASE_DIR / "data" / "mod" / "adblock_update.txt"
