@@ -5,7 +5,7 @@
 AdBlock 规则转换器（直接引用版）
 输入: 原始 adblock_clash.yaml（位于仓库根目录）
 输出: 直接转换的 adb.mrs（位于仓库根目录）
-不进行规则过滤和验证，直接传递原始规则
+专门处理第一个脚本生成的规则格式
 """
 
 import os
@@ -17,7 +17,6 @@ import logging
 import hashlib
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Tuple
 
 
 class Config:
@@ -87,26 +86,18 @@ logger = setup_logger()
 
 
 class AdblockConverter:
-    """规则转换器（直接传递原始规则）"""
+    """规则转换器（专门处理第一个脚本的输出格式）"""
     def __init__(self, config: Config):
         self.config = config
         self.stats = {
-            'total_rules': 0,    # 总规则数
-            'mrs_sha256': ''     # MRS文件的SHA256校验和
+            'total_rules': 0,
+            'mrs_sha256': ''
         }
 
-    def parse_rule_string(self, rule_str: str) -> Tuple[str, str]:
-        """解析规则字符串，返回(类型, 值)"""
-        if ',' in rule_str:
-            parts = rule_str.split(',', 1)
-            rule_type = parts[0].strip().upper()
-            value = parts[1].strip()
-            return rule_type, value
-        return "", rule_str  # 保留无法解析的原始字符串
-
-    def parse_input(self) -> List[Dict[str, str]]:
-        """直接读取原始规则，不做过滤和验证"""
-        logger.info(f"读取原始输入文件: {self.config.input_path}")
+    def parse_input(self) -> list:
+        """解析第一个脚本生成的规则文件"""
+        logger.info(f"读取输入文件: {self.config.input_path}")
+        
         try:
             with self.config.input_path.open('r', encoding='utf-8') as f:
                 data = yaml.safe_load(f)
@@ -115,21 +106,28 @@ class AdblockConverter:
                 logger.error("输入文件缺少'payload'节点")
                 return []
 
-            rules: List[Dict[str, str]] = []
+            rules = []
             for rule in data['payload']:
-                self.stats['total_rules'] += 1
-                
-                if isinstance(rule, dict):
-                    # 保留原始字典格式规则
+                if isinstance(rule, str):
+                    # 处理字符串格式的规则 (DOMAIN-SUFFIX,example.com,REJECT)
+                    parts = rule.split(',')
+                    if len(parts) >= 2:
+                        rule_type = parts[0].strip().upper()
+                        value = parts[1].strip()
+                        
+                        # 只提取规则类型和值，忽略策略部分
+                        rules.append({'type': rule_type, 'value': value})
+                        self.stats['total_rules'] += 1
+                elif isinstance(rule, dict):
+                    # 处理字典格式的规则
                     rule_type = rule.get('type', '').upper()
                     value = rule.get('value', '').strip()
-                    rules.append({'type': rule_type, 'value': value})
-                elif isinstance(rule, str):
-                    # 转换字符串格式规则为字典
-                    rule_type, value = self.parse_rule_string(rule)
-                    rules.append({'type': rule_type, 'value': value})
+                    
+                    if rule_type and value:
+                        rules.append({'type': rule_type, 'value': value})
+                        self.stats['total_rules'] += 1
 
-            logger.info(f"原始规则加载完成: 共{self.stats['total_rules']}条")
+            logger.info(f"成功解析 {self.stats['total_rules']} 条规则")
             return rules
         except yaml.YAMLError as e:
             logger.error(f"输入文件YAML格式错误: {str(e)}")
@@ -138,15 +136,16 @@ class AdblockConverter:
             logger.error(f"读取输入文件失败: {str(e)}")
             return []
 
-    def generate_compile_yaml(self, rules: List[Dict[str, str]]) -> str:
-        """生成用于编译的YAML内容（保留所有规则）"""
+    def generate_compile_yaml(self, rules: list) -> str:
+        """生成用于编译的YAML内容"""
         if not rules:
             return ""
+            
         yaml_lines = ["payload:"]
         for rule in rules:
             yaml_lines.append(f"  - type: {rule['type']}")
             yaml_lines.append(f"    value: {rule['value']}")
-        logger.info(f"生成编译用YAML: 包含{len(rules)}条规则")
+            
         return '\n'.join(yaml_lines)
 
     def compute_sha256(self, file_path: Path) -> str:
@@ -154,7 +153,6 @@ class AdblockConverter:
         sha256_hash = hashlib.sha256()
         try:
             with open(file_path, "rb") as f:
-                # 逐块读取文件以处理大文件
                 for byte_block in iter(lambda: f.read(4096), b""):
                     sha256_hash.update(byte_block)
             return sha256_hash.hexdigest()
@@ -163,7 +161,7 @@ class AdblockConverter:
             return ""
 
     def compile_to_mrs(self, yaml_content: str) -> bool:
-        """编译为MRS格式（输出到仓库根目录）"""
+        """编译为MRS格式"""
         if not yaml_content:
             # 生成空文件避免下游错误
             with self.config.output_path.open('w', encoding='utf-8') as f:
@@ -225,12 +223,12 @@ class AdblockConverter:
             if temp_file and os.path.exists(temp_file):
                 try:
                     os.unlink(temp_file)
-                except Exception as e:
-                    logger.warning(f"临时文件清理失败: {str(e)}")
+                except Exception:
+                    pass  # 忽略清理错误
 
     def run(self) -> int:
-        """执行流程：读取原始规则 → 编译"""
-        # 1. 读取原始规则
+        """执行转换流程"""
+        # 1. 读取并解析规则
         rules = self.parse_input()
         if not rules:
             logger.error("无规则可处理，终止流程")
@@ -248,8 +246,6 @@ class AdblockConverter:
                 f.write(f"mrs_path={self.config.output_path}\n")
                 f.write(f"final_rule_count={len(rules)}\n")
                 f.write(f"mrs_sha256={self.stats['mrs_sha256']}\n")
-        else:
-            logger.warning("未检测到GITHUB_OUTPUT环境变量，跳过变量输出")
 
         logger.info("转换流程完成")
         return 0
