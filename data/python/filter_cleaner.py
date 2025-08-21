@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Adblock规则清理工具 - GitHub CI优化版（带白名单预加载）"""
+"""Adblock规则清理工具 - 支持国内外域名动态自适应的GitHub CI优化版"""
 
 import os
 import sys
@@ -25,6 +25,8 @@ import psutil
 import hashlib
 import gzip
 import shutil
+import ipaddress
+import maxminddb
 
 
 class Config:
@@ -32,89 +34,89 @@ class Config:
     GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
     BASE_DIR = Path(GITHUB_WORKSPACE)
 
-    # 输入：仓库根目录下的临时目录
+    # 输入输出目录
     TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
-    # 输出：清理后的文件将覆盖原文件
     OUTPUT_DIR = TEMP_DIR
-
-    # 核心输出文件
     CLEANED_FILE = TEMP_DIR / "adblock_merged.txt"
 
-    # 无效域名备份文件
+    # 备份文件
     INVALID_DOMAINS_BACKUP = BASE_DIR / "data" / "mod" / "adblock_update.txt"
     BACKUP_HISTORY_DIR = BASE_DIR / "data" / "mod" / "backups"
-
-    # 白名单文件
     WHITELIST_FILE = BASE_DIR / "data" / "mod" / "domains.txt"
 
-    MAX_BACKUP_FILES = 10  # 最大备份文件数量
-
-    # GitHub CI 环境优化配置（基于2核7GB标准配置）
-    MAX_WORKERS = 4  # CPU工作线程数
-    DNS_WORKERS = 50  # DNS查询的并发数
-    RULE_LEN_RANGE = (3, 2048)
-    MAX_FILESIZE_MB = 50  # 文件大小限制
+    # GitHub Actions 环境配置（已验证）
+    # 公共运行器: 2核CPU, 7GB RAM, 14GB SSD
+    # 大型运行器: 4核CPU, 16GB RAM, 14GB SSD (需要付费)
+    MAX_WORKERS = 4  # 根据CPU核心数调整
+    DNS_WORKERS = 100  # DNS查询并发数
+    BATCH_SIZE = 500  # 域名批量处理大小
+    MAX_MEMORY_PERCENT = 70  # 内存使用上限
 
     # DNS解析设置
-    DNS_TIMEOUT = 2  # 超时时间
-    DNS_RETRIES = 2  # 重试次数
-    DNS_RETRY_DELAY = 0.5  # 重试延迟(秒)
+    DNS_TIMEOUT = 3
+    DNS_RETRIES = 2
+    DNS_RETRY_DELAY = 1
 
-    # 内存管理
-    MAX_MEMORY_PERCENT = 60  # 最大内存使用百分比
-    BATCH_SIZE = 500  # 域名批量处理大小
+    # 多协议DNS服务器配置（国内外分流）
+    DNS_SERVERS = {
+        'global': {
+            'doh': [
+                "https://1.1.1.1/dns-query",  # Cloudflare (全球)
+                "https://dns.google/dns-query",  # Google (全球)
+                "https://doh.opendns.com/dns-query",  # OpenDNS
+            ],
+            'dot': [
+                "1.1.1.1",  # Cloudflare
+                "8.8.8.8",  # Google
+                "9.9.9.9",  # Quad9
+            ]
+        },
+        'china': {
+            'doh': [
+                "https://doh.360.cn/dns-query",  # 360
+                "https://dns.alidns.com/dns-query",  # 阿里DNS
+                "https://doh.pub/dns-query",  # 腾讯DNS
+            ],
+            'dot': [
+                "223.5.5.5",  # 阿里DNS
+                "119.29.29.29",  # 腾讯DNS
+                "180.76.76.76",  # 百度DNS
+            ]
+        }
+    }
 
-    # 多协议DNS服务器配置（保留所有服务器）
-    DOH_SERVERS = [
-        "https://1.1.1.1/dns-query",  # Cloudflare (全球CDN)
-        "https://dns.google/dns-query",  # Google (全球CDN)
-        "https://dns.alidns.com/dns-query",  # AliDNS (亚洲优化)
-        "https://doh.opendns.com/dns-query",  # OpenDNS (北美优化)
-        "https://doh.dns.sb/dns-query",  # DNS.SB (备用)
-        "https://doh.li/dns-query",  # DNS.LI (备用)
-        "https://dns.adguard.com/dns-query",  # AdGuard (备用)
-        "https://dns.cloudflare.com/dns-query",  # Cloudflare备用
-    ]
+    # 中国IP范围文件（用于识别国内域名）
+    CHINA_IP_RANGES_FILE = BASE_DIR / "data" / "china_ip_ranges.txt"
+    GEOIP_DB_URL = "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-Country.mmdb"
+    GEOIP_DB_FILE = BASE_DIR / "data" / "GeoLite2-Country.mmdb"
 
-    DOT_SERVERS = [
-        "1.1.1.1",  # Cloudflare
-        "8.8.8.8",  # Google
-        "9.9.9.9",  # Quad9
-        "208.67.222.222",  # OpenDNS
-    ]
+    # 性能优化设置
+    CACHE_TTL = 3600
+    MAX_CACHE_SIZE = 20000
 
-    # 特殊规则保留设置
+    # 特殊规则保留
     PRESERVE_ELEMENT_HIDING = True
     PRESERVE_SCRIPT_RULES = True
     PRESERVE_REGEX_RULES = True
 
-    # 性能优化设置
-    CACHE_TTL = 3600  # 缓存有效期(秒)
-    MAX_CACHE_SIZE = 10000  # 最大缓存条目数
-
 
 class RegexPatterns:
     """Adblock语法模式"""
-    # 域名提取模式 - 增强版，支持更多Adblock格式
     DOMAIN_EXTRACT = re.compile(r'^(?:@@)?\|{1,2}([\w.-]+)[\^\$\|\/]')
     HOSTS_RULE = re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')
     ADBLOCK_OPTIONS = re.compile(r'\$[a-zA-Z0-9~,=+_-]+')
-
-    # 过滤项
     COMMENT = re.compile(r'^[!#]')
     EMPTY_LINE = re.compile(r'^\s*$')
     IP_ADDRESS = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
-
-    # 特殊规则类型（通常需要保留）
     ELEMENT_HIDING = re.compile(r'.*##.*')
     SCRIPTLET = re.compile(r'.*#\?#.*')
-    GENERIC = re.compile(r'^/.*/$')  # 正则表达式规则
+    GENERIC = re.compile(r'^/.*/$')
     ADGUARD_SCRIPT = re.compile(r'.*\$.*script.*')
 
 
 def setup_logger():
     logger = logging.getLogger('AdblockCleanerCI')
-    logger.setLevel(logging.WARNING)  # 减少日志输出以提高性能
+    logger.setLevel(logging.INFO)
     handler = logging.StreamHandler(sys.stdout)
     formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
     handler.setFormatter(formatter)
@@ -122,6 +124,73 @@ def setup_logger():
     return logger
 
 logger = setup_logger()
+
+
+class GeoIPClassifier:
+    """IP地理信息分类器"""
+    def __init__(self):
+        self.geoip_reader = None
+        self.china_ip_ranges = set()
+        self._init_geoip()
+        self._load_china_ip_ranges()
+
+    def _init_geoip(self):
+        """初始化GeoIP数据库"""
+        try:
+            if Config.GEOIP_DB_FILE.exists():
+                self.geoip_reader = maxminddb.open_database(str(Config.GEOIP_DB_FILE))
+                logger.info("GeoIP数据库加载成功")
+            else:
+                logger.warning("GeoIP数据库未找到，将使用IP范围文件")
+        except Exception as e:
+            logger.error(f"加载GeoIP数据库失败: {str(e)}")
+
+    def _load_china_ip_ranges(self):
+        """加载中国IP范围"""
+        try:
+            if Config.CHINA_IP_RANGES_FILE.exists():
+                with open(Config.CHINA_IP_RANGES_FILE, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            self.china_ip_ranges.add(line)
+                logger.info(f"已加载 {len(self.china_ip_ranges)} 个中国IP范围")
+            else:
+                # 默认添加一些常见中国IP段
+                self.china_ip_ranges.update([
+                    '1.0.1.0/24', '1.0.2.0/23', '1.0.8.0/21', '1.0.32.0/19', '1.1.0.0/24',
+                    '223.0.0.0/8', '220.160.0.0/11', '219.128.0.0/11', '218.0.0.0/11'
+                ])
+                logger.info("使用默认中国IP范围")
+        except Exception as e:
+            logger.error(f"加载中国IP范围失败: {str(e)}")
+
+    def is_china_ip(self, ip_address: str) -> bool:
+        """判断IP是否属于中国"""
+        try:
+            # 首先检查GeoIP数据库
+            if self.geoip_reader:
+                try:
+                    result = self.geoip_reader.get(ip_address)
+                    if result and 'country' in result:
+                        return result['country']['iso_code'] == 'CN'
+                except:
+                    pass
+
+            # 然后检查IP范围
+            ip_obj = ipaddress.ip_address(ip_address)
+            for ip_range in self.china_ip_ranges:
+                if ip_obj in ipaddress.ip_network(ip_range):
+                    return True
+
+            return False
+        except Exception:
+            return False
+
+    def close(self):
+        """关闭GeoIP读取器"""
+        if self.geoip_reader:
+            self.geoip_reader.close()
 
 
 class ResourceMonitor:
@@ -136,7 +205,6 @@ class ResourceMonitor:
         memory_mb = process.memory_info().rss / 1024 / 1024
         self.peak_memory = max(self.peak_memory, memory_mb)
 
-        # 获取系统总内存
         total_memory = psutil.virtual_memory().total / 1024 / 1024
         memory_percent = (memory_mb / total_memory) * 100
 
@@ -151,14 +219,12 @@ class ResourceMonitor:
         memory_mb = process.memory_info().rss / 1024 / 1024
         cpu_percent = process.cpu_percent()
         elapsed = time.time() - self.start_time
-
         logger.info(f"资源使用 - 内存: {memory_mb:.1f}MB, CPU: {cpu_percent}%, 时间: {elapsed:.1f}s")
 
 
-class MultiProtocolDNSValidator:
-    """多协议DNS验证器（GitHub CI 优化版）"""
+class AdaptiveDNSValidator:
+    """自适应DNS验证器（支持国内外域名分流）"""
     def __init__(self):
-        # 域名黑名单（无效或保留域名）
         self.domain_blacklist = {
             'localhost', 'localdomain', 'example.com', 'example.org', 
             'example.net', 'test.com', 'invalid.com', '0.0.0.0', '127.0.0.1',
@@ -166,26 +232,20 @@ class MultiProtocolDNSValidator:
             'example', 'test', 'invalid', 'local'
         }
 
-        # 缓存已验证的域名
         self.valid_domains = set()
         self.invalid_domains = set()
-        self.cache_timestamps = {}  # 缓存时间戳
+        self.cache_timestamps = {}
+        self.domain_strategies = {}  # 域名->策略映射缓存
+        self.geoip_classifier = GeoIPClassifier()
 
-        # 从备份文件加载已知无效域名
         self.known_invalid_domains = self._load_known_invalid_domains()
-
-        # 从白名单文件加载白名单域名并预加载到有效域名缓存
         self.whitelist_domains = self._load_whitelist_domains()
         self._preload_whitelist_to_cache()
 
-        # 创建SSL上下文
         self.ssl_context = ssl.create_default_context(cafile=certifi.where())
-
-        # 初始化DNS解析器
         self.resolver = aiodns.DNSResolver()
         self.resolver.timeout = Config.DNS_TIMEOUT
 
-        # 会话管理
         self.session = None
         self.connector = None
 
@@ -196,17 +256,17 @@ class MultiProtocolDNSValidator:
             'dns_queries': 0,
             'cache_hits': 0,
             'known_invalid_hits': 0,
-            'whitelist_hits': 0
+            'whitelist_hits': 0,
+            'china_domains': 0,
+            'global_domains': 0
         }
 
     def _load_known_invalid_domains(self) -> Set[str]:
         """从备份文件加载已知无效域名"""
         known_invalid = set()
         backup_file = Config.INVALID_DOMAINS_BACKUP
-
         if backup_file.exists():
             try:
-                logger.info(f"从备份文件加载已知无效域名: {backup_file}")
                 with open(backup_file, 'r', encoding='utf-8') as f:
                     for line in f:
                         domain = line.strip()
@@ -215,23 +275,18 @@ class MultiProtocolDNSValidator:
                 logger.info(f"已加载 {len(known_invalid)} 个已知无效域名")
             except Exception as e:
                 logger.error(f"加载已知无效域名失败: {str(e)}")
-
         return known_invalid
 
     def _load_whitelist_domains(self) -> Set[str]:
         """从白名单文件加载白名单域名"""
         whitelist = set()
         whitelist_file = Config.WHITELIST_FILE
-
         if whitelist_file.exists():
             try:
-                logger.info(f"从白名单文件加载域名: {whitelist_file}")
                 with open(whitelist_file, 'r', encoding='utf-8') as f:
                     for line in f:
                         line = line.strip()
-                        # 跳过注释和空行
                         if line and not line.startswith('#'):
-                            # 处理通配符域名 (*.example.com → example.com)
                             if line.startswith('*.'):
                                 line = line[2:]
                             whitelist.add(line)
@@ -240,7 +295,6 @@ class MultiProtocolDNSValidator:
                 logger.error(f"加载白名单域名失败: {str(e)}")
         else:
             logger.info(f"白名单文件不存在: {whitelist_file}")
-
         return whitelist
 
     def _preload_whitelist_to_cache(self):
@@ -251,14 +305,53 @@ class MultiProtocolDNSValidator:
             self.cache_timestamps[domain] = current_time
         logger.info(f"已将 {len(self.whitelist_domains)} 个白名单域名预加载到缓存")
 
+    async def determine_domain_strategy(self, domain: str) -> str:
+        """确定域名的解析策略（国内/国际）"""
+        # 首先检查缓存
+        if domain in self.domain_strategies:
+            return self.domain_strategies[domain]
+
+        # 常见中国域名后缀
+        china_tlds = {'.cn', '.com.cn', '.net.cn', '.org.cn', '.gov.cn', '.edu.cn'}
+        # 常见中国域名关键字
+        china_keywords = {'baidu', 'tencent', 'qq', 'alibaba', 'taobao', 'jd', 'weibo',
+                         'xiaomi', 'huawei', 'oppo', 'vivo', 'sina', 'sohu', '163', '126'}
+
+        # 检查域名后缀
+        if any(domain.endswith(tld) for tld in china_tlds):
+            self.domain_strategies[domain] = 'china'
+            return 'china'
+
+        # 检查域名关键字
+        if any(keyword in domain for keyword in china_keywords):
+            self.domain_strategies[domain] = 'china'
+            return 'china'
+
+        # 通过DNS解析获取IP并检查地理位置
+        try:
+            result = await asyncio.wait_for(
+                self.resolver.query(domain, 'A'),
+                timeout=2.0
+            )
+            if result:
+                ip_address = result[0].host
+                if self.geoip_classifier.is_china_ip(ip_address):
+                    self.domain_strategies[domain] = 'china'
+                    return 'china'
+        except:
+            pass
+
+        # 默认使用国际策略
+        self.domain_strategies[domain] = 'global'
+        return 'global'
+
     async def init_session(self):
-        """初始化aiohttp会话（GitHub CI 优化）"""
+        """初始化aiohttp会话"""
         if self.session is None:
-            # 使用连接池限制，避免过多连接
             self.connector = aiohttp.TCPConnector(
-                limit=min(Config.DNS_WORKERS, 20),  # 限制连接池大小
-                limit_per_host=5,  # 减少每主机连接数
-                ttl_dns_cache=300,  # DNS缓存5分钟
+                limit=min(Config.DNS_WORKERS, 50),
+                limit_per_host=8,
+                ttl_dns_cache=300,
                 ssl=self.ssl_context
             )
             self.session = aiohttp.ClientSession(connector=self.connector)
@@ -271,38 +364,26 @@ class MultiProtocolDNSValidator:
         if self.connector:
             await self.connector.close()
             self.connector = None
+        self.geoip_classifier.close()
 
     def is_valid_domain_format(self, domain: str) -> bool:
-        """检查域名格式是否有效（优化性能）"""
+        """检查域名格式是否有效"""
         if not domain or domain in self.domain_blacklist:
             return False
-
-        # 快速长度检查
         if len(domain) < 4 or len(domain) > 253:
             return False
-
-        # 检查是否包含点号
         if '.' not in domain:
             return False
-
-        # 检查是否以点号开头或结尾
         if domain.startswith('.') or domain.endswith('.'):
             return False
-
-        # 检查是否包含无效字符
         if re.search(r'[^a-zA-Z0-9.-]', domain):
             return False
-
-        # 检查是否为IP地址
         if RegexPatterns.IP_ADDRESS.match(domain):
             return False
-
-        # 检查各部分长度
         parts = domain.split('.')
         for part in parts:
             if len(part) > 63:
                 return False
-
         return True
 
     async def resolve_with_retry(self, func, *args, max_retries=Config.DNS_RETRIES, **kwargs):
@@ -312,58 +393,42 @@ class MultiProtocolDNSValidator:
                 return await func(*args, **kwargs)
             except (asyncio.TimeoutError, aiodns.error.DNSError, aiohttp.ClientError) as e:
                 if attempt < max_retries - 1:
-                    logger.debug(f"尝试 {attempt+1}/{max_retries} 失败: {str(e)}")
                     await asyncio.sleep(Config.DNS_RETRY_DELAY * (attempt + 1))
                 else:
-                    logger.debug(f"所有 {max_retries} 次尝试都失败")
                     return False
-            except Exception as e:
-                logger.debug(f"解析过程中出现意外错误: {str(e)}")
+            except Exception:
                 return False
         return False
 
     async def resolve_via_doh(self, domain: str, server: str) -> bool:
-        """通过DoH协议解析域名（优化超时）"""
+        """通过DoH协议解析域名"""
         self.stats['doh_queries'] += 1
         try:
-            headers = {
-                'accept': 'application/dns-json'
-            }
-            params = {
-                'name': domain,
-                'type': 'A'
-            }
-
+            headers = {'accept': 'application/dns-json'}
+            params = {'name': domain, 'type': 'A'}
             timeout = aiohttp.ClientTimeout(total=Config.DNS_TIMEOUT)
             async with self.session.get(server, headers=headers, params=params, 
                                       ssl=self.ssl_context, timeout=timeout) as response:
                 if response.status == 200:
                     data = await response.json()
                     return 'Answer' in data and len(data['Answer']) > 0
-        except asyncio.TimeoutError:
+        except:
             return False
-        except Exception:
-            return False
-
-        return False
 
     async def resolve_via_dot(self, domain: str, server: str) -> bool:
-        """通过DoT协议解析域名（优化超时）"""
+        """通过DoT协议解析域名"""
         self.stats['dot_queries'] += 1
         try:
-            # 使用aiodns库进行DoT查询
             result = await asyncio.wait_for(
                 self.resolver.query(domain, 'A'),
                 timeout=Config.DNS_TIMEOUT
             )
             return len(result) > 0
-        except (asyncio.TimeoutError, aiodns.error.DNSError):
-            return False
-        except Exception:
+        except:
             return False
 
     async def resolve_via_standard_dns(self, domain: str) -> bool:
-        """通过标准DNS协议解析域名（优化超时）"""
+        """通过标准DNS协议解析域名"""
         self.stats['dns_queries'] += 1
         try:
             result = await asyncio.wait_for(
@@ -371,27 +436,49 @@ class MultiProtocolDNSValidator:
                 timeout=Config.DNS_TIMEOUT
             )
             return len(result) > 0
-        except (asyncio.TimeoutError, aiodns.error.DNSError):
-            return False
-        except Exception:
+        except:
             return False
 
-    async def is_domain_resolvable(self, domain: str) -> bool:
-        """使用多协议检查域名是否可解析（优化顺序）"""
-        current_time = time.time()
-
-        # 首先检查白名单
-        if domain in self.whitelist_domains:
-            self.stats['whitelist_hits'] += 1
-            logger.debug(f"域名 {domain} 在白名单中，跳过验证")
+    async def resolve_domain(self, domain: str, strategy: str) -> bool:
+        """根据策略解析域名"""
+        # 1. 首先尝试标准DNS
+        result = await self.resolve_with_retry(self.resolve_via_standard_dns, domain)
+        if result:
             return True
 
-        # 检查已知无效域名列表
+        # 2. 尝试DoH协议（根据策略选择服务器）
+        doh_servers = Config.DNS_SERVERS[strategy]['doh']
+        for doh_server in doh_servers:
+            result = await self.resolve_with_retry(self.resolve_via_doh, domain, doh_server)
+            if result:
+                return True
+            await asyncio.sleep(0.01)
+
+        # 3. 最后尝试DoT协议
+        dot_servers = Config.DNS_SERVERS[strategy]['dot']
+        for dot_server in dot_servers:
+            result = await self.resolve_with_retry(self.resolve_via_dot, domain, dot_server)
+            if result:
+                return True
+            await asyncio.sleep(0.01)
+
+        return False
+
+    async def is_domain_resolvable(self, domain: str) -> bool:
+        """检查域名是否可解析"""
+        current_time = time.time()
+
+        # 检查白名单
+        if domain in self.whitelist_domains:
+            self.stats['whitelist_hits'] += 1
+            return True
+
+        # 检查已知无效域名
         if domain in self.known_invalid_domains:
             self.stats['known_invalid_hits'] += 1
             return False
 
-        # 检查缓存有效性
+        # 检查缓存
         if domain in self.cache_timestamps:
             if current_time - self.cache_timestamps[domain] < Config.CACHE_TTL:
                 if domain in self.valid_domains:
@@ -401,55 +488,36 @@ class MultiProtocolDNSValidator:
                     self.stats['cache_hits'] += 1
                     return False
 
-        # 跳过已知无效域名
         if domain in self.invalid_domains:
             return False
 
-        # 检查缓存
         if domain in self.valid_domains:
             return True
 
-        # 按照优先级顺序尝试不同的解析方法
-        # 1. 首先尝试标准DNS（系统DNS）
-        result = await self.resolve_with_retry(self.resolve_via_standard_dns, domain)
+        # 确定解析策略
+        strategy = await self.determine_domain_strategy(domain)
+        if strategy == 'china':
+            self.stats['china_domains'] += 1
+        else:
+            self.stats['global_domains'] += 1
+
+        # 解析域名
+        result = await self.resolve_domain(domain, strategy)
+
         if result:
             self.valid_domains.add(domain)
             self.cache_timestamps[domain] = current_time
             if len(self.valid_domains) > Config.MAX_CACHE_SIZE:
                 self._cleanup_cache()
             return True
-
-        # 2. 尝试DoH协议
-        for doh_server in Config.DOH_SERVERS:
-            result = await self.resolve_with_retry(self.resolve_via_doh, domain, doh_server)
-            if result:
-                self.valid_domains.add(domain)
-                self.cache_timestamps[domain] = current_time
-                if len(self.valid_domains) > Config.MAX_CACHE_SIZE:
-                    self._cleanup_cache()
-                return True
-            await asyncio.sleep(0.01)  # 短暂延迟
-
-        # 3. 最后尝试DoT协议
-        for dot_server in Config.DOT_SERVERS:
-            result = await self.resolve_with_retry(self.resolve_via_dot, domain, dot_server)
-            if result:
-                self.valid_domains.add(domain)
-                self.cache_timestamps[domain] = current_time
-                if len(self.valid_domains) > Config.MAX_CACHE_SIZE:
-                    self._cleanup_cache()
-                return True
-            await asyncio.sleep(0.01)
-
-        # 所有方法都失败
-        self.invalid_domains.add(domain)
-        self.cache_timestamps[domain] = current_time
-        return False
+        else:
+            self.invalid_domains.add(domain)
+            self.cache_timestamps[domain] = current_time
+            return False
 
     def _cleanup_cache(self):
         """清理过期的缓存条目"""
         current_time = time.time()
-        # 清理过期缓存
         expired_domains = [
             domain for domain, timestamp in self.cache_timestamps.items()
             if current_time - timestamp > Config.CACHE_TTL
@@ -463,13 +531,8 @@ class MultiProtocolDNSValidator:
             if domain in self.cache_timestamps:
                 del self.cache_timestamps[domain]
 
-        # 如果仍然太大，清理最旧的条目
         if len(self.valid_domains) > Config.MAX_CACHE_SIZE:
-            # 按时间排序并清理最旧的
-            sorted_domains = sorted(
-                self.cache_timestamps.items(), 
-                key=lambda x: x[1]
-            )
+            sorted_domains = sorted(self.cache_timestamps.items(), key=lambda x: x[1])
             for domain, _ in sorted_domains[:Config.MAX_CACHE_SIZE // 2]:
                 if domain in self.valid_domains:
                     self.valid_domains.remove(domain)
@@ -479,25 +542,10 @@ class MultiProtocolDNSValidator:
                     del self.cache_timestamps[domain]
 
     async def validate_domain(self, domain: str) -> bool:
-        """综合验证域名（GitHub CI 优化）"""
-        # 首先检查格式
+        """验证域名"""
         if not self.is_valid_domain_format(domain):
             return False
-
-        # 然后检查DNS解析
         return await self.is_domain_resolvable(domain)
-
-
-def check_file_size(file_path: Path) -> bool:
-    try:
-        size_mb = file_path.stat().st_size / (1024 * 1024)
-        if size_mb > Config.MAX_FILESIZE_MB:
-            logger.warning(f"跳过大文件 {file_path.name}（{size_mb:.1f}MB）")
-            return False
-        return True
-    except Exception as e:
-        logger.error(f"获取文件大小失败 {file_path.name}: {str(e)}")
-        return False
 
 
 class AdblockCleanerCI:
@@ -507,26 +555,21 @@ class AdblockCleanerCI:
         Config.BACKUP_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 
         self.regex = RegexPatterns()
-        self.validator = MultiProtocolDNSValidator()
+        self.validator = AdaptiveDNSValidator()
         self.resource_monitor = ResourceMonitor()
-        self.len_min, self.len_max = Config.RULE_LEN_RANGE
 
     async def run(self):
         start_time = time.time()
-        logger.info("===== Adblock规则清理工具 CI优化版 =====")
-        logger.info(f"GitHub CI环境: 2核7GB标准配置")
+        logger.info("===== Adblock规则清理工具（动态自适应版） =====")
+        logger.info("GitHub CI环境: 2核7GB标准配置 / 4核16GB大型配置")
         logger.info(f"并发设置: DNS Workers={Config.DNS_WORKERS}, CPU Workers={Config.MAX_WORKERS}")
         logger.info(f"内存限制: {Config.MAX_MEMORY_PERCENT}%")
-        logger.info(f"输入目录: {Config.TEMP_DIR}")
-        logger.info(f"输出文件: {Config.CLEANED_FILE}")
-        logger.info(f"白名单文件: {Config.WHITELIST_FILE}")
+        logger.info(f"自适应DNS: 支持国内外域名分流解析")
 
-        # 初始化DNS验证器会话
         await self.validator.init_session()
 
-        # 获取输入文件
         input_files = []
-        for pattern in Config.INPUT_PATTERNS:
+        for pattern in ["adblock_filter.txt"]:
             input_files.extend([Path(p) for p in glob.glob(str(Config.TEMP_DIR / pattern))])
 
         if not input_files:
@@ -535,44 +578,27 @@ class AdblockCleanerCI:
 
         logger.info(f"发现{len(input_files)}个文件，开始处理...")
 
-        # 处理每个文件
         for file_path in input_files:
             await self._process_file(file_path)
 
-        # 关闭会话
         await self.validator.close_session()
-
-        # 备份无效域名到文件
         self._backup_invalid_domains()
 
         elapsed = time.time() - start_time
         logger.info(f"\n===== 清理完成 =====")
-        logger.info(f"有效域名缓存: {len(self.validator.valid_domains)}")
-        logger.info(f"无效域名缓存: {len(self.validator.invalid_domains)}")
-        logger.info(f"已知无效域名: {len(self.validator.known_invalid_domains)}")
-        logger.info(f"白名单域名: {len(self.validator.whitelist_domains)}")
-        logger.info(f"峰值内存使用: {self.resource_monitor.peak_memory:.1f}MB")
         logger.info(f"总耗时: {elapsed:.2f}秒")
+        logger.info(f"峰值内存: {self.resource_monitor.peak_memory:.1f}MB")
+        logger.info(f"有效域名: {len(self.validator.valid_domains)}")
+        logger.info(f"无效域名: {len(self.validator.invalid_domains)}")
+        logger.info(f"国内域名: {self.validator.stats['china_domains']}")
+        logger.info(f"国际域名: {self.validator.stats['global_domains']}")
+        logger.info(f"白名单命中: {self.validator.stats['whitelist_hits']}")
+        logger.info(f"缓存命中: {self.validator.stats['cache_hits']}")
 
-        # 记录DNS查询统计
-        logger.info(f"DNS查询统计: DoH={self.validator.stats['doh_queries']}, "
-                   f"DoT={self.validator.stats['dot_queries']}, "
-                   f"标准DNS={self.validator.stats['dns_queries']}")
-        logger.info(f"缓存命中: {self.validator.stats['cache_hits']}, "
-                   f"已知无效命中: {self.validator.stats['known_invalid_hits']}, "
-                   f"白名单命中: {self.validator.stats['whitelist_hits']}")
-
-        # 保存统计信息
         self._save_stats(start_time, elapsed)
 
     async def _process_file(self, file_path: Path):
-        """处理单个文件，去除无效域名（GitHub CI 优化）"""
-        if not check_file_size(file_path):
-            return
-
-        logger.info(f"开始处理文件: {file_path.name}")
-
-        # 读取文件内容
+        """处理单个文件"""
         try:
             with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                 lines = f.readlines()
@@ -580,11 +606,9 @@ class AdblockCleanerCI:
             logger.error(f"读取文件{file_path.name}出错: {str(e)}")
             return
 
-        # 提取所有域名
         all_domains = self._extract_domains_from_lines(lines)
         logger.info(f"从文件中提取到 {len(all_domains)} 个域名")
 
-        # 分批验证域名（避免内存溢出）
         valid_domains = set()
         domain_list = list(all_domains)
 
@@ -592,25 +616,22 @@ class AdblockCleanerCI:
             batch = domain_list[i:i+Config.BATCH_SIZE]
             batch_num = i//Config.BATCH_SIZE + 1
             total_batches = (len(domain_list)-1)//Config.BATCH_SIZE + 1
+            
             logger.info(f"处理域名批次 {batch_num}/{total_batches} ({len(batch)} 个域名)")
-
             batch_valid_domains = await self._validate_domains_batch(batch)
             valid_domains.update(batch_valid_domains)
 
-            # 检查资源使用情况
             if not self.resource_monitor.check_memory_usage():
                 logger.warning("内存使用超过限制，暂停处理")
-                await asyncio.sleep(1)  # 暂停一下让内存回收
+                await asyncio.sleep(1)
 
             self.resource_monitor.log_resource_usage()
 
         logger.info(f"有效域名: {len(valid_domains)} 个，无效域名: {len(all_domains) - len(valid_domains)} 个")
 
-        # 过滤规则，只保留包含有效域名的规则
         cleaned_lines = self._filter_rules(lines, valid_domains)
-
-        # 写入清理后的文件
         output_path = Config.CLEANED_FILE
+        
         with open(output_path, 'w', encoding='utf-8') as f:
             f.writelines(cleaned_lines)
 
@@ -619,64 +640,43 @@ class AdblockCleanerCI:
     def _extract_domains_from_lines(self, lines: List[str]) -> Set[str]:
         """从所有行中提取域名"""
         domains = set()
-
         for line in lines:
             line = line.strip()
-
-            # 跳过注释和空行
             if self.regex.EMPTY_LINE.match(line) or self.regex.COMMENT.match(line):
                 continue
-
-            # 尝试提取域名
             domain = self._extract_domain_from_rule(line)
             if domain:
                 domains.add(domain)
-
         return domains
 
     def _extract_domain_from_rule(self, rule: str) -> Optional[str]:
-        """从单条规则中提取域名（性能优化）"""
-        # 尝试匹配Adblock域名规则
+        """从单条规则中提取域名"""
         domain_match = self.regex.DOMAIN_EXTRACT.match(rule)
         if domain_match:
             domain = domain_match.group(1)
-            # 移除可能包含的选项部分
             if '$' in domain:
                 domain = domain.split('$')[0]
-            logger.debug(f"从Adblock规则 '{rule}' 中提取到域名: {domain}")
             return domain
 
-        # 尝试匹配Hosts规则
         hosts_match = self.regex.HOSTS_RULE.match(rule)
         if hosts_match:
-            domain = hosts_match.group(1)
-            logger.debug(f"从Hosts规则 '{rule}' 中提取到域名: {domain}")
-            return domain
+            return hosts_match.group(1)
 
-        # 尝试从URL规则中提取域名
         if rule.startswith(('http://', 'https://')):
             try:
                 parsed = urlparse(rule)
                 if parsed.netloc:
-                    domain = parsed.netloc.split(':')[0]  # 移除端口号
-                    logger.debug(f"从URL规则 '{rule}' 中提取到域名: {domain}")
-                    return domain
+                    return parsed.netloc.split(':')[0]
             except:
                 pass
 
-        logger.debug(f"无法从规则 '{rule}' 中提取域名")
         return None
 
     async def _validate_domains_batch(self, domains: List[str]) -> Set[str]:
-        """批量验证域名有效性（GitHub CI 优化）"""
+        """批量验证域名有效性"""
         valid_domains = set()
+        tasks = [self.validator.validate_domain(domain) for domain in domains]
 
-        # 使用异步任务并行验证域名
-        tasks = []
-        for domain in domains:
-            tasks.append(self.validator.validate_domain(domain))
-
-        # 分批处理以避免内存问题
         batch_size = Config.DNS_WORKERS
         for i in range(0, len(tasks), batch_size):
             batch = tasks[i:i+batch_size]
@@ -685,109 +685,82 @@ class AdblockCleanerCI:
             for j, result in enumerate(results):
                 domain = domains[i+j]
                 if isinstance(result, Exception):
-                    logger.debug(f"验证域名 {domain} 时出错: {str(result)}")
+                    continue
                 elif result:
-                    logger.debug(f"域名 {domain} 验证成功")
                     valid_domains.add(domain)
-                else:
-                    logger.debug(f"域名 {domain} 验证失败")
 
         return valid_domains
 
     def _filter_rules(self, lines: List[str], valid_domains: Set[str]) -> List[str]:
         """过滤规则，只保留包含有效域名的规则"""
         cleaned_lines = []
-
         for line in lines:
             original_line = line
             line = line.strip()
 
-            # 保留注释和空行
             if self.regex.EMPTY_LINE.match(line) or self.regex.COMMENT.match(line):
                 cleaned_lines.append(original_line)
                 continue
 
-            # 保留特殊规则类型（根据配置）
             if (Config.PRESERVE_ELEMENT_HIDING and self.regex.ELEMENT_HIDING.match(line)) or \
                (Config.PRESERVE_SCRIPT_RULES and (self.regex.SCRIPTLET.match(line) or self.regex.ADGUARD_SCRIPT.match(line))) or \
                (Config.PRESERVE_REGEX_RULES and self.regex.GENERIC.match(line)):
                 cleaned_lines.append(original_line)
                 continue
 
-            # 提取规则中的域名
             domain = self._extract_domain_from_rule(line)
-
-            # 如果规则不包含域名，或者包含的域名有效，则保留
             if not domain or domain in valid_domains:
                 cleaned_lines.append(original_line)
 
         return cleaned_lines
 
     def _backup_invalid_domains(self):
-        """备份无效域名到文件，并管理备份历史"""
-        # 合并所有无效域名（已知的和新发现的）
+        """备份无效域名到文件"""
         all_invalid_domains = self.validator.known_invalid_domains | self.validator.invalid_domains
-
         if not all_invalid_domains:
             logger.info("没有无效域名需要备份")
             return
 
-        # 确保目录存在
         Config.INVALID_DOMAINS_BACKUP.parent.mkdir(parents=True, exist_ok=True)
         Config.BACKUP_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 
-        # 创建带时间戳的备份文件
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_file = Config.BACKUP_HISTORY_DIR / f"adblock_update_{timestamp}.txt"
         compressed_backup = Config.BACKUP_HISTORY_DIR / f"adblock_update_{timestamp}.txt.gz"
 
         try:
-            # 写入带时间戳的备份
             with open(backup_file, 'w', encoding='utf-8') as f:
                 f.write("# Adblock无效域名备份文件\n")
                 f.write(f"# 生成时间: {datetime.now().isoformat()}\n")
-                f.write(f"# 总数: {len(all_invalid_domains)}\n")
-                f.write("# 此文件包含已知无法解析的域名，用于加速后续验证\n\n")
-
+                f.write(f"# 总数: {len(all_invalid_domains)}\n\n")
                 for domain in sorted(all_invalid_domains):
                     f.write(f"{domain}\n")
 
-            # 创建压缩版本
             with open(backup_file, 'rb') as f_in:
                 with gzip.open(compressed_backup, 'wb') as f_out:
                     shutil.copyfileobj(f_in, f_out)
 
-            # 更新主备份文件（不带时间戳）
             shutil.copy2(backup_file, Config.INVALID_DOMAINS_BACKUP)
-
-            # 清理旧备份文件
             self._cleanup_old_backups()
 
-            logger.info(f"已备份 {len(all_invalid_domains)} 个无效域名到 {backup_file}")
-            logger.info(f"压缩备份已保存到 {compressed_backup}")
+            logger.info(f"已备份 {len(all_invalid_domains)} 个无效域名")
         except Exception as e:
             logger.error(f"备份无效域名失败: {str(e)}")
 
     def _cleanup_old_backups(self):
         """清理旧的备份文件"""
         try:
-            # 获取所有备份文件并按修改时间排序
             backup_files = sorted(
                 Config.BACKUP_HISTORY_DIR.glob("adblock_update_*.txt"),
                 key=os.path.getmtime,
                 reverse=True
             )
-
-            # 删除超出数量限制的旧备份
-            if len(backup_files) > Config.MAX_BACKUP_FILES:
-                for old_file in backup_files[Config.MAX_BACKUP_FILES:]:
+            if len(backup_files) > 10:
+                for old_file in backup_files[10:]:
                     old_file.unlink()
-                    # 同时删除对应的压缩文件
                     compressed_file = Config.BACKUP_HISTORY_DIR / f"{old_file.stem}.gz"
                     if compressed_file.exists():
                         compressed_file.unlink()
-                    logger.info(f"删除旧备份文件: {old_file.name}")
-
         except Exception as e:
             logger.error(f"清理旧备份失败: {str(e)}")
 
@@ -799,42 +772,25 @@ class AdblockCleanerCI:
             "peak_memory_mb": self.resource_monitor.peak_memory,
             "valid_domains": len(self.validator.valid_domains),
             "invalid_domains": len(self.validator.invalid_domains),
-            "known_invalid_domains": len(self.validator.known_invalid_domains),
-            "whitelist_domains": len(self.validator.whitelist_domains),
+            "china_domains": self.validator.stats['china_domains'],
+            "global_domains": self.validator.stats['global_domains'],
             "dns_query_stats": self.validator.stats,
-            "ci_environment": "GitHub Actions (2 cores, 7GB RAM)",
+            "ci_environment": "GitHub Actions",
             "concurrency_settings": {
                 "dns_workers": Config.DNS_WORKERS,
                 "cpu_workers": Config.MAX_WORKERS,
                 "batch_size": Config.BATCH_SIZE
-            },
-            "doh_servers": Config.DOH_SERVERS,
-            "dot_servers": Config.DOT_SERVERS,
-            "preserve_settings": {
-                "element_hiding": Config.PRESERVE_ELEMENT_HIDING,
-                "script_rules": Config.PRESERVE_SCRIPT_RULES,
-                "regex_rules": Config.PRESERVE_REGEX_RULES
-            },
-            "backup_file": str(Config.INVALID_DOMAINS_BACKUP),
-            "backup_history_dir": str(Config.BACKUP_HISTORY_DIR),
-            "whitelist_file": str(Config.WHITELIST_FILE)
+            }
         }
 
         stats_file = Config.TEMP_DIR / "cleaning_stats.json"
         with open(stats_file, 'w', encoding='utf-8') as f:
             json.dump(stats, f, indent=2, ensure_ascii=False)
-
         logger.info(f"统计信息已保存到 {stats_file}")
 
 
 async def main():
     try:
-        # 提高文件描述符限制（GitHub CI 优化）
-        try:
-            resource.setrlimit(resource.RLIMIT_NOFILE, (8192, 8192))
-        except:
-            pass  # 忽略错误，如果权限不足
-
         cleaner = AdblockCleanerCI()
         await cleaner.run()
     except Exception as e:
@@ -843,10 +799,4 @@ async def main():
 
 
 if __name__ == '__main__':
-    # 设置事件循环策略（GitHub CI 优化）
-    if sys.platform.startswith('win'):
-        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-    else:
-        asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
-
     asyncio.run(main())
