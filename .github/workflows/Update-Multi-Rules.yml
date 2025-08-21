@@ -1,4 +1,4 @@
-name: Update Multi-Format Rules & Mihomo
+name: Update Multi Rules
 on:
   workflow_dispatch:  # 手动触发
   schedule:
@@ -21,6 +21,7 @@ jobs:
       PYTHON_SCRIPTS: ${{ github.workspace }}/data/python
       MIHOMO_BIN: ${{ github.workspace }}/data/mihomo-tool
       MAIN_BRANCH: multi  # 关联multi分支
+      TEMP_DIR: 'tmp'     # 添加临时目录环境变量
 
     steps:
       # 1. 拉取代码（multi分支）
@@ -59,7 +60,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq moreutils  # 系统工具
           pip install --upgrade pip
-          pip install requests aiodns pyyaml beautifulsoup4 pytz chardet
+          pip install requests aiodns pyyaml beautifulsoup4 pytz chardet aiohttp psutil  # 添加aiohttp和psutil
 
       # 6. 更新Mihomo
       - name: Update Mihomo
@@ -96,7 +97,13 @@ jobs:
           python ${{ env.PYTHON_SCRIPTS }}/merge.py
         continue-on-error: true
 
-      # 8. 生成多格式规则（multi分支特有）
+      # 8. 运行广告拦截规则清理（新增步骤）
+      - name: Run adblock cleaner
+        if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        run: |
+          python ${{ env.PYTHON_SCRIPTS }}/adblock_cleaner_ci.py  # 路径与第一个工作流保持一致
+
+      # 9. 生成多格式规则（multi分支特有）
       - name: Generate multi-format rules
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
@@ -109,12 +116,12 @@ jobs:
           python ${{ env.PYTHON_SCRIPTS }}/filter_clash.py # Clash
           python ${{ env.PYTHON_SCRIPTS }}/filter_mihomo.py # Mihomo扩展规则
 
-      # 9. 更新文档
+      # 10. 更新文档
       - name: Update documentation
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: python ${{ env.PYTHON_SCRIPTS }}/title.py
 
-      # 10. 提交变更
+      # 11. 提交变更
       - name: Commit changes
         run: |
           git config --local user.email "action@github.com"
@@ -126,7 +133,7 @@ jobs:
             git commit -m "Multi-format update: Rules [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
           fi || echo "No changes to commit"
 
-      # 11. 推送变更（带重试机制）
+      # 12. 推送变更（带重试机制）
       - name: Push changes
         run: |
           for i in 1 2 3; do
@@ -134,7 +141,7 @@ jobs:
             git push origin ${{ env.MAIN_BRANCH }} && break || sleep 5
           done
 
-      # 12. 清理旧工作流
+      # 13. 清理旧工作流
       - name: Cleanup old workflows
         uses: Mattraks/delete-workflow-runs@v2
         with:
@@ -143,17 +150,15 @@ jobs:
           retain_days: 0
           keep_minimum_runs: 5
 
-      # 13. 清理构建过程中产生的临时文件
+      # 14. 清理构建过程中产生的临时文件
       - name: Cleanup temporary folders (Post-build)
         run: |
           # 清理构建过程中可能产生的临时文件
           rm -rf "${{ github.workspace }}/tmp*" "${{ github.workspace }}/temp*" "${{ github.workspace }}/.tmp*" "${{ github.workspace }}/.temp*" 2>/dev/null || true
 
-      # 14. 清理旧工件（使用替代方案）
+      # 15. 清理旧工件（使用替代方案）
       - name: Cleanup old artifacts
         uses: c-hive/gha-remove-artifacts@v1.4.0
         with:
           age: '7 days'  # 保留最近7天的工件，删除更早的
-          # skip-tags: true  # 可选：跳过带有标签的artifacts（如发布版本）
-          # skip-recent: 5   # 可选：无论时间，保留最近5个artifacts
         if: always()  # 确保即使之前步骤失败，清理工作也能尝试进行
