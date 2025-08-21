@@ -16,7 +16,7 @@ from typing import List, Generator, Set, Tuple
 GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
 BASE_DIR = Path(GITHUB_WORKSPACE)
 TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
-OUTPUT_FILE = TEMP_DIR / "adblock_merged.txt"
+OUTPUT_FILE = TEMP_DIR / "adblock_filter.txt"
 
 MAX_WORKERS = 4
 CHUNK_SIZE = 10000
