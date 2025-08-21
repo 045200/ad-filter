@@ -40,21 +40,21 @@
 
 ## 📊 规则统计（实时更新）
 
-| 拦截工具         | 拦截规则数量 | 白名单规则数量 | 规则文件格式 | 注释符号 | 备注                     |
-|------------------|--------------|----------------|--------------|----------|--------------------------|
-| Adblock Plus     | {adp_rules}  | {adp_allow}    | .txt         | `!`      | 通用过滤语法             |
-| uBlock Origin    | {ubo_rules}  | {ubo_allow}    | .txt         | `!`      | 支持扩展语法             |
-| AdGuard          | {adg_rules}  | {adg_allow}    | .txt         | `!`      | 含 AdGuard 特有规则      |
-| AdGuard Home     | {adh_rules}  | {adh_allow}    | .txt         | `#`      | DNS 级拦截优化           |
-| Pi-hole          | {pihole_rules} | {pihole_allow} | .txt         | `#`      | 轻量 DNS 过滤            |
-| 通用混合规则     | {hybrid_rules} | {hybrid_allow} | .txt         | `!`      | 兼容多工具通用语法       |
-| Clash            | {clash_rules} | -              | .yaml        | `#`      | 混合规则（无单独白名单） |
-| Mihomo           | -            | -              | .mrs         | `#`      | 专为Mihomo优化的规则     |
-| Surge            | {surge_rules} | -              | .conf        | `#`      | 混合规则（无单独白名单） |
-| Hosts 规则       | {hosts}      | -              | .txt         | `#`      | 系统级 Hosts 过滤        |
+## 统计信息
+- 最后更新时间：2025-08-21 16:45:30
+- Hosts规则数量：3200
 
-- **更新时间**: {timestamp} （北京时间）
-- **更新频率**: 每 12 小时自动更新一次（北京时间 06:00 和 18:00）
+### 各拦截器规则数量
+- Adblock Plus 混合规则数量：1850
+- uBlock Origin 混合规则数量：2300
+- AdGuard 拦截规则数量：2100
+- AdGuard 白名单数量：150
+- AdGuard Home 拦截规则数量：1950
+- AdGuard Home 白名单数量：120
+- Clash 混合规则数量：0（若文件不存在）
+- Surge 混合规则数量：0（若文件不存在）
+- Pi-hole 拦截规则数量：1700
+- Pi-hole 白名单数量：90
 
 
 ## 📥 规则订阅
