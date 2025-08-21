@@ -9,10 +9,11 @@ from pathlib import Path
 
 # 基础配置
 GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
-INPUT_DIR = Path(GITHUB_WORKSPACE) / "tmp"
+INPUT_DIR = Path(GITHUB_WORKSPACE)
 OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "adblock_adh.txt"
 ALLOW_FILE = Path(GITHUB_WORKSPACE) / "allow_adh.txt"
-INPUT_FILE = INPUT_DIR / "adblock_merged.txt"
+ADGUARD_FILE = INPUT_DIR / "adblock_adg.txt"
+ADGUARD_ALLOW_FILE = INPUT_DIR / "allow_adg.txt"
 
 # 预编译正则表达式
 ADBLOCK_DOMAIN = re.compile(r'^\|\|([\w.-]+)(\^|\$.*)?$')
@@ -24,6 +25,8 @@ IP_ADDRESS = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
 DOMAIN_ONLY = re.compile(r'^([\w.-]+)$')
 REGEX_RULE = re.compile(r'^/.*/$')
 WILDCARD_RULE = re.compile(r'^\*[^*]+\*$')
+ELEMENT_HIDING = re.compile(r'^.*##[^#]+$')
+ELEMENT_HIDING_EXCEPTION = re.compile(r'^.*#@#[^#]+$')
 
 # AdGuard Home 支持的修饰符
 SUPPORTED_MODIFIERS = {
@@ -47,72 +50,121 @@ COMMON_TLDS = {
     'au', 'ca', 'us', 'io', 'ai', 'app', 'dev', 'xyz'
 }
 
+# 域名黑名单
+DOMAIN_BLACKLIST = {
+    'localhost', 'localdomain', 'example.com', 'example.org', 
+    'example.net', 'test.com', 'invalid.com', '0.0.0.0', '127.0.0.1',
+    '::1', '255.255.255.255', 'localhost.localdomain', 'example',
+    'test', 'invalid', 'local', 'domain', 'com', 'org', 'net'
+}
 
-def process_file():
-    """处理输入文件并生成AdGuard Home规则"""
+
+def process_adguard_files():
+    """处理AdGuard规则文件并生成AdGuard Home兼容规则"""
     rules = set()
     allows = set()
 
-    if not INPUT_FILE.exists():
-        print(f"错误: 输入文件不存在 {INPUT_FILE}")
-        return rules, allows
-
-    with open(INPUT_FILE, 'r', encoding='utf-8', errors='ignore') as f:
-        for line in f:
-            line = line.strip()
-
-            # 跳过空行和注释
-            if not line or EMPTY_LINE.match(line) or COMMENT.match(line):
-                continue
-
-            # 跳过AdGuard Home不支持的修饰符规则
-            if any(mod in line for mod in UNSUPPORTED_MODIFIERS):
-                continue
-
-            # 处理白名单规则
-            if ADBLOCK_WHITELIST.match(line):
-                # 简化白名单规则
-                simplified = simplify_rule(line)
-                if simplified and is_valid_rule(simplified):
-                    allows.add(simplified)
-                continue
-
-            # 处理正则表达式规则（AdGuard Home 支持简单正则）
-            if REGEX_RULE.match(line):
-                # 只保留简单的正则表达式，避免性能问题
-                if is_simple_regex(line):
-                    rules.add(line)
-                continue
-
-            # 处理通配符规则
-            if WILDCARD_RULE.match(line):
-                # 转换为AdGuard Home兼容的通配符格式
-                converted = convert_wildcard_rule(line)
-                if converted and is_valid_rule(converted):
-                    rules.add(converted)
-                continue
-
-            # 处理标准Adblock规则
-            if ADBLOCK_DOMAIN.match(line):
-                # 简化规则，移除AdGuard Home不需要的部分
-                simplified = simplify_rule(line)
-                if simplified and is_valid_rule(simplified):
-                    rules.add(simplified)
-                continue
-
-            # 处理Hosts规则
-            hosts_match = HOSTS_RULE.match(line)
-            if hosts_match:
-                domain = hosts_match.group(2)
-                if is_valid_domain(domain):
-                    rules.add(f"||{domain}^")
-                continue
-
-            # 处理纯域名
-            if DOMAIN_ONLY.match(line) and is_valid_domain(line):
-                rules.add(f"||{line}^")
+    # 处理拦截规则文件
+    if ADGUARD_FILE.exists():
+        with open(ADGUARD_FILE, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                process_line(line, rules, allows, is_allow=False)
+    
+    # 处理白名单规则文件
+    if ADGUARD_ALLOW_FILE.exists():
+        with open(ADGUARD_ALLOW_FILE, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                process_line(line, rules, allows, is_allow=True)
 
     return rules, allows
+
+
+def process_line(line, rules, allows, is_allow=False):
+    """处理单行规则"""
+    line = line.strip()
+
+    # 跳过空行和注释
+    if not line or EMPTY_LINE.match(line) or COMMENT.match(line):
+        return
+
+    # 跳过元素隐藏规则（AdGuard Home不支持）
+    if ELEMENT_HIDING.match(line) or ELEMENT_HIDING_EXCEPTION.match(line):
+        return
+
+    # 跳过AdGuard Home不支持的修饰符规则
+    if any(mod in line for mod in UNSUPPORTED_MODIFIERS):
+        return
+
+    # 处理白名单规则
+    if line.startswith('@@'):
+        # 简化白名单规则
+        simplified = simplify_rule(line[2:])  # 移除@@前缀
+        if simplified and is_valid_rule(simplified):
+            allows.add(simplified)
+        return
+
+    # 处理正则表达式规则（AdGuard Home 支持简单正则）
+    if REGEX_RULE.match(line):
+        # 只保留简单的正则表达式，避免性能问题
+        if is_simple_regex(line):
+            if is_allow:
+                allows.add(line)
+            else:
+                rules.add(line)
+        return
+
+    # 处理通配符规则
+    if WILDCARD_RULE.match(line):
+        # 转换为AdGuard Home兼容的通配符格式
+        converted = convert_wildcard_rule(line)
+        if converted and is_valid_rule(converted):
+            if is_allow:
+                allows.add(converted)
+            else:
+                rules.add(converted)
+        return
+
+    # 处理标准Adblock规则
+    if ADBLOCK_DOMAIN.match(line):
+        # 简化规则，移除AdGuard Home不需要的部分
+        simplified = simplify_rule(line)
+        if simplified and is_valid_rule(simplified):
+            if is_allow:
+                allows.add(simplified)
+            else:
+                rules.add(simplified)
+        return
+
+    # 处理Hosts规则
+    hosts_match = HOSTS_RULE.match(line)
+    if hosts_match:
+        domain = hosts_match.group(2)
+        if is_valid_domain(domain):
+            rule = f"||{domain}^"
+            if is_allow:
+                allows.add(rule)
+            else:
+                rules.add(rule)
+        return
+
+    # 处理纯域名
+    if DOMAIN_ONLY.match(line) and is_valid_domain(line):
+        rule = f"||{line}^"
+        if is_allow:
+            allows.add(rule)
+        else:
+            rules.add(rule)
+        return
+
+    # 处理其他规则（如果包含支持的修饰符）
+    if any(mod in line for mod in SUPPORTED_MODIFIERS):
+        simplified = simplify_rule(line)
+        if simplified and is_valid_rule(simplified):
+            if is_allow:
+                allows.add(simplified)
+            else:
+                rules.add(simplified)
+        return
 
 
 def simplify_rule(rule):
@@ -122,49 +174,49 @@ def simplify_rule(rule):
         parts = rule.split('$')
         base_rule = parts[0]
         modifiers = parts[1:]
-        
+
         # 过滤支持的修饰符
         supported_mods = []
         for mod in modifiers:
             mod_name = mod.split('=')[0] if '=' in mod else mod
             if mod_name in SUPPORTED_MODIFIERS:
                 supported_mods.append(mod)
-        
+
         # 重新构建规则
         if supported_mods:
             return base_rule + '$' + '$'.join(supported_mods)
         else:
             return base_rule + '^'  # 如果没有修饰符，添加默认的^
-    
+
     return rule
 
 
 def is_valid_domain(domain):
     """验证域名有效性"""
     # 基本验证
-    if not domain or len(domain) > 253:
+    if not domain or domain in DOMAIN_BLACKLIST or len(domain) > 253:
         return False
-    
+
     # 检查是否是IP地址
     if IP_ADDRESS.match(domain):
         return False
-    
+
     # 检查是否包含有效TLD
     parts = domain.split('.')
     if len(parts) < 2:
         return False
-    
+
     tld = parts[-1].lower()
     if tld not in COMMON_TLDS and len(tld) < 2:
         return False
-    
+
     # 检查每个部分
     for part in parts:
         if not part or len(part) > 63:
             return False
         if not re.match(r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?$', part, re.IGNORECASE):
             return False
-    
+
     return True
 
 
@@ -173,11 +225,11 @@ def is_valid_rule(rule):
     # 基本长度检查
     if not rule or len(rule) > 200:
         return False
-    
+
     # 检查是否包含无效字符
-    if re.search(r'[^\w\.\-\*\^\|\@\$\,\=\~]', rule):
+    if re.search(r'[^\w\.\-\*\^\|\@\$\,\=\~\/]', rule):
         return False
-    
+
     return True
 
 
@@ -185,15 +237,15 @@ def is_simple_regex(regex_rule):
     """检查是否是简单的正则表达式（避免性能问题）"""
     # 移除正则分隔符
     pattern = regex_rule[1:-1]
-    
+
     # 避免过于复杂的正则
     if len(pattern) > 50:
         return False
-    
+
     # 避免使用可能影响性能的正则特性
     if re.search(r'\(\?[^)]\)|\\[1-9]|\{[^}]+\}|\[\^[^\]]+\]', pattern):
         return False
-    
+
     return True
 
 
@@ -202,16 +254,16 @@ def convert_wildcard_rule(wildcard_rule):
     # 移除开头的*
     if wildcard_rule.startswith('*'):
         wildcard_rule = wildcard_rule[1:]
-    
+
     # 移除结尾的*
     if wildcard_rule.endswith('*'):
         wildcard_rule = wildcard_rule[:-1]
-    
+
     # 如果中间有*，转换为正则表达式
     if '*' in wildcard_rule:
         regex_pattern = wildcard_rule.replace('*', '.*')
         return f"/{regex_pattern}/"
-    
+
     # 否则转换为域名规则
     return f"||{wildcard_rule}^"
 
@@ -239,11 +291,8 @@ def github_actions_output():
 
 
 if __name__ == '__main__':
-    # 确保输入目录存在
-    INPUT_DIR.mkdir(parents=True, exist_ok=True)
-
     # 处理文件
-    rules, allows = process_file()
+    rules, allows = process_adguard_files()
 
     # 写入输出
     write_output(rules, allows)
