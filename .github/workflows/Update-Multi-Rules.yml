@@ -58,34 +58,6 @@ jobs:
           pip install --upgrade pip
           pip install requests aiodns pyyaml beautifulsoup4 pytz chardet aiohttp psutil tldextract maxminddb
 
-      # 6. 更新Mihomo
-      - name: Update Mihomo
-        id: mihomo
-        run: |
-          LATEST_VERSION=$(curl -sL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name' | sed 's/v//')
-          echo "Latest version: $LATEST_VERSION"
-          
-          if [ -f "${{ env.MIHOMO_BIN }}" ]; then
-            CURRENT_VERSION=$("${{ env.MIHOMO_BIN }}" -v 2>/dev/null | awk '{print $2}' | sed 's/v//' || echo "0.0.0")
-          else
-            CURRENT_VERSION="0.0.0"
-          fi
-          echo "Current version: $CURRENT_VERSION"
-          
-          if [ "$CURRENT_VERSION" != "$LATEST_VERSION" ]; then
-            echo "Updating Mihomo from v$CURRENT_VERSION to v$LATEST_VERSION"
-            mkdir -p $(dirname "${{ env.MIHOMO_BIN }}")
-            curl -sL "https://github.com/MetaCubeX/mihomo/releases/latest/download/mihomo-linux-amd64-v${LATEST_VERSION}.gz" | gzip -d > "${{ env.MIHOMO_BIN }}"
-            chmod +x "${{ env.MIHOMO_BIN }}"
-            echo "mihomo_updated=true" >> $GITHUB_OUTPUT
-            echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
-          else
-            echo "Mihomo is up-to-date (v$LATEST_VERSION)"
-            echo "mihomo_updated=false" >> $GITHUB_OUTPUT
-            echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
-          fi
-          echo "$LATEST_VERSION" > "${{ env.DATA_DIR }}/.mihomo_version"
-
       # 7. 处理基础规则和广告拦截规则清理（合并后的步骤）
       - name: Process base rules and clean adblock
         run: |
