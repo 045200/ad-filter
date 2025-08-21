@@ -55,7 +55,7 @@ ADBLOCK_URLS = [
         # Anti-AD通用规则（注释保留）
         #"https://anti-ad.net/easylist.txt",
         # Cats-Team广告规则（注释保留）
-        "https://raw.githubusercontent.com/Cats-Team/AdRules/main/adblock.txt",
+        #"https://raw.githubusercontent.com/Cats-Team/AdRules/main/adblock.txt",
         # 那个谁520广告hosts规则（注释保留）
         #"https://raw.githubusercontent.com/qq5460168/EasyAds/refs/heads/main/adblock.txt",
         # 10007自动规则（注释保留）
@@ -67,7 +67,7 @@ ADBLOCK_URLS = [
         # FCM hosts规则（官方CDN）
         "https://raw.githubusercontent.com/entr0pia/fcm-hosts/fcm/fcm-hosts",
         # 秋风广告规则（官方CDN）
-        "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt",
+        #"https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt",
         # SMAdHosts规则（注释保留）
         "https://raw.githubusercontent.com/2Gardon/SM-Ad-FuckU-hosts/master/SMAdHosts",
         # 茯苓拦截规则（官方CDN）
