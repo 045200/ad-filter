@@ -1,14 +1,16 @@
 # Title: AdGuard Home 拦截规则
 # Homepage: https://github.com/045200/ad-filter
 # Expires: 12 Hours
-# Version: 2025-08-21 20:14:22（北京时间）
+# Version: 2025-08-21 20:32:56（北京时间）
 # Description: 适用于 AdGuard Home 的广告拦截规则
-# Total count: 40558
+# Total count: 40631
+*^
 ,e8o,^
 -*-*-*-*.alpha^^
 -*-*-*-*.as^^
 -*-*-*-*.panda^^
 -public-api.hoyoverse.com/event/event_fe_info/^
+-spiky.clevertap-prod.com^~third-party
 .*gcdcjr000.fun/^
 .*ouvxli*.top/^
 .*roytj33.fun/^
@@ -87,6 +89,7 @@
 .fiverr.com/js_event_tracking/v1/track_email_open/^
 .getsendmail.com/p/^
 .gif|^
+.gif|~third-party,domain=91xx133.cc
 .gif~third-party,domain=zxc.dongludi.top|m.7ktw.com|922tp.com|cl.wpio.xyz|yasem5.com|1024pa.com|avbebe.com|cb.wpio.xyz
 .gruene.de/lists/ut.php^
 .hgo0*uyi.com/^
@@ -121,6 +124,7 @@
 .klclick1.com/^
 .lassuranceretraite.fr/mk/op/^
 .live/hm.js~third-party
+.live/o.js^
 .live/ty/*-*-*~third-party
 .mail.odysee.com/o/^
 .mailgun.patreon.com/o/^
@@ -194,6 +198,7 @@
 .xyz//qby_*.js~third-party
 .xyz/^
 .xyz/gif~third-party
+.xyz/o.js^
 .xyz/ty/*-*-*~third-party
 .xyz/vh1/^
 .xyz/xefeliffng_~third-party
@@ -211,7 +216,10 @@
 /99vjj/*~third-party
 /AdblockDetector.js^
 /AdblockDetector/handler.min.js^
+/AppMeasurement.js^
+/AppMeasurement.min.js^
 /AppMeasurement_Module_ActivityMap.js^
+/AppMeasurement_Module_ActivityMap.min.js^
 /Avada-Child-Theme/js/GA.*js^
 /CI0/0^
 /EZ-YAHOO/*^
@@ -223,6 +231,7 @@
 /T/OFC4/*^
 /TrackView/*^
 /WebAnalytics.^
+/__utm.gif^
 /_events/api/setEvent^
 /aSer_^
 /aadb/script.js|^
@@ -250,7 +259,9 @@
 /api/events|^
 /api/increment-pv^
 /api/livechat/prompt/browse/event|^
+/api/rest/analytics/page/rendered^
 /api/statsd|^
+/api/v1/EndpointTracker^
 /api/v1/activity|^
 /api/video/stats/*^
 /app/Eclog/js/cid.generate.js^
@@ -277,6 +288,7 @@
 /attachments/ad/*^
 /baha/*^
 /baichuan/*^
+/banalytics.js^
 /banner.js^
 /banner/*^
 /barbar7.*.js^^
@@ -337,6 +349,7 @@
 /event-tracking/*^
 /exads-adblock-^
 /exp-metrika.js^
+/facebook_fbevents.js^
 /facebook_sdk_^
 /fake_app.mp4^
 /fal854heat^^
@@ -344,6 +357,7 @@
 /fbox/fb.js^
 /fbox/fblaunch.js^
 /feature/metrics^
+/fingerprint.js^
 /firebase-analytics.js^
 /floatad.^
 /floatingcontent/*~third-party
@@ -355,14 +369,17 @@
 /geo-location/info|^
 /getads.js^
 /getfuolist|^
+/gmu-download.oss-^
 /go.news.fly.io/e/o/*^
 /gogl_detector^
 /google-analyticator/*^
 /google_analytics_gtag.js^
+/google_tag/*^
 /gp/video/acquisition/utilities/monitoring|^
 /graphql/track-pageview^
 /gtm-*.js^
 /gtm-data-layer-^
+/hermes-service/*^
 /hitcount.js^
 /hndxweb/push^
 /home-insight/ad_placements^
@@ -413,6 +430,7 @@
 /kill-adblock//js/function.js^
 /kill-adblock/js/function.js^
 /klicks.nebenan.de/q/*^
+/kukulufinger2.js^
 /lcslog*.js^
 /ledo2vnyce=^
 /libraries/analytics/*.js^
@@ -458,6 +476,7 @@
 /npm/sks@0.*/lazyload.js^
 /o.js^
 /oo/*/l.js|^
+/oo/*/lsync.js^
 /oo/cl.js|^
 /open.aspx^
 /opens.jscrambler.com/*^
@@ -475,6 +494,7 @@
 /pixel/email/*^
 /pixelcounter.^
 /pjk/mdk/*^
+/plausible.js^
 /plausible.outbound-links.js^
 /plugins/aurora-heatmap^
 /plugins/ibd-block-adblocker/*^
@@ -482,6 +502,7 @@
 /plugins/nimiq/*^
 /plugins/social-traffic-pop/stp.js^
 /poho0ze5nci=^
+/poptest.js|^
 /popu.js^
 /portalwlanad/pages/*^
 /post.pinterest.com/q/*^
@@ -500,10 +521,12 @@
 /r/video/*^
 /rass7.*.js^^
 /redir.inxmail-commerce.com/r/*^
+/resources/video/players/prod/dist/*/analytics.js^
 /s/eo/*^
 /s/js/fshow.js~third-party
 /sLT_bEhAvIoR_aNaLySiS/*^
 /sayac|^
+/script.js|^
 /scripts/data-unlocker.js^
 /scripts/dataunlocker.js^
 /scripts^^
@@ -522,6 +545,8 @@
 /skin/middle.^
 /skin/tb12/*^
 /skin/view/ft^
+/smartpixel.^
+/smarttag.js^
 /snowplow.*.js^
 /snowplow/*^
 /snowplow_^
@@ -534,6 +559,7 @@
 /stats/c/*^
 /stats/events^
 /sungg/*^
+/swell-ct-ad-data^
 /swell-ct-pv^
 /sxp/i/*^
 /t.ifly.southwest.com/*^
@@ -549,10 +575,12 @@
 /tp.mkt.vorwerk.com/r/*^
 /trace/link/*^
 /trace/mail/*^
+/track-internal-links.js^
 /track.email.^
 /track.octanemail.in/sapi/*^
 /track/open/*^
 /trackad.~third-party
+/tracker-api/*^
 /tracking-pixel^
 /tracking.js^
 /tracking.srv2.de/op/*^
@@ -579,10 +607,13 @@
 /w_js.php|^
 /watchdog/hits/collect^
 /web/ad/*^
+/webAnalytics/*^
 /webcam.mp4^
 /webcam600.mp4^
 /wp-content/plugins/*/adblock-detector.min.js^
+/wp-content/plugins/ad-block-defender/*^
 /wp-content/plugins/ad-blocking-advisor/*^
+/wp-content/plugins/deadblocker/*^
 /wp-content/plugins/google-analytics-dashboard-for-wp/*^
 /wp-content/plugins/pb-ga-google-analytics/*^
 /wp-content/plugins/pmc-plugins/pmc-social-share-bar/build/tracking.js^
@@ -590,9 +621,12 @@
 /wp-content/themes/rehub/js/adblock_notify.js^
 /wp-content/uploads/an-temp/*^
 /wp-includes/css/admin-bar.min.css^^
+/wpsite-background-takeover*/js/wpsite_clickable.js^
 /wscdn/*^
 /xtub_*_rony.js~third-party
+/yandex-metrika.js^
 /ylnew/*.js^
+/yozons-lib/*^
 /znsrc.com/c/*^
 /~/tr/*^
 0jy51rvwaei8qy69.cloud.s11.sfmc-osl.com^
@@ -2324,6 +2358,7 @@ a2email.yourknifeguyrobert.com^
 a51lixg3ujtwar7v.johnnymurray.com^
 aa.agkn.com^
 aaa.avadacom.com^
+abema.tv^
 abilbao.mg.abilbao.cl^
 abilene.townsquaremedia.info^
 ablink.hi.channel4.com^
@@ -5737,6 +5772,7 @@ cloud.yesnetwork-info.com^
 cloud.ymcacf-email.org^
 cloud.zen-place.jp^
 cloudbyoc.testqa.02012024-test1.sfmc-tlsprovisioningqa.com^
+cloudflareinsights.com~third-party
 cloudpg.email.vimeo.com^
 clubmaster-crypto.com^
 cmail.bitcasino.io^
@@ -26114,6 +26150,7 @@ go.politicoemail.com^
 go.rjmetrics.com^
 go.smartinsights.com*gif^
 go.toutapp.com^
+goodav17.com^
 goto.v-play.net^
 gourmettraveller.e.aremedia.com.au^
 grandjunction.townsquaremedia.info^
@@ -26133,6 +26170,7 @@ hello.mail.openagent.com.au^
 help.quantumtemple.io^
 help.riversol.com^
 helplink.mapquest.com^
+hentaicomic.*,wnacg1.cc,wnacg.*^
 hey.sent-with-sendvio.com^
 hgtvemail.mg.hotgo.tv^
 hlouhopAes=no5^
@@ -28680,6 +28718,7 @@ mobi*.*.cam/*_~third-party
 mobi*.*.cyou/*_~third-party
 mobi*.*.top/*_~third-party
 mobi*.*.xyz/*_~third-party
+mobile01.com^
 model1.hedgeye.com^
 model2.hedgeye.com^
 moskit-tracking.certifikedu.com^
@@ -28706,6 +28745,7 @@ mx1.townsquaremedia.info^
 mx11.tildacdn.com^*img/pixel/^
 mxa.nuvebs.com^
 mxb.mailedu.org^
+mxdm.xyz^
 my.mail.mailgun.com^
 n.sinaimg.cn/finance/blackcat/pc/blink.gif^
 n.sinaimg.cn/tech/zcapp2018/zc_new1x.png^
@@ -31428,6 +31468,7 @@ tyler.townsquaremedia.info^
 u.pcloud.com*trackmail^
 uniquecars.e.tradeuniquecars.com.au^
 unisender.solar-staff.com/*/go1_read_tracker/^
+unito.life^
 updates.takeaway.com^
 upflow-email.ar.carta.com^
 upflow-email.ar.pagerduty.com^
@@ -34195,6 +34236,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||adkrazy.com^^
 ||admaimai.com^
 ||admin5.com^
+||adobedtm.com^*/satelliteLib-^
 ||ads-api.twitter.com^^
 ||ads-marketing-vivofs.vivo.com.cn
 ||ads.nextdoor.com/public/pixel/ndp.js^
@@ -34563,6 +34605,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||auth.be.sec.miui.com^
 ||auto-online.com.tw^
 ||auto.163.com^
+||auto.cz^
 ||auto.ifeng.com^
 ||auto.qq.com^
 ||auto.ru^
@@ -34625,6 +34668,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||baidu.com/ecom^
 ||baidu.com/tb/zt/^
 ||baidu.com^
+||baidu.com^^
 ||baidu.dj^
 ||baiduyun.wiki^
 ||baifumeiba.com^
@@ -35010,6 +35054,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||cdnjs.cloudflare.com/ajax/libs/fingerprintjs2/2.1.0/fingerprint2.js^
 ||ceiea.com^
 ||cekresi.com^
+||celleheute.de^
 ||cenapaliw.pl^
 ||centoschina.cn^
 ||centrum.cz^
@@ -35916,6 +35961,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||facebook.com/v2.6/plugins/video.^
 ||facebook.com^
 ||facebookproxy.info^
+||facebookwkhpilnemxj7asaniu7vnjjbiltxjqhye3mhbshg7kx5tfyd.onion^
 ||factorio.su^
 ||fairytailmx.com^
 ||familydoctor.com.cn^
@@ -35978,6 +36024,8 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||filmaker.cn^
 ||filmehd.to^
 ||filmesonlinegratis.com^
+||filmibeat.com^
+||filmoviplex.com^
 ||filmxy.one^
 ||filmy69.pl^
 ||filterbypass.me^
@@ -36011,6 +36059,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||firstrowfr.eu^
 ||fishpi.cn^
 ||fitacg.com^
+||fiverr.com^
 ||fixolas.net^
 ||fjuga.top
 ||flash.cn/success/^
@@ -36019,6 +36068,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||flight.qunar.com^
 ||flightradar24.com^
 ||flighty.cn^
+||flipkart.com^
 ||floozycity.com/ad/^
 ||flowus.cn^
 ||flyblog.cc^
@@ -36060,6 +36110,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||forum.vip-cxema.org^
 ||forum.virtualdjing.com^
 ||forumdz.com^
+||forums.openpli.org^
 ||forums.rusmedserv.com^
 ||forusex.com^
 ||fossbytes.com^
@@ -36281,6 +36332,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||global-geo-afdthirdparty-unicast.trafficmanager.net^
 ||global.asimov.events.data.trafficmanager.net^
 ||global.canon/00cmn/js/*/analytics-^
+||global.ssl.fastly.net^^
 ||globes.co.il^
 ||globo.com^
 ||gm.mmstat.com^
@@ -36310,6 +36362,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||goodav17.com^
 ||goodcast.co.uk^
 ||goodcome.com.tw^
+||goodreturns.in^
 ||goodwillfinds.com^
 ||google-analytics.com/analytics.js^
 ||google-analytics.com/ga.js^
@@ -36317,6 +36370,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||google.com/log^^
 ||googleads.g.doubleclick.net/pagead/ads^
 ||googleads.g.doubleclick.net^
+||googleadservices.com/pagead/conversion_async.js^
 ||googleoptimize.com/optimize.js^
 ||googlesyndication.com/safeframe^^
 ||googletagmanager.com/gtag/js^
@@ -36348,6 +36402,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||greenxiazai.com^
 ||grifthost.com^
 ||grlnpmbc.goar.justjared.com^^
+||groceries.morrisons.com^
 ||grpc.biliapi.net^
 ||gry.pl^
 ||gs.chinanews.com.cn^
@@ -36575,6 +36630,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||house365.com^
 ||howbuy.com^
 ||howtoremoveadblock.com/js/adblock-detector.js^
+||hoy.tv^
 ||hp.sched.legohp-dk.tdnsstic1.cn.cjt.jsq.ho-wan.cn^
 ||hpjav.tv^
 ||hpplus.jp^
@@ -36585,6 +36641,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||hsex.men^
 ||html-js.com^
 ||html-load.com^
+||html-load.com^^
 ||htmleaf.com^
 ||htms.heytapmobi.com^
 ||htrace.wetvinfo.com^
@@ -37100,6 +37157,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||juejin.im^
 ||juksy.com^
 ||jumi.tv^
+||junksport.com^
 ||jupako.uk^
 ||juqingba.cn^
 ||jurong.cn^
@@ -37191,6 +37249,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||komachi.yomiuri.co.jp^
 ||komentare.sme.sk^
 ||komikcast.me^
+||komikdewasa.me^
 ||kongzhong.com^
 ||kontrolnaya-rabota.ru^*/fuckadblock.^
 ||kontrolnaya-rabota.ru^*/toastr.^
@@ -37291,6 +37350,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||leo.org^
 ||lepoint.fr/img-l/^
 ||lequipe.fr/v6/js/popinVideo.js^
+||lesbian8.com^
 ||letsjerk.tv^
 ||letsplay.tw^
 ||letv.com^
@@ -37908,6 +37968,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||myhack58.com^*0^
 ||myip.ipip.net^
 ||myk3.com^
+||mykhel.com^
 ||mylivesocial.com^
 ||mypianku.net^
 ||myqcloud.com^
@@ -38281,6 +38342,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||p9.ecombdimg.com^
 ||pabopa.com^
 ||page.amap.com^
+||pagead2.googlesyndication.com/pagead/js/adsbygoogle.js^
 ||pagead2.googlesyndication.com/pagead/js/google_top_exp.js^
 ||pagead2.googlesyndication.com^^
 ||pages.tmall.com.danuoyi.alicdn.com^
@@ -38425,6 +38487,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||play.tv3.lt/static/scripts/trackdb/events.gif^
 ||play4.cp21.ott.cibntv.net^
 ||playav.cc^
+||player.fm^
 ||player.hboav.com^
 ||player.starlight.digital^
 ||playerapp1.pw^
@@ -39011,6 +39074,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||silver.org.cn^
 ||sim.xiangyanglao.cn^
 ||similarweb.com^
+||simply-hentai.com^
 ||sina.cn^
 ||sina.com.cn^
 ||sina.com.tw^
@@ -39152,6 +39216,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||sport.cz^
 ||sport.ua/pixel/^
 ||sportingbet-affiliate.host.bannerflow.com/core_bannerviewer.swf^
+||sportowefakty.wp.pl^
 ||sports.goo.ne.jp^
 ||sports.qq.com^
 ||sports.ru^
@@ -39381,6 +39446,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||tag.aticdn.net/*/at.js^
 ||tag.aticdn.net/*/smarttag.js^
 ||tags.news.com.au^^
+||tags.tiqcdn.com/utag/*/prod/utag.js^
 ||tags.tiqcdn.com/utag/*/utag.sync.js^
 ||tags.tiqcdn.com^^
 ||tahua.net^
@@ -39532,6 +39598,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||time.windows.com^
 ||timedg.com^
 ||timesnownews.com^
+||timesofindia.indiatimes.com^
 ||ting89.com^
 ||tingfm.com^
 ||tingroom.com^
@@ -40165,6 +40232,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||www.asus.com^
 ||www.baidu.com^
 ||www.blesk.cz^
+||www.booking.com^
 ||www.china.com.cn/node_^
 ||www.csdn.net^
 ||www.dbbqb.com^
@@ -40194,6 +40262,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||www.ksksy.com^
 ||www.laomaotao.net^
 ||www.lezhutv.com^
+||www.linkedin.com^
 ||www.maimemo.com^
 ||www.meijuii.cc^
 ||www.mosoteach.cn^
@@ -40364,6 +40433,7 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||yantuchina.com^
 ||yaociyuan.bid^
 ||yaofangwang.com^
+||yappli.plus^
 ||yarik-sat.com^
 ||yasem5.com^
 ||yastatic.net^
@@ -40562,3 +40632,6 @@ zjjz6lpv44aguszo.cloud.s11.sfmc-osl.com^
 ||zzkdhb.com^
 ||zznews.cn^
 ||zzzyk.com^
+~third-party,websocket,xmlhttprequest,domain=qiyoudy2.com|qiyoudy4.com
+~third-party,xmlhttprequest,domain=opensubtitles.org
+~third-party,xmlhttprequest,domain=subhd.tv|subhdtw.com|xyg688.com|xyg688.xyz|zzzzz688.com
