@@ -31,8 +31,8 @@ jobs:
           fetch-depth: 0
           ref: ${{ env.MAIN_BRANCH }}
 
-      # 2. 清理工作区临时文件（提前执行）
-      - name: Cleanup temporary folders (Pre-build)
+      # 2. 清理工作区临时文件
+      - name: Cleanup temporary folders
         run: |
           find "${{ github.workspace }}" -maxdepth 1 \( -name "tmp*" -o -name "temp*" -o -name ".tmp*" -o -name ".temp*" \) -exec rm -rf {} + 2>/dev/null || true
           find "${{ github.workspace }}" -maxdepth 1 \( -name "*.txt" -o -name "*.mrs" -o -name "*.conf" -o -name "*.yaml" \) -exec rm -f {} + 2>/dev/null || true
@@ -46,26 +46,23 @@ jobs:
             data/python/**
             data/mod/**
 
-      # 4. 设置Python环境（仅在需要时执行）
+      # 4. 设置Python环境
       - name: Set up Python
-        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      # 5. 安装依赖（仅手动/定时执行时运行）
+      # 5. 安装依赖
       - name: Install dependencies
-        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
           sudo apt-get update
           sudo apt-get install -y jq moreutils
           pip install --upgrade pip
           pip install requests aiodns pyyaml beautifulsoup4 pytz chardet aiohttp psutil tldextract
 
-      # 6. 更新Mihomo（仅手动/定时执行时运行）
+      # 6. 更新Mihomo
       - name: Update Mihomo
         id: mihomo
-        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
           LATEST_VERSION=$(curl -sL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name' | sed 's/v//')
           echo "Latest version: $LATEST_VERSION"
@@ -91,26 +88,16 @@ jobs:
           fi
           echo "$LATEST_VERSION" > "${{ env.DATA_DIR }}/.mihomo_version"
 
-      # 7. 处理基础规则（仅手动/定时执行时运行）
-      - name: Process base rules
-        id: process_base_rules
-        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+      # 7. 处理基础规则和广告拦截规则清理（合并后的步骤）
+      - name: Process base rules and clean adblock
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/dl.py
           python ${{ env.PYTHON_SCRIPTS }}/merge.py
-
-      # 8. 运行广告拦截规则清理（仅手动/定时执行时运行）
-      - name: Run adblock cleaner
-        id: adblock_cleaner
-        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
-        run: |
-          cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py
 
-      # 9. 生成多格式规则（仅手动/定时执行且广告拦截规则清理完成后运行）
+      # 8. 生成多格式规则（原来的第九步）
       - name: Generate multi-format rules
-        if: steps.adblock_cleaner.success() && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/filter_adp.py
@@ -122,17 +109,15 @@ jobs:
           python ${{ env.PYTHON_SCRIPTS }}/filter_clash.py
           python ${{ env.PYTHON_SCRIPTS }}/filter_mihomo.py
 
-      # 10. 更新文档（仅手动/定时执行且多格式规则生成完成后运行）
+      # 9. 更新文档
       - name: Update documentation
-        if: steps.generate_multi_format.success() && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/title.py
 
-      # 11. 提交变更（仅在检测到变更时运行）
+      # 10. 提交变更
       - name: Commit changes
         id: commit
-        if: steps.changes.outputs.any_changed == 'true'
         run: |
           cd ${{ github.workspace }}
           git config --local user.email "action@github.com"
@@ -151,9 +136,8 @@ jobs:
             fi
           fi
 
-      # 12. 推送变更（仅在检测到变更且提交成功时运行）
+      # 11. 推送变更
       - name: Push changes
-        if: steps.commit.outputs.has_changes == 'true'
         run: |
           cd ${{ github.workspace }}
           for i in 1 2 3; do
@@ -161,9 +145,8 @@ jobs:
             git push origin ${{ env.MAIN_BRANCH }} && break || sleep 5
           done
 
-      # 13. 清理旧工作流（始终运行）
+      # 12. 清理旧工作流
       - name: Cleanup old workflows
-        if: always()
         uses: Mattraks/delete-workflow-runs@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -171,15 +154,13 @@ jobs:
           retain_days: 0
           keep_minimum_runs: 5
 
-      # 14. 清理构建过程中产生的临时文件（始终运行）
-      - name: Cleanup temporary folders (Post-build)
-        if: always()
+      # 13. 清理临时文件
+      - name: Cleanup temporary folders
         run: |
           rm -rf "${{ github.workspace }}/tmp*" "${{ github.workspace }}/temp*" "${{ github.workspace }}/.tmp*" "${{ github.workspace }}/.temp*" 2>/dev/null || true
 
-      # 15. 清理旧工件（始终运行）
+      # 14. 清理旧工件
       - name: Cleanup old artifacts
-        if: always()
         uses: c-hive/gha-remove-artifacts@v1.4.0
         with:
           age: '7 days'
