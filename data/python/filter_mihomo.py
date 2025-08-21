@@ -250,7 +250,7 @@ class AdblockConverter:
                     str(self.config.compiler_abs_path),
                     "convert-ruleset",
                     "domain",
-                    "mrs",
+                    "yaml",
                     temp_file,
                     str(self.config.output_path)
                 ],
