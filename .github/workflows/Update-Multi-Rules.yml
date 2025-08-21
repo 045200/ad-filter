@@ -92,7 +92,6 @@ jobs:
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/dl.py
           python ${{ env.PYTHON_SCRIPTS }}/merge.py
-          python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py
 
       # 8. 生成多格式规则（原来的第九步）
       - name: Generate multi-format rules
@@ -105,13 +104,14 @@ jobs:
           python ${{ env.PYTHON_SCRIPTS }}/filter_adg.py
           python ${{ env.PYTHON_SCRIPTS }}/filter_adh.py
           python ${{ env.PYTHON_SCRIPTS }}/filter_clash.py
+          python ${{ env.PYTHON_SCRIPTS }}/filter_mihomo.py
 
       # 9. 更新文档
       - name: Update documentation
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/title.py
-
+          python ${{ env.PYTHON_SCRIPTS }}/readme.py
       # 10. 提交变更
       - name: Commit changes
         id: commit
