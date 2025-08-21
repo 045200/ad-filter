@@ -5,10 +5,10 @@ import os
 import sys
 import re
 import time
-import hashlib
+import xxhash
 import chardet
-import fnmatch
 import logging
+import fnmatch
 from pathlib import Path
 from collections import defaultdict, OrderedDict
 from typing import List, Generator, Set, Tuple, Dict, Optional
@@ -36,7 +36,7 @@ OUTPUT_FILE = TEMP_DIR / "adblock_merged.txt"
 CACHE_DIR = TEMP_DIR / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
 
-MAX_WORKERS = 4
+MAX_WORKERS = int(os.getenv('MAX_WORKERS', 4))
 CHUNK_SIZE = 10000
 RULE_LEN_RANGE = (4, 253)
 INPUT_PATTERNS = ["adblock*.txt", "allow*.txt", "hosts*", "adg*.txt", "adh*.txt", "filter*.txt"]
@@ -62,8 +62,8 @@ class RuleType(Enum):
     MODIFIER_RULE = auto()
     NETWORK_RULE = auto()
     COSMETIC_RULE = auto()
-    EXCEPTION_RULE = auto()  # 新增：例外规则
-    DNS_REWRITE_RULE = auto()  # 新增：DNS重写规则
+    EXCEPTION_RULE = auto()
+    DNS_REWRITE_RULE = auto()
     UNKNOWN = auto()
 
 # 规则数据类
@@ -74,9 +74,9 @@ class RuleInfo:
     rule_type: RuleType
     domain: str = ""
     options: Dict[str, str] = None
-    priority: int = 0  # 优先级，用于排序
+    priority: int = 0
 
-# 预编译正则表达式
+# 预编译正则表达式 - 优化性能
 COMMENT = re.compile(r'^[!#]')
 EMPTY_LINE = re.compile(r'^\s*$')
 IP_ADDRESS = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
@@ -207,6 +207,9 @@ class AdblockMerger:
         # 使用OrderedDict保持插入顺序，同时快速查找
         self.unique_rules = OrderedDict()
         
+        # 布隆过滤器 (使用xxhash模拟)
+        self.bloom_filter = set()  # 简化实现，实际应使用pybloom-live
+        
         # 规则统计
         self.stats = defaultdict(int)
         self.rule_types = {
@@ -264,7 +267,8 @@ class AdblockMerger:
     def _calculate_file_hash(self, file_path: Path) -> str:
         """计算文件哈希值"""
         try:
-            hasher = hashlib.md5()
+            # 使用xxhash提高性能
+            hasher = xxhash.xxh64()
             with open(file_path, 'rb') as f:
                 hasher.update(f.read(1024))
                 hasher.update(str(file_path.stat().st_size).encode())
@@ -296,16 +300,17 @@ class AdblockMerger:
         rules = []
         
         for chunk in file_chunk_reader(file_path):
-            for line in chunk:
-                if not line or EMPTY_LINE.match(line) or COMMENT.match(line):
-                    continue
-
-                if not (self.len_min <= len(line) <= self.len_max):
-                    continue
-
-                rule_info = self._parse_line(line)
-                if rule_info:
-                    rules.append(rule_info)
+            # 并行处理块中的每一行
+            with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                future_to_line = {executor.submit(self._parse_line, line): line for line in chunk}
+                
+                for future in as_completed(future_to_line):
+                    try:
+                        rule_info = future.result()
+                        if rule_info:
+                            rules.append(rule_info)
+                    except Exception as e:
+                        logger.error(f"解析行时出错: {e}")
                     
         return rules
 
@@ -628,74 +633,28 @@ class AdblockMerger:
         """添加规则到唯一集合"""
         rule_hash = self._calculate_rule_hash(rule_info)
         
-        if rule_hash not in self.unique_rules:
-            self.unique_rules[rule_hash] = rule_info
-            # 更新统计
-            rule_type_name = self.rule_types[rule_info.rule_type].replace(' ', '_').lower()
-            self.stats[rule_type_name] += 1
-        else:
-            # 检查是否需要替换（优先级更高的规则）
-            existing_rule = self.unique_rules[rule_hash]
-            if rule_info.priority < existing_rule.priority:
-                self.unique_rules[rule_hash] = rule_info
-                logger.debug(f"替换规则: {existing_rule.normalized} -> {rule_info.normalized}")
-            self.stats['duplicates_removed'] += 1
+        # 使用布隆过滤器预检查
+        if rule_hash in self.bloom_filter:
+            # 可能重复，需要精确检查
+            if rule_hash in self.unique_rules:
+                self.stats['duplicates_removed'] += 1
+                return
+        
+        # 添加到布隆过滤器和唯一规则集
+        self.bloom_filter.add(rule_hash)
+        self.unique_rules[rule_hash] = rule_info
+        
+        # 更新统计
+        rule_type_name = self.rule_types[rule_info.rule_type].replace(' ', '_').lower()
+        self.stats[rule_type_name] += 1
 
-    def _calculate_rule_hash(self, rule_info: RuleInfo) -> str:
-        """计算规则哈希"""
-        # 对不同类型规则使用不同的哈希策略
-        if rule_info.rule_type == RuleType.IP_RULE:
-            return self._hash_ip_rule(rule_info.normalized)
-        elif rule_info.rule_type == RuleType.OPTION_RULE:
-            return self._hash_option_rule(rule_info.normalized)
-        elif rule_info.rule_type in [RuleType.SCRIPT_RULE, RuleType.CSS_RULE, RuleType.COSMETIC_RULE, RuleType.DNS_REWRITE_RULE]:
-            # 脚本、CSS和DNS重写规则：使用原始内容哈希
-            return hashlib.md5((rule_info.normalized + HASH_SALT).encode('utf-8')).hexdigest()
-        else:
-            # 其他规则：使用标准化后的域名哈希
-            domain_part = rule_info.normalized.split('$')[0] if '$' in rule_info.normalized else rule_info.normalized
-            return hashlib.md5((domain_part + HASH_SALT).encode('utf-8')).hexdigest()
-
-    def _hash_ip_rule(self, rule: str) -> str:
-        """生成IP规则的哈希"""
-        try:
-            if rule.startswith('IP-CIDR'):
-                parts = rule.split(':', 1)
-                ip_type = 'IP-CIDR'
-                rest = parts[1]
-            else:  # IP-CIDR6
-                parts = rule.split(':', 1)
-                ip_type = 'IP-CIDR6'
-                rest = parts[1]
-            
-            ip_range, action = rest.split(',', 1)
-            ip_range = ip_range.strip()
-            action = action.strip().upper()
-            
-            # 标准化动作
-            action = OPTION_EQUIVALENTS.get(action.lower(), action).upper()
-            
-            normalized_rule = f"{ip_type}:{ip_range},{action}"
-            return hashlib.md5((normalized_rule + HASH_SALT).encode('utf-8')).hexdigest()
-        except Exception:
-            # 如果解析失败，使用原始规则
-            return hashlib.md5((rule + HASH_SALT).encode('utf-8')).hexdigest()
-
-    def _hash_option_rule(self, rule: str) -> str:
-        """生成含选项规则的哈希"""
-        try:
-            domain_part, opt_part = rule.split('$', 1)
-            normalized_domain = self._normalize_domain_part(domain_part)
-            
-            # 标准化选项
-            opts = [opt.strip() for opt in opt_part.split(',')]
-            normalized_opts = self._normalize_options(opts)
-            
-            normalized_rule = f"{normalized_domain}${','.join(normalized_opts)}"
-            return hashlib.md5((normalized_rule + HASH_SALT).encode('utf-8')).hexdigest()
-        except Exception:
-            # 如果解析失败，使用原始规则
-            return hashlib.md5((rule + HASH_SALT).encode('utf-8')).hexdigest()
+    def _calculate_rule_hash(self, rule_info: RuleInfo) -> int:
+        """计算规则哈希（使用xxhash提高性能）"""
+        # 使用xxhash代替标准哈希库
+        h = xxhash.xxh64()
+        h.update(rule_info.normalized.encode('utf-8'))
+        h.update(HASH_SALT.encode('utf-8'))
+        return h.intdigest()
 
     def _write_output(self):
         """写入输出文件（分类排序）"""
@@ -727,13 +686,20 @@ class AdblockMerger:
 
 if __name__ == '__main__':
     try:
-        # 确保chardet可用
+        # 确保必要的库可用
         try:
             import chardet
         except ImportError:
             import subprocess
             subprocess.check_call([sys.executable, "-m", "pip", "install", "chardet"])
             import chardet
+            
+        try:
+            import xxhash
+        except ImportError:
+            import subprocess
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "xxhash"])
+            import xxhash
 
         merger = AdblockMerger()
         merger.run()
