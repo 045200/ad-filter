@@ -2,25 +2,22 @@
 # -*- coding: utf-8 -*-
 
 """
-AdBlock 规则转换器（增强版，含白名单过滤）
-输入: 包含拦截规则和白名单规则的 adblock_clash.yaml（位于仓库根目录）
-输出: 经过白名单过滤的 adb.mrs（位于仓库根目录）
-适配GitHub Actions环境，支持规则过滤与错误处理
+AdBlock 规则转换器（直接引用版）
+输入: 原始 adblock_clash.yaml（位于仓库根目录）
+输出: 直接转换的 adb.mrs（位于仓库根目录）
+不进行规则过滤和验证，直接传递原始规则
 """
 
 import os
 import sys
-import ipaddress
 import tempfile
 import subprocess
-import idna
 import yaml
 import logging
-import re
 import hashlib
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Set, Tuple
+from typing import List, Dict, Tuple
 
 
 class Config:
@@ -31,9 +28,6 @@ class Config:
     # 输出文件（位于仓库根目录）
     OUTPUT_FILE = os.getenv("ADBLOCK_OUTPUT", "adb.mrs")
     COMPILER_PATH = os.getenv("COMPILER_PATH", "./data/mihomo-tool")
-    MAX_DOMAIN_LENGTH = 253  # RFC 1035 限制
-    MAX_LABEL_LENGTH = 63    # RFC 1035 限制
-    SUPPORTED_TYPES = {'DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'IP-CIDR'}  # 支持的规则类型
 
     def __init__(self):
         self._validate_compiler()
@@ -67,37 +61,9 @@ class Config:
         return Path(self.GITHUB_WORKSPACE) / self.COMPILER_PATH if not os.path.isabs(self.COMPILER_PATH) else Path(self.COMPILER_PATH)
 
 
-class DNSValidator:
-    """DNS格式验证工具"""
-    @staticmethod
-    def is_valid_domain(domain: str) -> bool:
-        domain = domain.strip().lower()
-        if not domain or len(domain) > Config.MAX_DOMAIN_LENGTH:
-            return False
-        # 排除IP地址
-        try:
-            ipaddress.ip_address(domain)
-            return False
-        except ValueError:
-            pass
-        # 标签格式校验
-        labels = domain.split('.')
-        if len(labels) < 2:
-            return False
-        for label in labels:
-            if not label or len(label) > Config.MAX_LABEL_LENGTH or label.startswith('-') or label.endswith('-'):
-                return False
-        # IDNA编码验证（支持国际化域名）
-        try:
-            idna.encode(domain)
-            return True
-        except idna.IDNAError:
-            return False
-
-
 def setup_logger():
     """配置GitHub风格日志"""
-    logger = logging.getLogger("AdblockConverterWithWhitelist")
+    logger = logging.getLogger("AdblockConverterDirect")
     logger.setLevel(logging.INFO)
 
     class GitHubFormatter(logging.Formatter):
@@ -121,31 +87,26 @@ logger = setup_logger()
 
 
 class AdblockConverter:
-    """规则转换器（含白名单过滤逻辑）"""
+    """规则转换器（直接传递原始规则）"""
     def __init__(self, config: Config):
         self.config = config
         self.stats = {
-            'total_block': 0,    # 拦截规则总数
-            'valid_block': 0,    # 有效拦截规则数
-            'whitelist_count': 0,  # 白名单域名数量
-            'filtered_count': 0,   # 被白名单过滤的规则数
-            'mrs_sha256': ''      # MRS文件的SHA256校验和
+            'total_rules': 0,    # 总规则数
+            'mrs_sha256': ''     # MRS文件的SHA256校验和
         }
-        self.whitelist_domains: Set[str] = set()  # 白名单域名集合
 
     def parse_rule_string(self, rule_str: str) -> Tuple[str, str]:
         """解析规则字符串，返回(类型, 值)"""
-        # 处理字符串格式的规则，如 'DOMAIN-SUFFIX,example.com'
         if ',' in rule_str:
             parts = rule_str.split(',', 1)
             rule_type = parts[0].strip().upper()
             value = parts[1].strip()
             return rule_type, value
-        return "", ""
+        return "", rule_str  # 保留无法解析的原始字符串
 
     def parse_input(self) -> List[Dict[str, str]]:
-        """解析输入文件，提取拦截规则和白名单规则"""
-        logger.info(f"解析输入文件: {self.config.input_path}")
+        """直接读取原始规则，不做过滤和验证"""
+        logger.info(f"读取原始输入文件: {self.config.input_path}")
         try:
             with self.config.input_path.open('r', encoding='utf-8') as f:
                 data = yaml.safe_load(f)
@@ -154,139 +115,38 @@ class AdblockConverter:
                 logger.error("输入文件缺少'payload'节点")
                 return []
 
-            valid_rules: List[Dict[str, str]] = []
-            seen = set()  # 去重标记
-
+            rules: List[Dict[str, str]] = []
             for rule in data['payload']:
-                self.stats['total_block'] += 1
+                self.stats['total_rules'] += 1
                 
-                rule_type = ""
-                value = ""
-                
-                # 处理不同类型的规则格式
                 if isinstance(rule, dict):
-                    # 字典格式的规则: {'type': 'DOMAIN-SUFFIX', 'value': 'example.com'}
+                    # 保留原始字典格式规则
                     rule_type = rule.get('type', '').upper()
-                    value = rule.get('value', '').strip().lower()
+                    value = rule.get('value', '').strip()
+                    rules.append({'type': rule_type, 'value': value})
                 elif isinstance(rule, str):
-                    # 字符串格式的规则: 'DOMAIN-SUFFIX,example.com'
+                    # 转换字符串格式规则为字典
                     rule_type, value = self.parse_rule_string(rule)
-                
-                # 跳过无效规则
-                if not rule_type or not value:
-                    continue
-                    
-                # 校验规则类型和值格式
-                if rule_type not in self.config.SUPPORTED_TYPES:
-                    continue
-                    
-                # 特殊处理IP-CIDR规则
-                if rule_type == 'IP-CIDR':
-                    # 验证IP地址格式
-                    try:
-                        ipaddress.ip_network(value, strict=False)
-                    except ValueError:
-                        continue
-                else:
-                    # 验证域名格式
-                    if not DNSValidator.is_valid_domain(value):
-                        continue
+                    rules.append({'type': rule_type, 'value': value})
 
-                # 去重
-                rule_key = (rule_type, value)
-                if rule_key in seen:
-                    continue
-                seen.add(rule_key)
-                
-                valid_rules.append({'type': rule_type, 'value': value})
-                self.stats['valid_block'] += 1
-
-            logger.info(
-                f"规则解析完成: 总规则{self.stats['total_block']}, "
-                f"有效{self.stats['valid_block']}"
-            )
-            return valid_rules
+            logger.info(f"原始规则加载完成: 共{self.stats['total_rules']}条")
+            return rules
         except yaml.YAMLError as e:
             logger.error(f"输入文件YAML格式错误: {str(e)}")
             return []
         except Exception as e:
-            logger.error(f"解析输入文件失败: {str(e)}")
+            logger.error(f"读取输入文件失败: {str(e)}")
             return []
-
-    def _load_whitelist(self) -> None:
-        """从输入文件中提取白名单规则"""
-        try:
-            with self.config.input_path.open('r', encoding='utf-8') as f:
-                data = yaml.safe_load(f)
-
-            if not data or 'payload' not in data:
-                logger.warning("输入文件缺少'payload'节点")
-                return
-
-            # 提取所有白名单域名（DOMAIN类型的规则视为白名单）
-            for rule in data['payload']:
-                rule_type = ""
-                value = ""
-                
-                if isinstance(rule, dict):
-                    rule_type = rule.get('type', '').upper()
-                    value = rule.get('value', '').strip().lower()
-                elif isinstance(rule, str):
-                    rule_type, value = self.parse_rule_string(rule)
-                
-                # 只处理DOMAIN类型的规则作为白名单
-                if rule_type == 'DOMAIN' and DNSValidator.is_valid_domain(value):
-                    self.whitelist_domains.add(value)
-                    
-            self.stats['whitelist_count'] = len(self.whitelist_domains)
-            logger.info(f"白名单加载完成: 有效域名 {self.stats['whitelist_count']} 个")
-        except yaml.YAMLError as e:
-            logger.error(f"输入文件YAML格式错误: {str(e)}")
-        except Exception as e:
-            logger.error(f"加载白名单失败: {str(e)}")
-
-    def _filter_with_whitelist(self, rules: List[Dict[str, str]]) -> List[Dict[str, str]]:
-        """用白名单过滤拦截规则"""
-        if not self.whitelist_domains:
-            return rules  # 无白名单时直接返回原规则
-            
-        filtered_rules = []
-        for rule in rules:
-            # 只对域名相关规则进行白名单过滤
-            if rule['type'] in ['DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD']:
-                domain = rule['value']
-                # 检查是否在白名单中
-                if domain in self.whitelist_domains:
-                    self.stats['filtered_count'] += 1
-                    continue
-                    
-                # 检查是否匹配白名单中的任何域名后缀
-                for whitelist_domain in self.whitelist_domains:
-                    if domain.endswith('.' + whitelist_domain) or domain == whitelist_domain:
-                        self.stats['filtered_count'] += 1
-                        break
-                else:
-                    filtered_rules.append(rule)
-            else:
-                # 非域名规则直接保留
-                filtered_rules.append(rule)
-                
-        logger.info(
-            f"白名单过滤完成: 过滤前{len(rules)}条, 过滤后{len(filtered_rules)}条, "
-            f"被过滤{self.stats['filtered_count']}条"
-        )
-        return filtered_rules
 
     def generate_compile_yaml(self, rules: List[Dict[str, str]]) -> str:
-        """生成用于编译的YAML内容"""
+        """生成用于编译的YAML内容（保留所有规则）"""
         if not rules:
             return ""
-        sorted_rules = sorted(rules, key=lambda x: x['value'])
         yaml_lines = ["payload:"]
-        for rule in sorted_rules:
+        for rule in rules:
             yaml_lines.append(f"  - type: {rule['type']}")
             yaml_lines.append(f"    value: {rule['value']}")
-        logger.info(f"生成编译用YAML: 包含{len(sorted_rules)}条规则")
+        logger.info(f"生成编译用YAML: 包含{len(rules)}条规则")
         return '\n'.join(yaml_lines)
 
     def compute_sha256(self, file_path: Path) -> str:
@@ -369,34 +229,29 @@ class AdblockConverter:
                     logger.warning(f"临时文件清理失败: {str(e)}")
 
     def run(self) -> int:
-        """执行完整流程：解析输入文件 → 提取白名单 → 过滤 → 编译"""
-        # 1. 解析输入文件（仓库根目录）
-        valid_block_rules = self.parse_input()
-        if not valid_block_rules:
-            logger.error("无有效拦截规则，终止流程")
+        """执行流程：读取原始规则 → 编译"""
+        # 1. 读取原始规则
+        rules = self.parse_input()
+        if not rules:
+            logger.error("无规则可处理，终止流程")
             return 1
 
-        # 2. 提取白名单并过滤
-        self._load_whitelist()
-        final_rules = self._filter_with_whitelist(valid_block_rules)
-
-        # 3. 生成编译内容并编译（输出到仓库根目录）
-        yaml_content = self.generate_compile_yaml(final_rules)
+        # 2. 生成编译内容并编译
+        yaml_content = self.generate_compile_yaml(rules)
         if not self.compile_to_mrs(yaml_content):
             return 1
 
-        # 输出GitHub Action变量（使用环境文件）
+        # 输出GitHub Action变量
         github_output = os.getenv('GITHUB_OUTPUT')
         if github_output:
             with open(github_output, 'a') as f:
                 f.write(f"mrs_path={self.config.output_path}\n")
-                f.write(f"final_rule_count={len(final_rules)}\n")
-                f.write(f"filtered_count={self.stats['filtered_count']}\n")
+                f.write(f"final_rule_count={len(rules)}\n")
                 f.write(f"mrs_sha256={self.stats['mrs_sha256']}\n")
         else:
             logger.warning("未检测到GITHUB_OUTPUT环境变量，跳过变量输出")
 
-        logger.info("步骤二转换流程完成")
+        logger.info("转换流程完成")
         return 0
 
 
