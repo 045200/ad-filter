@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Adblock规则清理工具 - GitHub CI 优化版"""
+"""Adblock规则清理工具 - 带白名单功能的GitHub CI优化版"""
 
 import os
 import sys
@@ -43,6 +43,10 @@ class Config:
     # 无效域名备份文件
     INVALID_DOMAINS_BACKUP = BASE_DIR / "data" / "mod" / "adblock_update.txt"
     BACKUP_HISTORY_DIR = BASE_DIR / "data" / "mod" / "backups"
+    
+    # 白名单文件
+    WHITELIST_FILE = BASE_DIR / "data" / "mod" / "domains.txt"
+    
     MAX_BACKUP_FILES = 10  # 最大备份文件数量
     
     # GitHub CI 环境优化配置
@@ -170,6 +174,9 @@ class MultiProtocolDNSValidator:
         # 从备份文件加载已知无效域名
         self.known_invalid_domains = self._load_known_invalid_domains()
         
+        # 从白名单文件加载白名单域名
+        self.whitelist_domains = self._load_whitelist_domains()
+        
         # 创建SSL上下文
         self.ssl_context = ssl.create_default_context(cafile=certifi.where())
         
@@ -187,7 +194,8 @@ class MultiProtocolDNSValidator:
             'dot_queries': 0,
             'dns_queries': 0,
             'cache_hits': 0,
-            'known_invalid_hits': 0
+            'known_invalid_hits': 0,
+            'whitelist_hits': 0
         }
 
     def _load_known_invalid_domains(self) -> Set[str]:
@@ -208,6 +216,31 @@ class MultiProtocolDNSValidator:
                 logger.error(f"加载已知无效域名失败: {str(e)}")
         
         return known_invalid
+
+    def _load_whitelist_domains(self) -> Set[str]:
+        """从白名单文件加载白名单域名"""
+        whitelist = set()
+        whitelist_file = Config.WHITELIST_FILE
+        
+        if whitelist_file.exists():
+            try:
+                logger.info(f"从白名单文件加载域名: {whitelist_file}")
+                with open(whitelist_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        # 跳过注释和空行
+                        if line and not line.startswith('#'):
+                            # 处理通配符域名 (*.example.com → example.com)
+                            if line.startswith('*.'):
+                                line = line[2:]
+                            whitelist.add(line)
+                logger.info(f"已加载 {len(whitelist)} 个白名单域名")
+            except Exception as e:
+                logger.error(f"加载白名单域名失败: {str(e)}")
+        else:
+            logger.info(f"白名单文件不存在: {whitelist_file}")
+        
+        return whitelist
 
     async def init_session(self):
         """初始化aiohttp会话（GitHub CI 优化）"""
@@ -328,7 +361,13 @@ class MultiProtocolDNSValidator:
         """使用多协议检查域名是否可解析（GitHub CI 优化）"""
         current_time = time.time()
         
-        # 首先检查已知无效域名列表
+        # 首先检查白名单
+        if domain in self.whitelist_domains:
+            self.stats['whitelist_hits'] += 1
+            logger.debug(f"域名 {domain} 在白名单中，跳过验证")
+            return True
+            
+        # 检查已知无效域名列表
         if domain in self.known_invalid_domains:
             self.stats['known_invalid_hits'] += 1
             return False
@@ -461,6 +500,7 @@ class AdblockCleanerCI:
         logger.info(f"内存限制: {Config.MAX_MEMORY_PERCENT}%")
         logger.info(f"输入目录: {Config.TEMP_DIR}")
         logger.info(f"输出文件: {Config.CLEANED_FILE}")
+        logger.info(f"白名单文件: {Config.WHITELIST_FILE}")
 
         # 初始化DNS验证器会话
         await self.validator.init_session()
@@ -491,6 +531,7 @@ class AdblockCleanerCI:
         logger.info(f"有效域名缓存: {len(self.validator.valid_domains)}")
         logger.info(f"无效域名缓存: {len(self.validator.invalid_domains)}")
         logger.info(f"已知无效域名: {len(self.validator.known_invalid_domains)}")
+        logger.info(f"白名单域名: {len(self.validator.whitelist_domains)}")
         logger.info(f"峰值内存使用: {self.resource_monitor.peak_memory:.1f}MB")
         logger.info(f"总耗时: {elapsed:.2f}秒")
         
@@ -499,7 +540,8 @@ class AdblockCleanerCI:
                    f"DoT={self.validator.stats['dot_queries']}, "
                    f"标准DNS={self.validator.stats['dns_queries']}")
         logger.info(f"缓存命中: {self.validator.stats['cache_hits']}, "
-                   f"已知无效命中: {self.validator.stats['known_invalid_hits']}")
+                   f"已知无效命中: {self.validator.stats['known_invalid_hits']}, "
+                   f"白名单命中: {self.validator.stats['whitelist_hits']}")
         
         # 保存统计信息
         self._save_stats(start_time, elapsed)
@@ -726,6 +768,7 @@ class AdblockCleanerCI:
             "valid_domains": len(self.validator.valid_domains),
             "invalid_domains": len(self.validator.invalid_domains),
             "known_invalid_domains": len(self.validator.known_invalid_domains),
+            "whitelist_domains": len(self.validator.whitelist_domains),
             "dns_query_stats": self.validator.stats,
             "ci_environment": "GitHub Actions (4 cores, 16GB RAM)",
             "concurrency_settings": {
@@ -741,7 +784,8 @@ class AdblockCleanerCI:
                 "regex_rules": Config.PRESERVE_REGEX_RULES
             },
             "backup_file": str(Config.INVALID_DOMAINS_BACKUP),
-            "backup_history_dir": str(Config.BACKUP_HISTORY_DIR)
+            "backup_history_dir": str(Config.BACKUP_HISTORY_DIR),
+            "whitelist_file": str(Config.WHITELIST_FILE)
         }
         
         stats_file = Config.TEMP_DIR / "cleaning_stats.json"
