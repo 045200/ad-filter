@@ -27,6 +27,12 @@ RETRY_DELAY = 0.5
 HTTP_POOL_SIZE = 10
 MIN_FILE_SIZE = 1024  # 最小文件大小（字节）
 
+# 额外下载文件配置
+EXTRA_DOWNLOADS = {
+    "china_ip_ranges.txt": "https://raw.githubusercontent.com/17mon/china_ip_list/master/china_ip_list.txt",
+    "GeoLite2-Country.mmdb": "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-Country.mmdb"
+}
+
 # 请求头
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
@@ -117,12 +123,14 @@ def gh_endgroup():
 class RuleDownloader:
     def __init__(self):
         TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        DATA_DIR.mkdir(parents=True, exist_ok=True)  # 确保data目录存在
         self.session = self._init_session()
         self._clean_temp_dir()
         self.stats = {
             'adblock': {'success': 0, 'fail': 0},
             'allow': {'success': 0, 'fail': 0},
-            'local': {'copied': 0, 'missing': 0}
+            'local': {'copied': 0, 'missing': 0},
+            'extra': {'success': 0, 'fail': 0}
         }
 
     def _init_session(self):
@@ -154,18 +162,23 @@ class RuleDownloader:
         encoding = result['encoding'] or 'utf-8'
         return 'gb18030' if encoding.lower() in ['gb2312', 'gbk'] else encoding
 
-    def download_with_retry(self, url, save_path):
+    def download_with_retry(self, url, save_path, is_binary=False):
         for attempt in range(MAX_RETRIES + 1):
             try:
                 response = self.session.get(url, timeout=TIMEOUT)
                 response.raise_for_status()
 
-                content = response.content
-                encoding = self._detect_encoding(content)
-                text = content.decode(encoding, errors='replace')
-
-                with open(save_path, 'w', encoding='utf-8') as f:
-                    f.write(text)
+                if is_binary:
+                    # 二进制文件直接保存
+                    with open(save_path, 'wb') as f:
+                        f.write(response.content)
+                else:
+                    # 文本文件需要处理编码
+                    content = response.content
+                    encoding = self._detect_encoding(content)
+                    text = content.decode(encoding, errors='replace')
+                    with open(save_path, 'w', encoding='utf-8') as f:
+                        f.write(text)
 
                 if save_path.stat().st_size < MIN_FILE_SIZE:
                     save_path.unlink()
@@ -205,7 +218,7 @@ class RuleDownloader:
             for i, url in enumerate(ADBLOCK_URLS, 1):  # 从1开始编号，00留给本地规则
                 save_path = TEMP_DIR / f"adblock{i:02d}.txt"
                 futures.append(executor.submit(self.download_with_retry, url, save_path))
-            
+
             for future in as_completed(futures):
                 if future.result():
                     self.stats['adblock']['success'] += 1
@@ -221,7 +234,7 @@ class RuleDownloader:
             for i, url in enumerate(ALLOW_URLS, 1):  # 从1开始编号，00留给本地规则
                 save_path = TEMP_DIR / f"allow{i:02d}.txt"
                 futures.append(executor.submit(self.download_with_retry, url, save_path))
-            
+
             for future in as_completed(futures):
                 if future.result():
                     self.stats['allow']['success'] += 1
@@ -230,24 +243,45 @@ class RuleDownloader:
         logger.info(f"白名单统计: 成功{self.stats['allow']['success']}，失败{self.stats['allow']['fail']}")
         gh_endgroup()
 
+    def download_extra_files(self):
+        """下载额外的文件（中国IP范围和GeoIP数据库）"""
+        gh_group("下载额外文件")
+        for filename, url in EXTRA_DOWNLOADS.items():
+            save_path = DATA_DIR / filename
+            is_binary = filename.endswith('.mmdb')  # mmdb文件是二进制格式
+            
+            try:
+                if self.download_with_retry(url, save_path, is_binary=is_binary):
+                    self.stats['extra']['success'] += 1
+                    logger.info(f"成功下载额外文件: {filename}")
+                else:
+                    self.stats['extra']['fail'] += 1
+                    logger.warning(f"下载额外文件失败: {filename}")
+            except Exception as e:
+                self.stats['extra']['fail'] += 1
+                logger.warning(f"下载额外文件异常 {filename}: {e}")
+        gh_endgroup()
+
     def run(self):
         start_time = time.time()
         gh_group("规则下载流程")
-        
+
         self.copy_local_rules()
         self.download_remote_rules()
+        self.download_extra_files()  # 新增：下载额外文件
 
         # 输出结果
         elapsed = time.time() - start_time
         logger.info(f"\n总耗时: {elapsed:.2f}秒")
         logger.info(f"本地规则: 成功{self.stats['local']['copied']}，缺失{self.stats['local']['missing']}")
+        logger.info(f"额外文件: 成功{self.stats['extra']['success']}，失败{self.stats['extra']['fail']}")
         logger.info("临时目录准备就绪，规则文件格式: adblockXX.txt / allowXX.txt")
 
         # GitHub Actions输出
         if github_output := os.getenv('GITHUB_OUTPUT'):
             with open(github_output, 'a') as f:
                 f.write(f"temp_dir={TEMP_DIR}\n")
-        
+
         gh_endgroup()
 
 
