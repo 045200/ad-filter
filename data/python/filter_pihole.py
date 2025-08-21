@@ -68,13 +68,15 @@ def process_file():
                         allow_domains.add(domain)
                     continue
                 
-                # 处理其他白名单规则（可能包含修饰符等）
-                # 尝试提取域名
-                domain_match = re.search(r'\|\|([\w.-]+)', line)
-                if domain_match:
-                    domain = domain_match.group(1)
-                    if is_valid_domain(domain):
-                        allow_domains.add(domain)
+                # 处理其他白名单规则
+                simplified = simplify_rule(line[2:])  # 移除@@前缀
+                if simplified:
+                    # 提取域名部分
+                    domain_match = re.search(r'\|\|([\w.-]+)', simplified)
+                    if domain_match:
+                        domain = domain_match.group(1)
+                        if is_valid_domain(domain):
+                            allow_domains.add(domain)
                 continue
 
             # 处理标准Adblock规则
@@ -161,12 +163,22 @@ def is_valid_domain(domain):
     return True
 
 
+def simplify_rule(rule):
+    """简化规则以适应Pi-hole"""
+    # 移除修饰符部分
+    if '$' in rule:
+        parts = rule.split('$')
+        return parts[0]
+    
+    return rule
+
+
 def write_output(block_domains, allow_domains):
     """写入输出文件，不包含头信息"""
     # 写入拦截列表
     with open(BLOCK_FILE, 'w', encoding='utf-8') as f:
         f.write('\n'.join(sorted(block_domains)) + '\n')
-
+    
     # 写入白名单
     with open(ALLOW_FILE, 'w', encoding='utf-8') as f:
         f.write('\n'.join(sorted(allow_domains)) + '\n')
