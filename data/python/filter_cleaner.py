@@ -62,8 +62,8 @@ class Config:
     DNS_RETRY_DELAY = 1  # 重试延迟(秒)
     
     # 内存管理
-    MAX_MEMORY_PERCENT = 70  # 最大内存使用百分比
-    BATCH_SIZE = 5000  # 域名批量处理大小
+    MAX_MEMORY_PERCENT = 75  # 最大内存使用百分比
+    BATCH_SIZE = 1000  # 域名批量处理大小
     
     # 多协议DNS服务器配置（优化服务器选择）
     DOH_SERVERS = [
