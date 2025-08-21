@@ -54,7 +54,7 @@ class Config:
     DNS_WORKERS = 100  # DNS查询的并发数（提高IO密集型任务并发）
     RULE_LEN_RANGE = (3, 2048)
     MAX_FILESIZE_MB = 100  # 增加文件大小限制
-    INPUT_PATTERNS = ["adblock_merged.txt"]
+    INPUT_PATTERNS = ["adblock_filter.txt"]
     
     # DNS解析设置
     DNS_TIMEOUT = 3  # 稍微增加超时时间
