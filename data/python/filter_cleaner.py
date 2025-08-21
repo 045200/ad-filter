@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Adblock规则清理工具 - 10万+规则优化版"""
+"""Adblock规则清理工具 - 海外环境优化版"""
 
 import os
 import sys
@@ -17,12 +17,9 @@ import certifi
 from pathlib import Path
 from typing import Tuple, List, Set, Dict, Optional
 from urllib.parse import urlparse
-import tldextract
 import json
 from datetime import datetime
-import resource
 import psutil
-import hashlib
 import gzip
 import shutil
 import ipaddress
@@ -30,7 +27,7 @@ import maxminddb
 
 
 class Config:
-    """配置：10万+规则优化配置"""
+    """配置：海外环境优化版"""
     GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
     BASE_DIR = Path(GITHUB_WORKSPACE)
 
@@ -44,41 +41,39 @@ class Config:
     BACKUP_HISTORY_DIR = BASE_DIR / "data" / "mod" / "backups"
     WHITELIST_FILE = BASE_DIR / "data" / "mod" / "domains.txt"
 
-    # GitHub Actions 环境配置（10万+规则优化）
+    # GitHub Actions 环境配置（海外优化）
     MAX_WORKERS = 4
-    DNS_WORKERS = 150  # 增加DNS查询并发数
-    BATCH_SIZE = 2000  # 增加批量处理大小
-    MAX_MEMORY_PERCENT = 80  # 提高内存使用上限
+    DNS_WORKERS = 50  # 降低DNS并发数，适应海外服务器
+    BATCH_SIZE = 1000  # 减小批量处理大小
+    MAX_MEMORY_PERCENT = 80
 
-    # DNS解析设置
-    DNS_TIMEOUT = 3
-    DNS_RETRIES = 2
-    DNS_RETRY_DELAY = 1
+    # DNS解析设置（延长超时和重试）
+    DNS_TIMEOUT = 5  # 延长超时时间
+    DNS_RETRIES = 3  # 增加重试次数
+    DNS_RETRY_DELAY = 2  # 延长重试间隔
 
-    # 多协议DNS服务器配置
+    # 多协议DNS服务器配置（强化国际DNS）
     DNS_SERVERS = {
         'global': {
             'doh': [
-                "https://1.1.1.1/dns-query",
-                "https://dns.google/dns-query",
+                "https://1.1.1.1/dns-query",       # Cloudflare (优先)
+                "https://dns.google/dns-query",    # Google
                 "https://doh.opendns.com/dns-query",
+                "https://doh.quad9.net/dns-query"  # Quad9
             ],
             'dot': [
-                "1.1.1.1",
-                "8.8.8.8",
-                "9.9.9.9",
+                "1.1.1.1",  # Cloudflare
+                "8.8.8.8",  # Google
+                "9.9.9.9"   # Quad9
             ]
         },
         'china': {
             'doh': [
-                "https://doh.360.cn/dns-query",
-                "https://dns.alidns.com/dns-query",
-                "https://doh.pub/dns-query",
+                # 海外环境下国内DNS可能不稳定，减少优先级
+                "https://doh.pub/dns-query",       # 相对稳定的国内DoH
             ],
             'dot': [
-                "223.5.5.5",
-                "119.29.29.29",
-                "180.76.76.76",
+                "119.29.29.29",  # 腾讯DNSPod (相对稳定)
             ]
         }
     }
@@ -88,18 +83,18 @@ class Config:
     GEOIP_DB_FILE = BASE_DIR / "data" / "GeoLite2-Country.mmdb"
 
     # 性能优化设置
-    CACHE_TTL = 7200  # 增加缓存有效期
-    MAX_CACHE_SIZE = 50000  # 增加缓存容量
+    CACHE_TTL = 7200
+    MAX_CACHE_SIZE = 50000
 
     # 特殊规则保留
     PRESERVE_ELEMENT_HIDING = True
     PRESERVE_SCRIPT_RULES = True
     PRESERVE_REGEX_RULES = True
 
-    # 10万+规则特有优化
-    DOMAIN_PRELOAD_LIMIT = 10000  # 预加载域名数量限制
-    SKIP_LOW_FREQUENCY_DOMAINS = True  # 跳过低频域名
-    LOW_FREQUENCY_THRESHOLD = 2  # 低频域名阈值
+    # 海外环境优化：放宽低频域名限制
+    DOMAIN_PRELOAD_LIMIT = 10000
+    SKIP_LOW_FREQUENCY_DOMAINS = False  # 关闭低频域名过滤
+    LOW_FREQUENCY_THRESHOLD = 1  # 若开启过滤，阈值设为1
 
 
 class RegexPatterns:
@@ -225,7 +220,7 @@ class ResourceMonitor:
 
 
 class HighVolumeDNSValidator:
-    """高容量DNS验证器（10万+规则优化）"""
+    """高容量DNS验证器（海外环境优化）"""
     def __init__(self):
         self.domain_blacklist = {
             'localhost', 'localdomain', 'example.com', 'example.org', 
@@ -320,9 +315,12 @@ class HighVolumeDNSValidator:
         """检查是否是低频域名"""
         if not Config.SKIP_LOW_FREQUENCY_DOMAINS:
             return False
-        
+
         frequency = self.domain_frequency.get(domain, 0)
-        return frequency <= Config.LOW_FREQUENCY_THRESHOLD
+        result = frequency <= Config.LOW_FREQUENCY_THRESHOLD
+        if result:
+            logger.debug(f"低频域名: {domain} (出现次数: {frequency})")
+        return result
 
     async def determine_domain_strategy(self, domain: str) -> str:
         """确定域名的解析策略（国内/国际）"""
@@ -442,12 +440,21 @@ class HighVolumeDNSValidator:
         """通过DoT协议解析域名"""
         self.stats['dot_queries'] += 1
         try:
+            # 临时切换DNS服务器
+            original_nameservers = self.resolver.nameservers
+            self.resolver.nameservers = [server]
+            
             result = await asyncio.wait_for(
                 self.resolver.query(domain, 'A'),
                 timeout=Config.DNS_TIMEOUT
             )
+            
+            # 恢复原始设置
+            self.resolver.nameservers = original_nameservers
             return len(result) > 0
         except:
+            # 确保恢复原始设置
+            self.resolver.nameservers = original_nameservers
             return False
 
     async def resolve_via_standard_dns(self, domain: str) -> bool:
@@ -588,8 +595,8 @@ class HighVolumeAdblockCleaner:
 
     async def run(self):
         start_time = time.time()
-        logger.info("===== Adblock规则清理工具（10万+规则优化版） =====")
-        logger.info("GitHub CI环境: 2核7GB标准配置 / 4核16GB大型配置")
+        logger.info("===== Adblock规则清理工具（海外环境优化版） =====")
+        logger.info("GitHub CI环境: 海外节点适配")
         logger.info(f"并发设置: DNS Workers={Config.DNS_WORKERS}, 批量大小={Config.BATCH_SIZE}")
         logger.info(f"内存限制: {Config.MAX_MEMORY_PERCENT}%")
         logger.info(f"低频域名跳过: {Config.SKIP_LOW_FREQUENCY_DOMAINS}")
@@ -639,7 +646,7 @@ class HighVolumeAdblockCleaner:
         logger.info("第一遍：统计域名频率...")
         all_domains = self._extract_domains_from_lines(lines)
         logger.info(f"从文件中提取到 {len(all_domains)} 个域名")
-        
+
         # 跟踪域名频率
         for domain in all_domains:
             self.validator.track_domain_frequency(domain)
@@ -653,7 +660,7 @@ class HighVolumeAdblockCleaner:
             batch = domain_list[i:i+Config.BATCH_SIZE]
             batch_num = i//Config.BATCH_SIZE + 1
             total_batches = (len(domain_list)-1)//Config.BATCH_SIZE + 1
-            
+
             logger.info(f"处理域名批次 {batch_num}/{total_batches} ({len(batch)} 个域名)")
             batch_valid_domains = await self._validate_domains_batch(batch)
             valid_domains.update(batch_valid_domains)
@@ -670,7 +677,7 @@ class HighVolumeAdblockCleaner:
         logger.info("第三遍：过滤规则...")
         cleaned_lines = self._filter_rules(lines, valid_domains)
         output_path = Config.CLEANED_FILE
-        
+
         with open(output_path, 'w', encoding='utf-8') as f:
             f.writelines(cleaned_lines)
 
@@ -724,6 +731,7 @@ class HighVolumeAdblockCleaner:
             for j, result in enumerate(results):
                 domain = domains[i+j]
                 if isinstance(result, Exception):
+                    logger.debug(f"验证域名 {domain} 出错: {str(result)}")
                     continue
                 elif result:
                     valid_domains.add(domain)
@@ -815,7 +823,7 @@ class HighVolumeAdblockCleaner:
             "global_domains": self.validator.stats['global_domains'],
             "skipped_low_frequency": self.validator.stats['skipped_low_frequency'],
             "dns_query_stats": self.validator.stats,
-            "ci_environment": "GitHub Actions",
+            "ci_environment": "GitHub Actions (海外优化)",
             "concurrency_settings": {
                 "dns_workers": Config.DNS_WORKERS,
                 "cpu_workers": Config.MAX_WORKERS,
