@@ -9,7 +9,7 @@ import hashlib
 import chardet
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import List, Generator, Set, Tuple
+from typing import List, Generator, Set, Tuple, Dict
 
 
 # 配置参数
@@ -21,64 +21,67 @@ OUTPUT_FILE = TEMP_DIR / "adblock_merged.txt"
 MAX_WORKERS = 4
 CHUNK_SIZE = 10000
 RULE_LEN_RANGE = (4, 253)
-INPUT_PATTERNS = ["adblock*.txt", "allow*.txt", "hosts*", "adg*.txt", "adh*.txt"]  # 新增AdGuard相关文件匹配
+INPUT_PATTERNS = ["adblock*.txt", "allow*.txt", "hosts*", "adg*.txt", "adh*.txt"]  # AdGuard相关文件匹配
 
+# 无效域名黑名单（通用+AdGuard特殊场景）
 DOMAIN_BLACKLIST = {
     'localhost', 'localdomain', 'example.com', 'example.org', 
     'example.net', 'test.com', 'invalid.com', '0.0.0.0', '127.0.0.1',
-    '::1', '255.255.255.255', 'localhost.localdomain'
+    '::1', '255.255.255.255', 'localhost.localdomain', '*'
 }
 
 MAX_RULES_IN_MEMORY = 2000000
-HASH_SALT = "adblock_salt_2024"
+HASH_SALT = "adblock_salt_2024_v2"  # 升级盐值用于新的标准化逻辑
 
 
-# 预编译正则（新增AdGuard/AdGuard Home专属语法）
+# 预编译正则（强化AdGuard/AdGuard Home语法支持）
 COMMENT = re.compile(r'^[!#]')
 EMPTY_LINE = re.compile(r'^\s*$')
 IP_ADDRESS = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
 IP_CIDR = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}$')
 IP_CIDR6 = re.compile(r'^[0-9a-fA-F:]+/\d{1,3}$')
 
-# 基础AdBlock规则模式
+# 基础AdBlock规则模式（支持AdGuard扩展域名格式）
 DOMAIN_PATTERN = r'[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?'
 ADBLOCK_DOMAIN = re.compile(rf'^(@@)?\|{{1,2}}({DOMAIN_PATTERN}\.)+[a-zA-Z]{{2,}}[\^\/\|\$]?')
 HOSTS_LINE = re.compile(rf'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+({DOMAIN_PATTERN}\.)+[a-zA-Z]{{2,}}')
 PURE_DOMAIN = re.compile(rf'^({DOMAIN_PATTERN}\.)+[a-zA-Z]{{2,}}$')
 
-# AdGuard/AdGuard Home特有语法正则
-# 1. DNS重写规则（$dnsrewrite）
-ADG_DNSREWRITE = re.compile(r'^\|\|.*\$dnsrewrite=')
-# 2. 重定向规则（$redirect）
-ADG_REDIRECT = re.compile(r'^\|\|.*\$redirect=')
-# 3. 内容替换规则（$replace）
-ADG_REPLACE = re.compile(r'^\|\|.*\$replace=')
-# 4. 客户端/服务器限定符（$client/$server）
-ADG_CLIENT_SERVER = re.compile(r'^\|\|.*\$(client|server)=')
-# 5. 自定义过滤规则（如局部屏蔽）
-ADG_CSP = re.compile(r'^\|\|.*\$csp=')
-# 6. AdGuard Home的IP/CIDR规则
-ADH_IP_RULE = re.compile(r'^(IP-CIDR|IP-CIDR6):[^,]+,[A-Z]+$')
-# 7. AdGuard的扩展修饰符（$extension）
-ADG_EXTENSION = re.compile(r'^\|\|.*\$extension=')
+# AdGuard/AdGuard Home特有语法正则（扩展）
+ADG_DNSREWRITE = re.compile(r'^\|\|.*\$dnsrewrite=')  # DNS重写
+ADG_REDIRECT = re.compile(r'^\|\|.*\$redirect=')      # 重定向
+ADG_REPLACE = re.compile(r'^\|\|.*\$replace=')        # 内容替换
+ADG_CLIENT_SERVER = re.compile(r'^\|\|.*\$(client|server)=')  # 客户端/服务器限定
+ADG_CSP = re.compile(r'^\|\|.*\$csp=')                # 内容安全策略
+ADH_IP_RULE = re.compile(r'^(IP-CIDR|IP-CIDR6):[^,]+,[A-Za-z]+$')  # IP规则（忽略大小写）
+ADG_EXTENSION = re.compile(r'^\|\|.*\$extension=')    # 扩展限定
+ADG_SCRIPTLET = re.compile(r'(##\+js\(|#%#//scriptlet\()')  # 脚本注入
+ADG_CSS = re.compile(r'^##|^#@#')                    # CSS选择器
 
 
-# 支持的AdBlock/AdGuard选项（扩展AdGuard专属选项）
+# 支持的AdBlock/AdGuard选项（含语义等价映射）
 ADBLOCK_OPTIONS = re.compile(r'\$[a-zA-Z0-9~,=+_:-]+')
 ADG_SPECIFIC_OPTIONS = {
     'dnsrewrite', 'redirect', 'replace', 'client', 'server', 
     'csp', 'extension', 'rewrite', 'unblock', 'allow'
 }
+# 选项语义等价映射（如'reject'和'block'视为相同）
+OPTION_EQUIVALENTS = {
+    'reject': 'block',
+    'deny': 'block',
+    'allow': 'unblock',
+    'permit': 'unblock'
+}
 
 
 def detect_encoding(file_path: Path) -> str:
-    """检测文件编码"""
+    """检测文件编码（兼容AdGuard规则常见编码）"""
     try:
         with open(file_path, 'rb') as f:
             raw_data = f.read(4096)
             result = chardet.detect(raw_data)
             encoding = result['encoding'] or 'utf-8'
-            # 处理中文编码
+            # 优先处理中文编码
             if encoding.lower() in ['gb2312', 'gbk']:
                 encoding = 'gb18030'
             return encoding
@@ -87,7 +90,7 @@ def detect_encoding(file_path: Path) -> str:
 
 
 def file_chunk_reader(file_path: Path, chunk_size: int = CHUNK_SIZE) -> Generator[List[str], None, None]:
-    """分块读取文件（带编码检测）"""
+    """分块读取文件（增强容错）"""
     encoding = detect_encoding(file_path)
     try:
         with open(file_path, 'r', encoding=encoding, errors='replace') as f:
@@ -101,19 +104,21 @@ def file_chunk_reader(file_path: Path, chunk_size: int = CHUNK_SIZE) -> Generato
                 yield chunk
     except Exception as e:
         print(f"读取文件 {file_path} 时出错: {e}")
-        # 尝试使用UTF-8作为备选
-        try:
-            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                chunk = []
-                for line in f:
-                    chunk.append(line.strip())
-                    if len(chunk) >= chunk_size:
+        # 备选编码尝试
+        for alt_encoding in ['utf-8', 'latin-1']:
+            try:
+                with open(file_path, 'r', encoding=alt_encoding, errors='replace') as f:
+                    chunk = []
+                    for line in f:
+                        chunk.append(line.strip())
+                        if len(chunk) >= chunk_size:
+                            yield chunk
+                            chunk = []
+                    if chunk:
                         yield chunk
-                        chunk = []
-                if chunk:
-                    yield chunk
-        except Exception as e2:
-            print(f"UTF-8读取也失败 {file_path}: {e2}")
+                break
+            except Exception:
+                continue
 
 
 class AdblockMerger:
@@ -124,13 +129,18 @@ class AdblockMerger:
         self.file_hashes = set()
         self.processed_files = 0
         self.total_rules = 0
-        # 新增AdGuard规则统计
+        # AdGuard规则统计（细化分类）
         self.stats = {
             'adg_dnsrewrite': 0,
             'adg_redirect': 0,
             'adg_replace': 0,
             'adg_client_server': 0,
-            'adh_ip_rules': 0
+            'adg_csp': 0,
+            'adg_scriptlet': 0,
+            'adg_css': 0,
+            'adh_ip_rules': 0,
+            'standard_adblock': 0,  # 标准AdBlock规则
+            'duplicates_removed': 0  # 去重数量统计
         }
 
     def run(self):
@@ -143,21 +153,26 @@ class AdblockMerger:
             return
 
         print(f"发现规则文件: {len(self.input_files)}个")
-        rules = self._process_files_parallel()
-        self._write_output(rules)
+        raw_rules = self._process_files_parallel()
+        unique_rules = self._deduplicate_rules(raw_rules)  # 语义级去重
+        self._write_output(unique_rules)
 
         elapsed = time.time() - start_time
-        print(f"合并完成 | 处理文件: {self.processed_files} | 最终规则数: {len(rules)} | 耗时: {elapsed:.2f}s")
+        print(f"合并完成 | 处理文件: {self.processed_files} | 原始规则数: {len(raw_rules)} | 去重后规则数: {len(unique_rules)} | 去重数量: {self.stats['duplicates_removed']} | 耗时: {elapsed:.2f}s")
         # 输出AdGuard规则统计
         print("AdGuard/AdGuard Home规则统计:")
         print(f"  DNS重写规则: {self.stats['adg_dnsrewrite']}")
         print(f"  重定向规则: {self.stats['adg_redirect']}")
         print(f"  内容替换规则: {self.stats['adg_replace']}")
         print(f"  客户端/服务器限定规则: {self.stats['adg_client_server']}")
+        print(f"  内容安全策略规则: {self.stats['adg_csp']}")
+        print(f"  脚本注入规则: {self.stats['adg_scriptlet']}")
+        print(f"  CSS选择器规则: {self.stats['adg_css']}")
         print(f"  AdGuard Home IP规则: {self.stats['adh_ip_rules']}")
+        print(f"  标准AdBlock规则: {self.stats['standard_adblock']}")
 
     def _discover_input_files(self):
-        """发现输入文件（新增AdGuard相关文件）"""
+        """发现输入文件（含AdGuard特有文件）"""
         for pattern in INPUT_PATTERNS:
             for file_path in TEMP_DIR.glob(pattern):
                 if file_path == OUTPUT_FILE or not file_path.is_file():
@@ -165,16 +180,17 @@ class AdblockMerger:
 
                 file_hash = self._calculate_file_hash(file_path)
                 if file_hash in self.file_hashes:
-                    continue
+                    continue  # 跳过重复文件
 
                 self.file_hashes.add(file_hash)
                 self.input_files.append(file_path)
 
     def _calculate_file_hash(self, file_path: Path) -> str:
-        """计算文件哈希值"""
+        """计算文件哈希值（避免重复处理相同文件）"""
         try:
             hasher = hashlib.md5()
             with open(file_path, 'rb') as f:
+                # 读取文件头和大小作为哈希依据
                 hasher.update(f.read(1024))
                 hasher.update(str(file_path.stat().st_size).encode())
             return hasher.hexdigest()
@@ -182,34 +198,28 @@ class AdblockMerger:
             return str(file_path)
 
     def _process_files_parallel(self) -> List[str]:
-        """并行处理文件"""
-        rules = []
-        rule_hashes = set()
+        """并行处理文件（提取规则）"""
+        all_rules = []
 
         with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
             future_to_file = {executor.submit(self._process_file, fp): fp for fp in self.input_files}
 
             for future in as_completed(future_to_file):
                 try:
-                    file_rules, file_stats = future.result()  # 接收规则和统计信息
+                    file_rules, file_stats = future.result()  # 接收规则和统计
                     self.processed_files += 1
                     self.total_rules += len(file_rules)
-                    # 累加AdGuard规则统计
+                    # 累加统计
                     for k, v in file_stats.items():
                         self.stats[k] += v
                     print(f"处理文件 {self.processed_files}/{len(self.input_files)}: 提取 {len(file_rules)} 条规则")
-
-                    for rule in file_rules:
-                        rule_hash = self._rule_hash(rule)
-                        if rule_hash not in rule_hashes:
-                            rules.append(rule)
-                            rule_hashes.add(rule_hash)
+                    all_rules.extend(file_rules)
                 except Exception as e:
                     print(f"处理文件时出错: {e}")
 
-        return rules
+        return all_rules
 
-    def _process_file(self, file_path: Path) -> Tuple[List[str], dict]:
+    def _process_file(self, file_path: Path) -> Tuple[List[str], Dict[str, int]]:
         """处理单个文件（返回规则和统计）"""
         rules = []
         file_stats = {k:0 for k in self.stats.keys()}  # 单文件统计
@@ -217,12 +227,12 @@ class AdblockMerger:
         for chunk in file_chunk_reader(file_path):
             for line in chunk:
                 if not line or EMPTY_LINE.match(line) or COMMENT.match(line):
-                    continue
+                    continue  # 跳过注释和空行
 
                 if not (self.len_min <= len(line) <= self.len_max):
-                    continue
+                    continue  # 过滤长度异常的规则
 
-                rule, rule_stats = self._process_line(line)  # 处理单行并获取统计
+                rule, rule_stats = self._process_line(line)  # 处理单行
                 if rule:
                     rules.append(rule)
                     # 更新单文件统计
@@ -231,88 +241,145 @@ class AdblockMerger:
 
         return rules, file_stats
 
-    def _process_line(self, line: str) -> Tuple[str, dict]:
-        """处理单行规则（扩展AdGuard/AdGuard Home语法）"""
-        rule_stats = {k:0 for k in self.stats.keys()}  # 单行规则统计
-        original_line = line
+    def _process_line(self, line: str) -> Tuple[str, Dict[str, int]]:
+        """处理单行规则（强化AdGuard规则标准化）"""
+        rule_stats = {k:0 for k in self.stats.keys()}
+        original_line = line.strip()
 
-        # 移除行内注释
+        # 移除行内注释（兼容AdGuard注释风格）
         if '#' in line:
-            line = line.split('#')[0].strip()
+            line = line.split('#', 1)[0].strip()
         if '!' in line:
-            line = line.split('!')[0].strip()
+            line = line.split('!', 1)[0].strip()
+        if not line:
+            return "", rule_stats
 
-        # 1. 优先处理AdGuard Home的IP/CIDR规则（如IP-CIDR:192.168.1.0/24,REJECT）
+        # 1. 处理AdGuard Home IP规则（标准化大小写和动作）
         if ADH_IP_RULE.match(line):
-            parts = line.split(':')
-            if len(parts) == 2 and ',' in parts[1]:
-                ip_part, action = parts[1].split(',', 1)
-                # 验证IP/CIDR格式
-                if (IP_CIDR.match(ip_part) or IP_CIDR6.match(ip_part)) and action.strip().isupper():
-                    rule_stats['adh_ip_rules'] = 1
-                    return original_line, rule_stats
+            ip_type, rest = line.split(':', 1)
+            ip_range, action = rest.split(',', 1)
+            # 标准化：IP类型大写，动作统一（如reject→block）
+            ip_type = ip_type.upper()
+            action = action.strip().lower()
+            action = OPTION_EQUIVALENTS.get(action, action)  # 等价动作映射
+            normalized_rule = f"{ip_type}:{ip_range},{action.upper()}"
+            rule_stats['adh_ip_rules'] = 1
+            return normalized_rule, rule_stats
 
-        # 2. 处理AdGuard特有选项规则（$dnsrewrite/$redirect等）
+        # 2. 处理AdGuard脚本注入规则（标准化参数顺序）
+        if ADG_SCRIPTLET.search(line):
+            # 提取脚本内容并标准化参数顺序（按参数名排序）
+            script_content = re.search(r'(##\+js\(|#%#//scriptlet\()(.*?)\)', line).group(2)
+            if ',' in script_content:
+                params = [p.strip() for p in script_content.split(',')]
+                # 简单参数按字符串排序（复杂场景可扩展）
+                params.sort()
+                normalized_script = ','.join(params)
+                normalized_rule = line.replace(script_content, normalized_script)
+            else:
+                normalized_rule = line
+            rule_stats['adg_scriptlet'] = 1
+            return normalized_rule, rule_stats
+
+        # 3. 处理AdGuard CSS选择器规则（标准化空格）
+        if ADG_CSS.match(line):
+            # 移除多余空格（如"## .class" → "##.class"）
+            normalized_rule = re.sub(r'\s+', ' ', line).replace(' ##', '##').replace('## ', '##')
+            rule_stats['adg_css'] = 1
+            return normalized_rule, rule_stats
+
+        # 4. 处理含选项的AdGuard规则（标准化选项）
         if '$' in line:
-            # 提取选项部分
-            opt_part = line.split('$', 1)[-1] if '$' in line else ''
-            # 检测AdGuard专属选项
-            for opt in ADG_SPECIFIC_OPTIONS:
-                if opt_part.startswith(opt + '=') or re.search(r',%s=' % opt, opt_part):
-                    # 验证基础域名部分
-                    domain_part = line.split('$', 1)[0]
-                    if ADBLOCK_DOMAIN.match(domain_part) or PURE_DOMAIN.match(domain_part.lstrip('|')):
-                        # 分类统计
-                        if opt == 'dnsrewrite':
-                            rule_stats['adg_dnsrewrite'] = 1
-                        elif opt == 'redirect':
-                            rule_stats['adg_redirect'] = 1
-                        elif opt == 'replace':
-                            rule_stats['adg_replace'] = 1
-                        elif opt in ['client', 'server']:
-                            rule_stats['adg_client_server'] = 1
-                        return original_line, rule_stats
+            domain_part, opt_part = line.split('$', 1)
+            # 标准化域名部分（如"||example.com^"和"|example.com|"统一）
+            domain_part = self._normalize_domain(domain_part)
+            # 标准化选项部分（排序+等价替换）
+            opts = opt_part.split(',')
+            normalized_opts = []
+            for opt in opts:
+                opt = opt.strip()
+                if '=' in opt:
+                    k, v = opt.split('=', 1)
+                    k = k.lower()
+                    v = v.strip()
+                    # 选项值等价替换（如client=app1→client=app1，动作统一）
+                    if k in ['action', 'type']:
+                        v = OPTION_EQUIVALENTS.get(v.lower(), v)
+                    normalized_opts.append(f"{k}={v}")
+                else:
+                    # 无值选项（如"important"）
+                    normalized_opts.append(opt.lower())
+            # 按选项名排序（确保顺序不同但语义相同的规则一致）
+            normalized_opts.sort()
+            normalized_rule = f"{domain_part}${','.join(normalized_opts)}"
+            # 统计具体规则类型
+            if 'dnsrewrite=' in normalized_rule:
+                rule_stats['adg_dnsrewrite'] = 1
+            elif 'redirect=' in normalized_rule:
+                rule_stats['adg_redirect'] = 1
+            elif 'replace=' in normalized_rule:
+                rule_stats['adg_replace'] = 1
+            elif 'client=' in normalized_rule or 'server=' in normalized_rule:
+                rule_stats['adg_client_server'] = 1
+            elif 'csp=' in normalized_rule:
+                rule_stats['adg_csp'] = 1
+            return normalized_rule, rule_stats
 
-        # 3. 尝试AdBlock标准规则（含AdGuard兼容规则）
-        if ADBLOCK_DOMAIN.match(line):
-            domain_match = re.search(r'\|{1,2}([a-zA-Z0-9.-]+)[\^\/\|\$]', line)
-            if domain_match:
-                domain = domain_match.group(1)
-                if self._is_valid_domain(domain):
-                    return original_line, rule_stats
+        # 5. 处理基础AdBlock规则（标准化域名格式）
+        normalized_domain = self._normalize_domain(line)
+        if normalized_domain:
+            # 判断是否为标准AdBlock规则
+            if ADBLOCK_DOMAIN.match(normalized_domain) or PURE_DOMAIN.match(normalized_domain):
+                rule_stats['standard_adblock'] = 1
+                return normalized_domain, rule_stats
 
-        # 4. 尝试hosts格式
+        # 6. 处理Hosts规则（转换为AdBlock格式）
         hosts_match = HOSTS_LINE.match(line)
         if hosts_match:
-            domain_match = re.search(r'\s+([a-zA-Z0-9.-]+)$', line)
-            if domain_match:
-                domain = domain_match.group(1)
-                if self._is_valid_domain(domain):
-                    return f"||{domain}^", rule_stats
+            domain = hosts_match.group(2)
+            if self._is_valid_domain(domain):
+                normalized_rule = f"||{domain}^"
+                rule_stats['standard_adblock'] = 1
+                return normalized_rule, rule_stats
 
-        # 5. 尝试纯域名格式
-        if PURE_DOMAIN.match(line):
-            if self._is_valid_domain(line):
-                return f"||{line}^", rule_stats
+        # 未匹配的有效规则直接返回
+        return line, rule_stats
 
-        # 6. 尝试CSS选择器规则（AdGuard支持扩展选择器）
-        if self._is_css_selector(line):
-            return original_line, rule_stats
+    def _normalize_domain(self, domain_part: str) -> str:
+        """标准化域名部分（解决语义相同的不同写法）"""
+        domain = domain_part.strip()
+        if not domain:
+            return ""
 
-        # 7. 尝试网络过滤器规则（含AdGuard扩展通配符）
-        if self._is_network_filter(line):
-            return original_line, rule_stats
+        # 移除协议前缀（http://、https://）
+        domain = re.sub(r'^https?://', '', domain)
+        # 统一通配符格式（*.example.com → ||example.com）
+        domain = re.sub(r'^\*\.', '||', domain)
+        # 统一域名后缀（example.com| → ||example.com^）
+        domain = re.sub(r'\|$', '^', domain)
+        # 确保开头统一（|example.com → ||example.com）
+        if domain.startswith('|') and not domain.startswith('||'):
+            domain = f"|{domain}"
+        # 移除多余通配符（***example.com → *example.com）
+        domain = re.sub(r'\*+', '*', domain)
 
-        # 8. 尝试脚本注入规则（AdGuard支持扩展脚本）
-        if self._is_scriptlet_injection(line):
-            return original_line, rule_stats
-
-        return "", rule_stats
+        return domain if self._is_valid_domain(domain.lstrip('|@')) else ""
 
     def _is_valid_domain(self, domain: str) -> bool:
-        """验证域名有效性（兼容AdGuard的子域名规则）"""
+        """验证域名有效性（兼容AdGuard特殊格式）"""
         if not domain or domain in DOMAIN_BLACKLIST:
             return False
+
+        # 允许AdGuard通配符域名（如*example.com）
+        if '*' in domain:
+            # 过滤纯通配符（如"*"）
+            if domain.strip('*') == '':
+                return False
+            # 提取核心域名验证（如*example.com → example.com）
+            core_domain = re.sub(r'\*', '', domain)
+            if not core_domain:
+                return False
+            domain = core_domain
 
         if IP_ADDRESS.match(domain):
             return False
@@ -320,90 +387,58 @@ class AdblockMerger:
         if len(domain) < 4 or len(domain) > 253:
             return False
 
-        # 允许AdGuard的通配符前缀（如*.example.com）
-        if domain.startswith('*.'):
-            domain = domain[2:]  # 移除前缀后验证
-
         if '.' not in domain or domain.startswith('.') or domain.endswith('.'):
             return False
 
-        # 放宽标签验证（支持AdGuard的特殊域名格式）
+        # 验证域名标签（支持AdGuard允许的下划线）
         labels = domain.split('.')
         for label in labels:
             if len(label) > 63 or not label:
                 return False
-            # 允许标签包含下划线（AdGuard支持）
             if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9-_|]{0,61}[a-zA-Z0-9])?$', label):
                 return False
 
         return True
 
-    def _is_css_selector(self, line: str) -> bool:
-        """检查是否是CSS选择器规则（AdGuard支持扩展语法）"""
-        # AdGuard支持的增强CSS规则（如##+js()、##@media等）
-        if line.startswith(('##', '#@#')):
-            return True
-        # AdGuard的脚本注入选择器（##+js(...)）
-        if re.search(r'##\+js\([^)]+\)', line):
-            return True
-        return False
-
-    def _is_network_filter(self, line: str) -> bool:
-        """检查是否是网络过滤器规则（含AdGuard扩展）"""
-        # AdGuard支持的增强通配符和路径规则
-        if '*' in line and not line.startswith('!'):
-            return True
-        # AdGuard的URL路径过滤（如||example.com/path/*）
-        if re.search(r'^[a-zA-Z0-9*.-]+/[a-zA-Z0-9*.-]+', line):
-            return True
-        # 包含AdGuard特有选项的规则
-        if any(opt in line for opt in ADG_SPECIFIC_OPTIONS):
-            return True
-        return False
-
-    def _is_scriptlet_injection(self, line: str) -> bool:
-        """检查是否是脚本注入规则（AdGuard扩展）"""
-        # AdGuard的脚本注入（#%#//scriptlet('...')）
-        if line.startswith(('#%#', '#$#')):
-            return True
-        # AdGuard的扩展脚本（##+js(...)）
-        if re.search(r'##\+js\([^)]+\)', line):
-            return True
-        return False
+    def _deduplicate_rules(self, rules: List[str]) -> List[str]:
+        """语义级去重（基于标准化后的哈希）"""
+        seen_hashes = set()
+        unique_rules = []
+        for rule in rules:
+            rule_hash = self._rule_hash(rule)
+            if rule_hash not in seen_hashes:
+                seen_hashes.add(rule_hash)
+                unique_rules.append(rule)
+            else:
+                self.stats['duplicates_removed'] += 1
+        return unique_rules
 
     def _rule_hash(self, rule: str) -> str:
-        """生成规则哈希值（适配AdGuard选项）"""
-        # 标准化AdGuard规则：保留特有选项，排序选项参数
-        if rule.startswith(('@@||', '||', 'IP-CIDR', 'IP-CIDR6')) or '$' in rule:
-            # 分离域名和选项部分
-            if '$' in rule:
-                domain_part, opt_part = rule.split('$', 1)
-                # 解析并排序选项（确保相同选项不同顺序视为同一规则）
-                opts = opt_part.split(',')
-                sorted_opts = []
-                for opt in opts:
-                    # 对AdGuard特有选项（如client=xxx）保留原值，其他按key排序
-                    if '=' in opt:
-                        k, v = opt.split('=', 1)
-                        sorted_opts.append(f"{k}={v}")
-                    else:
-                        sorted_opts.append(opt)
-                # 按选项名排序（忽略值）
-                sorted_opts.sort(key=lambda x: x.split('=')[0] if '=' in x else x)
-                normalized = f"{domain_part}${','.join(sorted_opts)}"
-            else:
-                normalized = rule  # 无选项规则直接使用原值
-            return hashlib.sha256((normalized + HASH_SALT).encode('utf-8')).hexdigest()
+        """生成规则哈希（基于标准化后的值）"""
         return hashlib.sha256((rule + HASH_SALT).encode('utf-8')).hexdigest()
 
     def _write_output(self, rules: List[str]):
-        """写入输出文件（新增AdGuard规则标识）"""
-        rules.sort()
+        """写入输出文件（分类排序）"""
+        # 按规则类型排序（IP规则→脚本→CSS→普通规则）
+        def rule_sort_key(rule: str) -> Tuple[int, str]:
+            if rule.startswith(('IP-CIDR', 'IP-CIDR6')):
+                return (0, rule)  # IP规则优先
+            elif ADG_SCRIPTLET.search(rule):
+                return (1, rule)  # 脚本注入
+            elif ADG_CSS.match(rule):
+                return (2, rule)  # CSS选择器
+            elif any(opt in rule for opt in ADG_SPECIFIC_OPTIONS):
+                return (3, rule)  # AdGuard特殊选项
+            else:
+                return (4, rule)  # 普通规则
+
+        rules.sort(key=rule_sort_key)
 
         with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-            f.write('! 合并广告过滤规则（含AdGuard/AdGuard Home特有规则）\n')
+            f.write('! 合并广告过滤规则（支持AdGuard/AdGuard Home扩展语法）\n')
             f.write('! 生成时间: ' + time.strftime('%Y-%m-%d %H:%M:%S') + '\n')
             f.write('! 规则总数: ' + str(len(rules)) + '\n')
+            f.write('! 去重数量: ' + str(self.stats['duplicates_removed']) + '\n')
             f.write('! AdGuard DNS重写规则: ' + str(self.stats['adg_dnsrewrite']) + '\n')
             f.write('! AdGuard Home IP规则: ' + str(self.stats['adh_ip_rules']) + '\n')
             f.write('!\n')
