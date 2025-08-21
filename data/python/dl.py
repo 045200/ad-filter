@@ -55,7 +55,7 @@ ADBLOCK_URLS = [
         # 那个谁520广告hosts规则（注释保留）
         "https://raw.githubusercontent.com/qq5460168/EasyAds/refs/heads/main/adblock.txt",
         # 10007自动规则（注释保留）
-        "https://raw.githubusercontent.com/lingeringsound/10007_auto/adb.txt",
+        "https://raw.githubusercontent.com/lingeringsound/10007_auto/master/adb.txt",
         # 晴雅去广告规则（官方CDN）
         "https://raw.githubusercontent.com/790953214/qy-Ads-Rule/main/black.txt",
         # 海哥广告规则（官方CDN）
