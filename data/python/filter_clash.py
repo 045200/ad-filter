@@ -370,9 +370,6 @@ def write_output(rules: Set[str], output_format: str = "yaml"):
     # 根据格式写入文件
     if output_format == "yaml":
         with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-            f.write('# Mihomo 广告规则\n')
-            f.write('# 由AdBlock规则转换生成\n')
-            f.write('# 格式: YAML\n')
             f.write('payload:\n')
             for rule in sorted_rules:
                 f.write(f"  - {rule}\n")
