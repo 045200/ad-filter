@@ -25,7 +25,7 @@ TIMEOUT = 10  # 增加超时时间
 MAX_RETRIES = 3  # 增加重试次数
 RETRY_DELAY = 1.0  # 增加重试延迟
 HTTP_POOL_SIZE = 10
-MIN_FILE_SIZE = 1024  # 最小文件大小（字节）
+MIN_FILE_SIZE = 256  # 最小文件大小（字节）
 
 # 额外下载文件配置
 EXTRA_DOWNLOADS = {
