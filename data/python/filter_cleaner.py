@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Adblock规则清理工具 - 海外环境优化版"""
+"""Adblock规则清理工具 - 海外环境优化完整版（包含外部文件支持）"""
 
 import os
 import sys
@@ -15,48 +15,48 @@ import aiodns
 import ssl
 import certifi
 from pathlib import Path
-from typing import Tuple, List, Set, Dict, Optional
+from typing import Set, List, Optional, Dict, Tuple
 from urllib.parse import urlparse
 import json
 from datetime import datetime
 import psutil
-import gzip
-import shutil
+import random
 import ipaddress
 import maxminddb
+from collections import defaultdict
+import gzip
+import shutil
 
 
 class Config:
-    """配置：海外环境优化版"""
-    GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
-    BASE_DIR = Path(GITHUB_WORKSPACE)
-
-    # 输入输出目录
-    TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
+    """配置：海外环境优化完整版"""
+    BASE_DIR = Path(os.getenv('GITHUB_WORKSPACE', os.getcwd()))
+    TEMP_DIR = BASE_DIR / "tmp"
     OUTPUT_DIR = TEMP_DIR
     CLEANED_FILE = TEMP_DIR / "adblock_merged.txt"
-
-    # 备份文件
+    
+    # 外部文件路径
+    WHITELIST_FILE = BASE_DIR / "data" / "mod" / "domains.txt"
     INVALID_DOMAINS_BACKUP = BASE_DIR / "data" / "mod" / "adblock_update.txt"
     BACKUP_HISTORY_DIR = BASE_DIR / "data" / "mod" / "backups"
-    WHITELIST_FILE = BASE_DIR / "data" / "mod" / "domains.txt"
+    CHINA_IP_RANGES_FILE = BASE_DIR / "data" / "china_ip_ranges.txt"
+    GEOIP_DB_FILE = BASE_DIR / "data" / "GeoLite2-Country.mmdb"
 
-    # GitHub Actions 环境配置（海外优化）
+    # GitHub Actions 环境配置
+    DNS_WORKERS = 50
+    BATCH_SIZE = 1000
     MAX_WORKERS = 4
-    DNS_WORKERS = 50  # 降低DNS并发数，适应海外服务器
-    BATCH_SIZE = 1000  # 减小批量处理大小
-    MAX_MEMORY_PERCENT = 80
 
-    # DNS解析设置（延长超时和重试）
-    DNS_TIMEOUT = 5  # 延长超时时间
-    DNS_RETRIES = 3  # 增加重试次数
-    DNS_RETRY_DELAY = 2  # 延长重试间隔
+    # DNS解析设置
+    DNS_TIMEOUT = 5
+    DNS_RETRIES = 3
+    DNS_RETRY_DELAY = 2
 
-    # 多协议DNS服务器配置（强化国际DNS）
+    # DNS服务器配置
     DNS_SERVERS = {
         'global': {
             'doh': [
-                "https://1.1.1.1/dns-query",       # Cloudflare (优先)
+                "https://1.1.1.1/dns-query",       # Cloudflare
                 "https://dns.google/dns-query",    # Google
                 "https://doh.opendns.com/dns-query",
                 "https://doh.quad9.net/dns-query"  # Quad9
@@ -69,18 +69,13 @@ class Config:
         },
         'china': {
             'doh': [
-                # 海外环境下国内DNS可能不稳定，减少优先级
-                "https://doh.pub/dns-query",       # 相对稳定的国内DoH
+                "https://doh.pub/dns-query",       # 阿里云DoH
             ],
             'dot': [
-                "119.29.29.29",  # 腾讯DNSPod (相对稳定)
+                "119.29.29.29",  # 腾讯DNSPod
             ]
         }
     }
-
-    # 中国IP范围文件和GeoIP数据库
-    CHINA_IP_RANGES_FILE = BASE_DIR / "data" / "china_ip_ranges.txt"
-    GEOIP_DB_FILE = BASE_DIR / "data" / "GeoLite2-Country.mmdb"
 
     # 性能优化设置
     CACHE_TTL = 7200
@@ -91,28 +86,31 @@ class Config:
     PRESERVE_SCRIPT_RULES = True
     PRESERVE_REGEX_RULES = True
 
-    # 海外环境优化：放宽低频域名限制
-    DOMAIN_PRELOAD_LIMIT = 10000
-    SKIP_LOW_FREQUENCY_DOMAINS = False  # 关闭低频域名过滤
-    LOW_FREQUENCY_THRESHOLD = 1  # 若开启过滤，阈值设为1
+    # 海外环境优化
+    SKIP_LOW_FREQUENCY_DOMAINS = False
+    LOW_FREQUENCY_THRESHOLD = 1
+    
+    # DNS健康检查设置
+    DNS_HEALTH_CHECK_INTERVAL = 300
+    DNS_UNHEALTHY_THRESHOLD = 5
+    DNS_RECOVERY_THRESHOLD = 10
 
 
 class RegexPatterns:
     """Adblock语法模式"""
-    DOMAIN_EXTRACT = re.compile(r'^(?:@@)?\|{1,2}([\w.-]+)[\^\$\|\/]')
-    HOSTS_RULE = re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')
-    ADBLOCK_OPTIONS = re.compile(r'\$[a-zA-Z0-9~,=+_-]+')
+    DOMAIN_EXTRACT = re.compile(r'^\|{1,2}([\w.-]+)[\^\$\|\/]')
+    HOSTS_RULE = re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1)\s+([\w.-]+)$')
     COMMENT = re.compile(r'^[!#]')
     EMPTY_LINE = re.compile(r'^\s*$')
-    IP_ADDRESS = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
     ELEMENT_HIDING = re.compile(r'.*##.*')
     SCRIPTLET = re.compile(r'.*#\?#.*')
     GENERIC = re.compile(r'^/.*/$')
+    ADBLOCK_OPTIONS = re.compile(r'\$[a-zA-Z0-9~,=+_-]+')
     ADGUARD_SCRIPT = re.compile(r'.*\$.*script.*')
 
 
 def setup_logger():
-    logger = logging.getLogger('AdblockCleanerCI')
+    logger = logging.getLogger('AdblockCleaner')
     logger.setLevel(logging.INFO)
     handler = logging.StreamHandler(sys.stdout)
     formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
@@ -201,26 +199,142 @@ class ResourceMonitor:
         process = psutil.Process(os.getpid())
         memory_mb = process.memory_info().rss / 1024 / 1024
         self.peak_memory = max(self.peak_memory, memory_mb)
+        
+        # 获取CPU使用率
+        try:
+            cpu_percent = process.cpu_percent()
+            return memory_mb, cpu_percent
+        except:
+            return memory_mb, 0.0
 
-        total_memory = psutil.virtual_memory().total / 1024 / 1024
-        memory_percent = (memory_mb / total_memory) * 100
-
-        if memory_percent > Config.MAX_MEMORY_PERCENT:
-            logger.warning(f"内存使用率过高: {memory_percent:.1f}% ({memory_mb:.1f}MB)")
-            return False
-        return True
-
-    def log_resource_usage(self):
+    def log_resource_usage(self, batch_num=None, total_batches=None):
         """记录资源使用情况"""
-        process = psutil.Process(os.getpid())
-        memory_mb = process.memory_info().rss / 1024 / 1024
-        cpu_percent = process.cpu_percent()
+        memory_mb, cpu_percent = self.check_memory_usage()
         elapsed = time.time() - self.start_time
-        logger.info(f"资源使用 - 内存: {memory_mb:.1f}MB, CPU: {cpu_percent}%, 时间: {elapsed:.1f}s")
+        
+        if batch_num and total_batches:
+            if batch_num % 5 == 0 or batch_num == total_batches:
+                logger.info(f"批次 {batch_num}/{total_batches} - 内存: {memory_mb:.1f}MB, CPU: {cpu_percent:.1f}%, 时间: {elapsed:.1f}s")
+        else:
+            logger.info(f"资源使用 - 内存: {memory_mb:.1f}MB, CPU: {cpu_percent:.1f}%, 时间: {elapsed:.1f}s")
 
 
-class HighVolumeDNSValidator:
-    """高容量DNS验证器（海外环境优化）"""
+class DNSHealthMonitor:
+    """DNS健康状态监控器"""
+    def __init__(self):
+        self.dns_health_status = {}
+        self.last_health_check = 0
+        
+    def update_server_health(self, server: str, success: bool, response_time: float = 0.0):
+        """更新DNS服务器健康状态"""
+        if server not in self.dns_health_status:
+            self.dns_health_status[server] = {
+                'success_count': 0,
+                'failure_count': 0,
+                'avg_response_time': 0.0,
+                'last_checked': time.time(),
+                'is_healthy': True
+            }
+            
+        health = self.dns_health_status[server]
+        health['last_checked'] = time.time()
+        
+        if success:
+            health['success_count'] += 1
+            health['failure_count'] = max(0, health['failure_count'] - 1)
+            
+            # 更新平均响应时间
+            if health['avg_response_time'] == 0:
+                health['avg_response_time'] = response_time
+            else:
+                health['avg_response_time'] = (health['avg_response_time'] * 0.7 + response_time * 0.3)
+                
+            # 检查是否恢复健康
+            if not health['is_healthy'] and health['success_count'] >= Config.DNS_RECOVERY_THRESHOLD:
+                health['is_healthy'] = True
+                logger.debug(f"DNS服务器 {server} 已恢复健康")
+        else:
+            health['failure_count'] += 1
+            health['success_count'] = max(0, health['success_count'] - 1)
+            
+            # 检查是否需要标记为不健康
+            if health['is_healthy'] and health['failure_count'] >= Config.DNS_UNHEALTHY_THRESHOLD:
+                health['is_healthy'] = False
+                logger.warning(f"DNS服务器 {server} 被标记为不健康")
+                
+    def get_healthy_servers(self, servers: List[str]) -> List[str]:
+        """从服务器列表中筛选健康的服务器"""
+        healthy_servers = []
+        
+        for server in servers:
+            if server not in self.dns_health_status:
+                healthy_servers.append(server)
+            elif self.dns_health_status[server]['is_healthy']:
+                healthy_servers.append(server)
+                
+        # 如果没有健康的服务器，返回所有服务器
+        if not healthy_servers:
+            return servers
+            
+        return healthy_servers
+    
+    def should_check_health(self) -> bool:
+        """检查是否需要执行健康检查"""
+        current_time = time.time()
+        if current_time - self.last_health_check > Config.DNS_HEALTH_CHECK_INTERVAL:
+            self.last_health_check = current_time
+            return True
+        return False
+    
+    def get_server_stats(self) -> Dict:
+        """获取所有DNS服务器的统计信息"""
+        return self.dns_health_status
+
+
+class DomainCategorizer:
+    """域名分类器"""
+    def __init__(self):
+        self.category_cache = {}
+        self.cache_size = 10000
+        
+        # 常见域名分类规则
+        self.category_patterns = {
+            'ad': [r'ad(s?)\.', r'advert', r'analytics', r'tracking', r'track(er)?\.'],
+            'social': [r'facebook', r'twitter', r'instagram', r'linkedin', r'pinterest'],
+            'cdn': [r'cdn\.', r'cloudfront', r'akamai', r'fastly', r'cdn77'],
+            'china': [r'\.cn$', r'\.com\.cn$', r'baidu', r'tencent', r'alibaba', r'\.qq\.'],
+            'google': [r'google', r'gstatic', r'googleapis', r'googletagmanager'],
+            'microsoft': [r'microsoft', r'azure', r'windows\.net', r'live\.com'],
+            'apple': [r'apple', r'icloud', r'appple-dns'],
+            'amazon': [r'amazon', r'aws', r'cloudfront']
+        }
+        
+    def categorize_domain(self, domain: str) -> List[str]:
+        """对域名进行分类"""
+        if domain in self.category_cache:
+            return self.category_cache[domain]
+            
+        categories = []
+        
+        for category, patterns in self.category_patterns.items():
+            for pattern in patterns:
+                if re.search(pattern, domain, re.IGNORECASE):
+                    categories.append(category)
+                    break
+                    
+        # 缓存结果
+        if len(self.category_cache) >= self.cache_size:
+            # 简单的LRU缓存淘汰策略
+            oldest_key = next(iter(self.category_cache))
+            del self.category_cache[oldest_key]
+            
+        self.category_cache[domain] = categories
+        
+        return categories
+
+
+class DNSValidator:
+    """DNS验证器（完整功能版）"""
     def __init__(self):
         self.domain_blacklist = {
             'localhost', 'localdomain', 'example.com', 'example.org', 
@@ -233,8 +347,10 @@ class HighVolumeDNSValidator:
         self.invalid_domains = set()
         self.cache_timestamps = {}
         self.domain_strategies = {}
-        self.domain_frequency = {}  # 域名频率统计
+        self.domain_frequency = {}
         self.geoip_classifier = GeoIPClassifier()
+        self.dns_health_monitor = DNSHealthMonitor()
+        self.domain_categorizer = DomainCategorizer()
 
         self.known_invalid_domains = self._load_known_invalid_domains()
         self.whitelist_domains = self._load_whitelist_domains()
@@ -247,7 +363,7 @@ class HighVolumeDNSValidator:
         self.session = None
         self.connector = None
 
-        # 性能统计
+        # 统计信息
         self.stats = {
             'doh_queries': 0,
             'dot_queries': 0,
@@ -257,7 +373,11 @@ class HighVolumeDNSValidator:
             'whitelist_hits': 0,
             'china_domains': 0,
             'global_domains': 0,
-            'skipped_low_frequency': 0
+            'skipped_low_frequency': 0,
+            'doh_failures': 0,
+            'dot_failures': 0,
+            'dns_failures': 0,
+            'domain_categories': defaultdict(int)
         }
 
     def _load_known_invalid_domains(self) -> Set[str]:
@@ -293,7 +413,7 @@ class HighVolumeDNSValidator:
             except Exception as e:
                 logger.error(f"加载白名单域名失败: {str(e)}")
         else:
-            logger.info(f"白名单文件不存在: {whitelist_file}")
+            logger.warning(f"白名单文件不存在: {whitelist_file}")
         return whitelist
 
     def _preload_whitelist_to_cache(self):
@@ -318,14 +438,22 @@ class HighVolumeDNSValidator:
 
         frequency = self.domain_frequency.get(domain, 0)
         result = frequency <= Config.LOW_FREQUENCY_THRESHOLD
-        if result:
-            logger.debug(f"低频域名: {domain} (出现次数: {frequency})")
         return result
 
     async def determine_domain_strategy(self, domain: str) -> str:
         """确定域名的解析策略（国内/国际）"""
         if domain in self.domain_strategies:
             return self.domain_strategies[domain]
+
+        # 使用域名分类器辅助判断
+        categories = self.domain_categorizer.categorize_domain(domain)
+        for category in categories:
+            self.stats['domain_categories'][category] += 1
+
+        # 如果被分类为中国域名，优先使用中国策略
+        if 'china' in categories:
+            self.domain_strategies[domain] = 'china'
+            return 'china'
 
         # 常见中国域名后缀
         china_tlds = {'.cn', '.com.cn', '.net.cn', '.org.cn', '.gov.cn', '.edu.cn'}
@@ -399,7 +527,7 @@ class HighVolumeDNSValidator:
             return False
         if re.search(r'[^a-zA-Z0-9.-]', domain):
             return False
-        if RegexPatterns.IP_ADDRESS.match(domain):
+        if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', domain):
             return False
         parts = domain.split('.')
         for part in parts:
@@ -411,11 +539,38 @@ class HighVolumeDNSValidator:
         """带重试的DNS解析"""
         for attempt in range(max_retries):
             try:
-                return await func(*args, **kwargs)
+                start_time = time.time()
+                result = await func(*args, **kwargs)
+                response_time = time.time() - start_time
+                
+                # 更新健康状态
+                if hasattr(func, '__name__'):
+                    func_name = func.__name__
+                    if 'doh' in func_name:
+                        server = args[1] if len(args) > 1 else 'unknown'
+                        self.dns_health_monitor.update_server_health(server, True, response_time)
+                    elif 'dot' in func_name:
+                        server = args[1] if len(args) > 1 else 'unknown'
+                        self.dns_health_monitor.update_server_health(server, True, response_time)
+                
+                return result
             except (asyncio.TimeoutError, aiodns.error.DNSError, aiohttp.ClientError) as e:
                 if attempt < max_retries - 1:
                     await asyncio.sleep(Config.DNS_RETRY_DELAY * (attempt + 1))
                 else:
+                    # 更新健康状态
+                    if hasattr(func, '__name__'):
+                        func_name = func.__name__
+                        if 'doh' in func_name:
+                            server = args[1] if len(args) > 1 else 'unknown'
+                            self.dns_health_monitor.update_server_health(server, False)
+                            self.stats['doh_failures'] += 1
+                        elif 'dot' in func_name:
+                            server = args[1] if len(args) > 1 else 'unknown'
+                            self.dns_health_monitor.update_server_health(server, False)
+                            self.stats['dot_failures'] += 1
+                        elif 'standard' in func_name:
+                            self.stats['dns_failures'] += 1
                     return False
             except Exception:
                 return False
@@ -443,12 +598,12 @@ class HighVolumeDNSValidator:
             # 临时切换DNS服务器
             original_nameservers = self.resolver.nameservers
             self.resolver.nameservers = [server]
-            
+
             result = await asyncio.wait_for(
                 self.resolver.query(domain, 'A'),
                 timeout=Config.DNS_TIMEOUT
             )
-            
+
             # 恢复原始设置
             self.resolver.nameservers = original_nameservers
             return len(result) > 0
@@ -471,22 +626,32 @@ class HighVolumeDNSValidator:
 
     async def resolve_domain(self, domain: str, strategy: str) -> bool:
         """根据策略解析域名"""
+        # 根据DNS健康状态选择服务器
+        doh_servers = Config.DNS_SERVERS[strategy]['doh']
+        dot_servers = Config.DNS_SERVERS[strategy]['dot']
+        
+        # 筛选健康的服务器
+        healthy_doh_servers = self.dns_health_monitor.get_healthy_servers(doh_servers)
+        healthy_dot_servers = self.dns_health_monitor.get_healthy_servers(dot_servers)
+        
+        # 随机排序健康的服务器，实现负载均衡
+        random.shuffle(healthy_doh_servers)
+        random.shuffle(healthy_dot_servers)
+        
         # 1. 首先尝试标准DNS
         result = await self.resolve_with_retry(self.resolve_via_standard_dns, domain)
         if result:
             return True
-
-        # 2. 尝试DoH协议（根据策略选择服务器）
-        doh_servers = Config.DNS_SERVERS[strategy]['doh']
-        for doh_server in doh_servers:
+            
+        # 2. 尝试DoH协议
+        for doh_server in healthy_doh_servers:
             result = await self.resolve_with_retry(self.resolve_via_doh, domain, doh_server)
             if result:
                 return True
             await asyncio.sleep(0.01)
-
-        # 3. 最后尝试DoT协议
-        dot_servers = Config.DNS_SERVERS[strategy]['dot']
-        for dot_server in dot_servers:
+            
+        # 3. 尝试DoT协议
+        for dot_server in healthy_dot_servers:
             result = await self.resolve_with_retry(self.resolve_via_dot, domain, dot_server)
             if result:
                 return True
@@ -528,6 +693,10 @@ class HighVolumeDNSValidator:
         if self.is_low_frequency_domain(domain):
             self.stats['skipped_low_frequency'] += 1
             return False
+
+        # 定期检查DNS健康状态
+        if self.dns_health_monitor.should_check_health():
+            logger.debug("执行DNS健康检查...")
 
         # 确定解析策略
         strategy = await self.determine_domain_strategy(domain)
@@ -583,23 +752,20 @@ class HighVolumeDNSValidator:
         return await self.is_domain_resolvable(domain)
 
 
-class HighVolumeAdblockCleaner:
+class AdblockCleaner:
     def __init__(self):
         Config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
         Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         Config.BACKUP_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 
         self.regex = RegexPatterns()
-        self.validator = HighVolumeDNSValidator()
+        self.validator = DNSValidator()
         self.resource_monitor = ResourceMonitor()
 
     async def run(self):
         start_time = time.time()
-        logger.info("===== Adblock规则清理工具（海外环境优化版） =====")
-        logger.info("GitHub CI环境: 海外节点适配")
+        logger.info("===== Adblock规则清理工具（海外环境优化完整版） =====")
         logger.info(f"并发设置: DNS Workers={Config.DNS_WORKERS}, 批量大小={Config.BATCH_SIZE}")
-        logger.info(f"内存限制: {Config.MAX_MEMORY_PERCENT}%")
-        logger.info(f"低频域名跳过: {Config.SKIP_LOW_FREQUENCY_DOMAINS}")
 
         await self.validator.init_session()
 
@@ -611,7 +777,7 @@ class HighVolumeAdblockCleaner:
             logger.error("未找到输入文件，退出")
             return
 
-        logger.info(f"发现{len(input_files)}个文件，开始处理...")
+        logger.info(f"发现 {len(input_files)} 个文件，开始处理...")
 
         for file_path in input_files:
             await self._process_file(file_path)
@@ -631,6 +797,17 @@ class HighVolumeAdblockCleaner:
         logger.info(f"白名单命中: {self.validator.stats['whitelist_hits']}")
         logger.info(f"缓存命中: {self.validator.stats['cache_hits']}")
 
+        # 输出DNS健康状态
+        dns_stats = self.validator.dns_health_monitor.get_server_stats()
+        healthy_servers = len([s for s in dns_stats.values() if s['is_healthy']])
+        logger.info(f"DNS服务器健康状态: {healthy_servers}/{len(dns_stats)} 健康")
+        
+        # 输出域名分类统计
+        if self.validator.stats['domain_categories']:
+            logger.info("域名分类统计:")
+            for category, count in sorted(self.validator.stats['domain_categories'].items(), key=lambda x: x[1], reverse=True)[:5]:
+                logger.info(f"  {category}: {count}")
+
         self._save_stats(start_time, elapsed)
 
     async def _process_file(self, file_path: Path):
@@ -639,11 +816,11 @@ class HighVolumeAdblockCleaner:
             with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                 lines = f.readlines()
         except Exception as e:
-            logger.error(f"读取文件{file_path.name}出错: {str(e)}")
+            logger.error(f"读取文件 {file_path.name} 出错: {str(e)}")
             return
 
         # 第一遍：提取所有域名并统计频率
-        logger.info("第一遍：统计域名频率...")
+        logger.info("提取域名中...")
         all_domains = self._extract_domains_from_lines(lines)
         logger.info(f"从文件中提取到 {len(all_domains)} 个域名")
 
@@ -652,7 +829,7 @@ class HighVolumeAdblockCleaner:
             self.validator.track_domain_frequency(domain)
 
         # 第二遍：验证域名
-        logger.info("第二遍：验证域名...")
+        logger.info("验证域名中...")
         valid_domains = set()
         domain_list = list(all_domains)
 
@@ -661,20 +838,18 @@ class HighVolumeAdblockCleaner:
             batch_num = i//Config.BATCH_SIZE + 1
             total_batches = (len(domain_list)-1)//Config.BATCH_SIZE + 1
 
-            logger.info(f"处理域名批次 {batch_num}/{total_batches} ({len(batch)} 个域名)")
+            if batch_num % 5 == 0 or batch_num == total_batches:
+                logger.info(f"处理域名批次 {batch_num}/{total_batches} ({len(batch)} 个域名)")
+            
             batch_valid_domains = await self._validate_domains_batch(batch)
             valid_domains.update(batch_valid_domains)
 
-            if not self.resource_monitor.check_memory_usage():
-                logger.warning("内存使用超过限制，暂停处理")
-                await asyncio.sleep(1)
-
-            self.resource_monitor.log_resource_usage()
+            self.resource_monitor.log_resource_usage(batch_num, total_batches)
 
         logger.info(f"有效域名: {len(valid_domains)} 个，无效域名: {len(all_domains) - len(valid_domains)} 个")
 
         # 第三遍：过滤规则
-        logger.info("第三遍：过滤规则...")
+        logger.info("过滤规则中...")
         cleaned_lines = self._filter_rules(lines, valid_domains)
         output_path = Config.CLEANED_FILE
 
@@ -690,6 +865,13 @@ class HighVolumeAdblockCleaner:
             line = line.strip()
             if self.regex.EMPTY_LINE.match(line) or self.regex.COMMENT.match(line):
                 continue
+            
+            # 跳过元素隐藏规则和脚本规则
+            if (self.regex.ELEMENT_HIDING.match(line) or 
+                self.regex.SCRIPTLET.match(line) or 
+                self.regex.GENERIC.match(line)):
+                continue
+                
             domain = self._extract_domain_from_rule(line)
             if domain:
                 domains.add(domain)
@@ -697,6 +879,7 @@ class HighVolumeAdblockCleaner:
 
     def _extract_domain_from_rule(self, rule: str) -> Optional[str]:
         """从单条规则中提取域名"""
+        # Adblock语法
         domain_match = self.regex.DOMAIN_EXTRACT.match(rule)
         if domain_match:
             domain = domain_match.group(1)
@@ -704,10 +887,12 @@ class HighVolumeAdblockCleaner:
                 domain = domain.split('$')[0]
             return domain
 
+        # Hosts语法
         hosts_match = self.regex.HOSTS_RULE.match(rule)
         if hosts_match:
             return hosts_match.group(1)
 
+        # URL格式
         if rule.startswith(('http://', 'https://')):
             try:
                 parsed = urlparse(rule)
@@ -731,7 +916,6 @@ class HighVolumeAdblockCleaner:
             for j, result in enumerate(results):
                 domain = domains[i+j]
                 if isinstance(result, Exception):
-                    logger.debug(f"验证域名 {domain} 出错: {str(result)}")
                     continue
                 elif result:
                     valid_domains.add(domain)
@@ -745,16 +929,19 @@ class HighVolumeAdblockCleaner:
             original_line = line
             line = line.strip()
 
+            # 保留注释和空行
             if self.regex.EMPTY_LINE.match(line) or self.regex.COMMENT.match(line):
                 cleaned_lines.append(original_line)
                 continue
 
+            # 保留元素隐藏规则、脚本规则和通用规则
             if (Config.PRESERVE_ELEMENT_HIDING and self.regex.ELEMENT_HIDING.match(line)) or \
                (Config.PRESERVE_SCRIPT_RULES and (self.regex.SCRIPTLET.match(line) or self.regex.ADGUARD_SCRIPT.match(line))) or \
                (Config.PRESERVE_REGEX_RULES and self.regex.GENERIC.match(line)):
                 cleaned_lines.append(original_line)
                 continue
 
+            # 检查域名是否有效
             domain = self._extract_domain_from_rule(line)
             if not domain or domain in valid_domains:
                 cleaned_lines.append(original_line)
@@ -822,11 +1009,20 @@ class HighVolumeAdblockCleaner:
             "china_domains": self.validator.stats['china_domains'],
             "global_domains": self.validator.stats['global_domains'],
             "skipped_low_frequency": self.validator.stats['skipped_low_frequency'],
-            "dns_query_stats": self.validator.stats,
-            "ci_environment": "GitHub Actions (海外优化)",
+            "whitelist_hits": self.validator.stats['whitelist_hits'],
+            "cache_hits": self.validator.stats['cache_hits'],
+            "dns_query_stats": {
+                'doh_queries': self.validator.stats['doh_queries'],
+                'dot_queries': self.validator.stats['dot_queries'],
+                'dns_queries': self.validator.stats['dns_queries'],
+                'doh_failures': self.validator.stats['doh_failures'],
+                'dot_failures': self.validator.stats['dot_failures'],
+                'dns_failures': self.validator.stats['dns_failures'],
+            },
+            "domain_categories": dict(self.validator.stats['domain_categories']),
+            "ci_environment": "GitHub Actions (海外优化完整版)",
             "concurrency_settings": {
                 "dns_workers": Config.DNS_WORKERS,
-                "cpu_workers": Config.MAX_WORKERS,
                 "batch_size": Config.BATCH_SIZE
             }
         }
@@ -839,10 +1035,10 @@ class HighVolumeAdblockCleaner:
 
 async def main():
     try:
-        cleaner = HighVolumeAdblockCleaner()
+        cleaner = AdblockCleaner()
         await cleaner.run()
     except Exception as e:
-        logger.critical(f"工具运行失败: {str(e)}", exc_info=True)
+        logger.critical(f"工具运行失败: {str(e)}")
         sys.exit(1)
 
 
