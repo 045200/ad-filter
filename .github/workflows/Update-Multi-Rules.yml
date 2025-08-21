@@ -101,7 +101,7 @@ jobs:
       - name: Run adblock cleaner
         if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
-          python ${{ env.PYTHON_SCRIPTS }}/adblock_cleaner_ci.py  # 路径与第一个工作流保持一致
+          python ${{ env.PYTHON_SCRIPTS }}/adblock_clean.py  # 路径与第一个工作流保持一致
 
       # 9. 生成多格式规则（multi分支特有）
       - name: Generate multi-format rules
