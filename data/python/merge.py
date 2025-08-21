@@ -13,12 +13,19 @@ from pathlib import Path
 from collections import defaultdict, OrderedDict
 from typing import List, Generator, Set, Tuple, Dict, Optional
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, auto
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 # 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("adblock_merger.log", encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 logger = logging.getLogger(__name__)
 
 # 配置参数
@@ -26,6 +33,8 @@ GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
 BASE_DIR = Path(GITHUB_WORKSPACE)
 TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
 OUTPUT_FILE = TEMP_DIR / "adblock_merged.txt"
+CACHE_DIR = TEMP_DIR / "cache"
+CACHE_DIR.mkdir(exist_ok=True)
 
 MAX_WORKERS = 4
 CHUNK_SIZE = 10000
@@ -40,20 +49,22 @@ DOMAIN_BLACKLIST = {
 }
 
 MAX_RULES_IN_MEMORY = 2000000
-HASH_SALT = "adblock_salt_2024_v4"
+HASH_SALT = "adblock_salt_2024_v5"
 
 # 规则类型枚举
 class RuleType(Enum):
-    IP_RULE = 1
-    SCRIPT_RULE = 2
-    CSS_RULE = 3
-    OPTION_RULE = 4
-    STANDARD_RULE = 5
-    HOSTS_RULE = 6
-    MODIFIER_RULE = 7
-    NETWORK_RULE = 8
-    COSMETIC_RULE = 9
-    UNKNOWN = 10
+    IP_RULE = auto()
+    SCRIPT_RULE = auto()
+    CSS_RULE = auto()
+    OPTION_RULE = auto()
+    STANDARD_RULE = auto()
+    HOSTS_RULE = auto()
+    MODIFIER_RULE = auto()
+    NETWORK_RULE = auto()
+    COSMETIC_RULE = auto()
+    EXCEPTION_RULE = auto()  # 新增：例外规则
+    DNS_REWRITE_RULE = auto()  # 新增：DNS重写规则
+    UNKNOWN = auto()
 
 # 规则数据类
 @dataclass
@@ -62,7 +73,8 @@ class RuleInfo:
     normalized: str
     rule_type: RuleType
     domain: str = ""
-    options: List[str] = None
+    options: Dict[str, str] = None
+    priority: int = 0  # 优先级，用于排序
 
 # 预编译正则表达式
 COMMENT = re.compile(r'^[!#]')
@@ -81,7 +93,7 @@ PURE_DOMAIN = re.compile(rf'^({DOMAIN_PATTERN}\.)+[a-zA-Z]{{2,}}$')
 ADB_EXCEPTION = re.compile(r'^@@')
 ADB_OPTIONS = re.compile(r'\$[a-zA-Z0-9~,=+_:-]+')
 ADB_DOMAIN_ANCHOR = re.compile(r'^\|{1,2}[^\|]')
-ADB_END_ANCHOR = re.compile(r'[\^\|]$')
+ADB_END_ANCHOR = re.compile(r'[\^\|\*].*$')
 
 # AdGuard/AdGuard Home 特有语法正则
 ADG_DNSREWRITE = re.compile(r'^\|\|.*\$dnsrewrite=')
@@ -96,6 +108,8 @@ ADG_CSS = re.compile(r'^##|^#@#')
 ADG_MODIFIER = re.compile(r'^.*\$[a-zA-Z0-9_]+(=[^,]+)?(,[a-zA-Z0-9_]+(=[^,]+)?)*$')
 ADG_NETWORK = re.compile(r'^\|\|.*\^')
 ADG_COSMETIC = re.compile(r'^##.*')
+ADG_DOCUMENT = re.compile(r'.*\$document')
+ADG_IMPORTANT = re.compile(r'.*\$important')
 
 # 选项语义等价映射
 OPTION_EQUIVALENTS = {
@@ -104,11 +118,35 @@ OPTION_EQUIVALENTS = {
     'allow': 'unblock',
     'permit': 'unblock',
     'stylesheet': 'css',
-    'script': 'js'
+    'script': 'js',
+    'xmlhttprequest': 'xhr',
+    'subdocument': 'frame'
 }
 
 # 关键选项（保持顺序）
-KEY_OPTIONS = {'domain', 'denyallow', 'important', 'cookie', 'removeparam', 'ctag'}
+KEY_OPTIONS = {'domain', 'denyallow', 'important', 'cookie', 'removeparam', 'ctag', 'client', 'server'}
+
+# 修饰符优先级（数值越低优先级越高）
+MODIFIER_PRIORITY = {
+    'important': 10,
+    'document': 20,
+    'csp': 30,
+    'redirect': 40,
+    'removeparam': 50,
+    'cookie': 60,
+    'network': 70,
+    'script': 80,
+    'stylesheet': 90,
+    'subdocument': 100,
+    'image': 110,
+    'object': 120,
+    'font': 130,
+    'media': 140,
+    'ping': 150,
+    'websocket': 160,
+    'webrtc': 170,
+    'other': 1000
+}
 
 
 def detect_encoding(file_path: Path) -> str:
@@ -181,6 +219,8 @@ class AdblockMerger:
             RuleType.MODIFIER_RULE: "修饰符规则",
             RuleType.NETWORK_RULE: "网络规则",
             RuleType.COSMETIC_RULE: "元素隐藏规则",
+            RuleType.EXCEPTION_RULE: "例外规则",
+            RuleType.DNS_REWRITE_RULE: "DNS重写规则",
             RuleType.UNKNOWN: "未知类型规则"
         }
 
@@ -203,7 +243,7 @@ class AdblockMerger:
         logger.info("规则统计:")
         for rule_type, count in self.stats.items():
             if count > 0 and rule_type != 'duplicates_removed':
-                logger.info(f"  {rule_type}: {count}")
+                logger.info(f"  {rule_type.replace('_', ' ')}: {count}")
                 
         self._write_output()
 
@@ -286,12 +326,19 @@ class AdblockMerger:
         # 提取域名（如果适用）
         domain = self._extract_domain(normalized, rule_type)
         
+        # 提取选项（如果适用）
+        options = self._extract_options(normalized) if rule_type == RuleType.OPTION_RULE else None
+        
+        # 计算优先级
+        priority = self._calculate_priority(normalized, rule_type, options)
+        
         return RuleInfo(
             raw_text=original_line,
             normalized=normalized,
             rule_type=rule_type,
             domain=domain,
-            options=self._extract_options(normalized) if rule_type == RuleType.OPTION_RULE else None
+            options=options,
+            priority=priority
         )
 
     def _remove_inline_comments(self, line: str) -> str:
@@ -306,40 +353,54 @@ class AdblockMerger:
 
     def _classify_and_normalize(self, line: str) -> Tuple[RuleType, str]:
         """分类并标准化规则"""
-        # 1. 处理AdGuard Home IP规则
+        # 1. 处理例外规则 (优先级最高)
+        if ADB_EXCEPTION.match(line):
+            return self._normalize_exception_rule(line)
+            
+        # 2. 处理AdGuard Home IP规则
         if ADH_IP_RULE.match(line):
             return self._normalize_ip_rule(line)
             
-        # 2. 处理脚本规则
+        # 3. 处理DNS重写规则
+        if ADG_DNSREWRITE.search(line):
+            return RuleType.DNS_REWRITE_RULE, self._normalize_dns_rewrite_rule(line)
+            
+        # 4. 处理脚本规则
         if ADG_SCRIPTLET.search(line):
             return RuleType.SCRIPT_RULE, self._normalize_script_rule(line)
             
-        # 3. 处理CSS规则
+        # 5. 处理CSS规则
         if ADG_CSS.match(line):
             return RuleType.CSS_RULE, self._normalize_css_rule(line)
             
-        # 4. 处理元素隐藏规则
+        # 6. 处理元素隐藏规则
         if ADG_COSMETIC.match(line):
             return RuleType.COSMETIC_RULE, self._normalize_cosmetic_rule(line)
             
-        # 5. 处理含选项的规则
+        # 7. 处理含选项的规则
         if ADG_MODIFIER.match(line) and '$' in line:
             return self._normalize_option_rule(line)
             
-        # 6. 处理网络规则
+        # 8. 处理网络规则
         if ADG_NETWORK.match(line):
             return RuleType.NETWORK_RULE, self._normalize_network_rule(line)
             
-        # 7. 处理Hosts规则
+        # 9. 处理Hosts规则
         if HOSTS_LINE.match(line):
             return RuleType.HOSTS_RULE, self._normalize_hosts_rule(line)
             
-        # 8. 处理标准AdBlock规则
+        # 10. 处理标准AdBlock规则
         if ADBLOCK_DOMAIN.match(line) or PURE_DOMAIN.match(line):
             return RuleType.STANDARD_RULE, self._normalize_standard_rule(line)
             
-        # 9. 未知规则（保留但标准化）
+        # 11. 未知规则（保留但标准化）
         return RuleType.UNKNOWN, self._normalize_unknown_rule(line)
+
+    def _normalize_exception_rule(self, line: str) -> Tuple[RuleType, str]:
+        """标准化例外规则"""
+        # 移除@@前缀，标准化剩余部分
+        normalized = self._normalize_domain_part(line[2:])
+        return RuleType.EXCEPTION_RULE, f"@@{normalized}" if normalized else line
 
     def _normalize_ip_rule(self, line: str) -> Tuple[RuleType, str]:
         """标准化IP规则"""
@@ -349,10 +410,15 @@ class AdblockMerger:
             ip_type = ip_type.upper()
             action = action.strip().lower()
             action = OPTION_EQUIVALENTS.get(action, action)
-            normalized = f"{ip_type}:{ip_range},{action.upper()}"
+            normalized = f"{ip_type}:{ip_range.strip()},{action.upper()}"
             return RuleType.IP_RULE, normalized
         except:
             return RuleType.UNKNOWN, line
+
+    def _normalize_dns_rewrite_rule(self, line: str) -> str:
+        """标准化DNS重写规则（保持参数顺序）"""
+        # 只做最小标准化，保持参数顺序
+        return re.sub(r'\s+', ' ', line).strip()
 
     def _normalize_script_rule(self, line: str) -> str:
         """标准化脚本规则（保持参数顺序）"""
@@ -464,7 +530,7 @@ class AdblockMerger:
 
     def _extract_domain(self, rule: str, rule_type: RuleType) -> str:
         """从规则中提取域名"""
-        if rule_type in [RuleType.STANDARD_RULE, RuleType.NETWORK_RULE, RuleType.OPTION_RULE]:
+        if rule_type in [RuleType.STANDARD_RULE, RuleType.NETWORK_RULE, RuleType.OPTION_RULE, RuleType.EXCEPTION_RULE]:
             # 提取域名部分
             domain_part = rule.split('$')[0] if '$' in rule else rule
             domain_part = re.sub(r'^@@\|{1,2}', '', domain_part)  # 移除例外标记和锚点
@@ -476,12 +542,54 @@ class AdblockMerger:
                 
         return ""
 
-    def _extract_options(self, rule: str) -> List[str]:
+    def _extract_options(self, rule: str) -> Dict[str, str]:
         """从规则中提取选项"""
+        options = {}
         if '$' in rule:
             _, opt_part = rule.split('$', 1)
-            return [opt.strip() for opt in opt_part.split(',')]
-        return []
+            for opt in opt_part.split(','):
+                opt = opt.strip()
+                if '=' in opt:
+                    k, v = opt.split('=', 1)
+                    options[k.lower()] = v.strip()
+                else:
+                    options[opt.lower()] = ""
+        return options
+
+    def _calculate_priority(self, rule: str, rule_type: RuleType, options: Dict[str, str]) -> int:
+        """计算规则优先级"""
+        priority = 0
+        
+        # 基本类型优先级
+        if rule_type == RuleType.EXCEPTION_RULE:
+            priority = 10  # 例外规则优先级最高
+        elif rule_type == RuleType.IP_RULE:
+            priority = 20
+        elif rule_type == RuleType.DNS_REWRITE_RULE:
+            priority = 30
+        elif rule_type == RuleType.OPTION_RULE:
+            priority = 40
+        elif rule_type == RuleType.NETWORK_RULE:
+            priority = 50
+        elif rule_type == RuleType.STANDARD_RULE:
+            priority = 60
+        elif rule_type == RuleType.HOSTS_RULE:
+            priority = 70
+        elif rule_type == RuleType.SCRIPT_RULE:
+            priority = 80
+        elif rule_type == RuleType.CSS_RULE:
+            priority = 90
+        elif rule_type == RuleType.COSMETIC_RULE:
+            priority = 100
+        else:
+            priority = 1000
+            
+        # 根据修饰符调整优先级
+        if options:
+            for opt in options:
+                priority += MODIFIER_PRIORITY.get(opt, MODIFIER_PRIORITY['other'])
+                
+        return priority
 
     def _is_valid_domain(self, domain: str) -> bool:
         """验证域名有效性"""
@@ -526,6 +634,11 @@ class AdblockMerger:
             rule_type_name = self.rule_types[rule_info.rule_type].replace(' ', '_').lower()
             self.stats[rule_type_name] += 1
         else:
+            # 检查是否需要替换（优先级更高的规则）
+            existing_rule = self.unique_rules[rule_hash]
+            if rule_info.priority < existing_rule.priority:
+                self.unique_rules[rule_hash] = rule_info
+                logger.debug(f"替换规则: {existing_rule.normalized} -> {rule_info.normalized}")
             self.stats['duplicates_removed'] += 1
 
     def _calculate_rule_hash(self, rule_info: RuleInfo) -> str:
@@ -535,13 +648,13 @@ class AdblockMerger:
             return self._hash_ip_rule(rule_info.normalized)
         elif rule_info.rule_type == RuleType.OPTION_RULE:
             return self._hash_option_rule(rule_info.normalized)
-        elif rule_info.rule_type in [RuleType.SCRIPT_RULE, RuleType.CSS_RULE, RuleType.COSMETIC_RULE]:
-            # 脚本和CSS规则：使用原始内容哈希
-            return hashlib.sha256((rule_info.normalized + HASH_SALT).encode('utf-8')).hexdigest()
+        elif rule_info.rule_type in [RuleType.SCRIPT_RULE, RuleType.CSS_RULE, RuleType.COSMETIC_RULE, RuleType.DNS_REWRITE_RULE]:
+            # 脚本、CSS和DNS重写规则：使用原始内容哈希
+            return hashlib.md5((rule_info.normalized + HASH_SALT).encode('utf-8')).hexdigest()
         else:
             # 其他规则：使用标准化后的域名哈希
             domain_part = rule_info.normalized.split('$')[0] if '$' in rule_info.normalized else rule_info.normalized
-            return hashlib.sha256((domain_part + HASH_SALT).encode('utf-8')).hexdigest()
+            return hashlib.md5((domain_part + HASH_SALT).encode('utf-8')).hexdigest()
 
     def _hash_ip_rule(self, rule: str) -> str:
         """生成IP规则的哈希"""
@@ -563,10 +676,10 @@ class AdblockMerger:
             action = OPTION_EQUIVALENTS.get(action.lower(), action).upper()
             
             normalized_rule = f"{ip_type}:{ip_range},{action}"
-            return hashlib.sha256((normalized_rule + HASH_SALT).encode('utf-8')).hexdigest()
+            return hashlib.md5((normalized_rule + HASH_SALT).encode('utf-8')).hexdigest()
         except Exception:
             # 如果解析失败，使用原始规则
-            return hashlib.sha256((rule + HASH_SALT).encode('utf-8')).hexdigest()
+            return hashlib.md5((rule + HASH_SALT).encode('utf-8')).hexdigest()
 
     def _hash_option_rule(self, rule: str) -> str:
         """生成含选项规则的哈希"""
@@ -579,28 +692,16 @@ class AdblockMerger:
             normalized_opts = self._normalize_options(opts)
             
             normalized_rule = f"{normalized_domain}${','.join(normalized_opts)}"
-            return hashlib.sha256((normalized_rule + HASH_SALT).encode('utf-8')).hexdigest()
+            return hashlib.md5((normalized_rule + HASH_SALT).encode('utf-8')).hexdigest()
         except Exception:
             # 如果解析失败，使用原始规则
-            return hashlib.sha256((rule + HASH_SALT).encode('utf-8')).hexdigest()
+            return hashlib.md5((rule + HASH_SALT).encode('utf-8')).hexdigest()
 
     def _write_output(self):
         """写入输出文件（分类排序）"""
         def rule_sort_key(rule_info: RuleInfo) -> Tuple[int, str]:
-            # 按规则类型排序
-            type_order = {
-                RuleType.IP_RULE: 0,
-                RuleType.OPTION_RULE: 1,
-                RuleType.NETWORK_RULE: 2,
-                RuleType.STANDARD_RULE: 3,
-                RuleType.HOSTS_RULE: 4,
-                RuleType.SCRIPT_RULE: 5,
-                RuleType.CSS_RULE: 6,
-                RuleType.COSMETIC_RULE: 7,
-                RuleType.MODIFIER_RULE: 8,
-                RuleType.UNKNOWN: 9
-            }
-            return (type_order.get(rule_info.rule_type, 10), rule_info.normalized)
+            # 按优先级和规则内容排序
+            return (rule_info.priority, rule_info.normalized)
 
         sorted_rules = sorted(self.unique_rules.values(), key=rule_sort_key)
 
@@ -634,7 +735,8 @@ if __name__ == '__main__':
             subprocess.check_call([sys.executable, "-m", "pip", "install", "chardet"])
             import chardet
 
-        AdblockMerger().run()
+        merger = AdblockMerger()
+        merger.run()
         sys.exit(0)
     except Exception as e:
         logger.error(f"执行失败: {e}")
