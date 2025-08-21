@@ -57,7 +57,7 @@ ADBLOCK_URLS = [
         # Cats-Team广告规则（注释保留）
         #"https://raw.githubusercontent.com/Cats-Team/AdRules/main/adblock.txt",
         # 那个谁520广告hosts规则（注释保留）
-        #"https://raw.githubusercontent.com/qq5460168/EasyAds/refs/heads/main/adblock.txt",
+        "https://raw.githubusercontent.com/qq5460168/EasyAds/refs/heads/main/adblock.txt",
         # 10007自动规则（注释保留）
         #"https://raw.githubusercontent.com/lingeringsound/10007_auto/master/adb.txt",
         # 晴雅去广告规则（官方CDN）
