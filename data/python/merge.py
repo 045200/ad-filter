@@ -26,7 +26,7 @@ GITHUB_RUN_ID = os.getenv('GITHUB_RUN_ID', 'unknown-run')
 GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
 BASE_DIR = Path(GITHUB_WORKSPACE)
 TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
-OUTPUT_FILE = TEMP_DIR / "adblock_merged.txt"
+OUTPUT_FILE = TEMP_DIR / "adblock_filter.txt"
 
 MAX_WORKERS = int(os.getenv('MAX_WORKERS', 4))
 INPUT_PATTERNS = ["adblock*.txt", "allow*.txt", "hosts*", "adg*.txt", "adh*.txt", "filter*.txt"]
