@@ -1,13 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-AdBlock 规则转换器（直接引用版）
-输入: 原始 adblock_clash.yaml（位于仓库根目录）
-输出: 直接转换的 adb.mrs（位于仓库根目录）
-专门处理第一个脚本生成的规则格式
-"""
-
 import os
 import sys
 import tempfile
@@ -22,9 +12,7 @@ from datetime import datetime
 class Config:
     """配置管理（输入输出均在仓库根目录）"""
     GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
-    # 输入文件（位于仓库根目录）
     INPUT_FILE = os.getenv("ADBLOCK_INPUT", "adblock_clash.yaml")
-    # 输出文件（位于仓库根目录）
     OUTPUT_FILE = os.getenv("ADBLOCK_OUTPUT", "adb.mrs")
     COMPILER_PATH = os.getenv("COMPILER_PATH", "./data/mihomo-tool")
 
@@ -43,7 +31,6 @@ class Config:
 
     @property
     def input_path(self) -> Path:
-        """输入文件路径（仓库根目录）"""
         path = Path(self.GITHUB_WORKSPACE) / self.INPUT_FILE
         if not path.exists():
             logger.critical(f"输入文件不存在: {path}")
@@ -52,7 +39,6 @@ class Config:
 
     @property
     def output_path(self) -> Path:
-        """输出文件路径（仓库根目录）"""
         return Path(self.GITHUB_WORKSPACE) / self.OUTPUT_FILE
 
     @property
@@ -97,7 +83,7 @@ class AdblockConverter:
     def parse_input(self) -> list:
         """解析第一个脚本生成的规则文件"""
         logger.info(f"读取输入文件: {self.config.input_path}")
-        
+
         try:
             with self.config.input_path.open('r', encoding='utf-8') as f:
                 data = yaml.safe_load(f)
@@ -111,21 +97,40 @@ class AdblockConverter:
                 if isinstance(rule, str):
                     # 处理字符串格式的规则 (DOMAIN-SUFFIX,example.com,REJECT)
                     parts = rule.split(',')
-                    if len(parts) >= 2:
+                    if len(parts) >= 3:  # 强制要求策略字段
                         rule_type = parts[0].strip().upper()
                         value = parts[1].strip()
-                        
-                        # 只提取规则类型和值，忽略策略部分
-                        rules.append({'type': rule_type, 'value': value})
-                        self.stats['total_rules'] += 1
+                        action = parts[2].strip().upper()
+                    else:
+                        logger.warning(f"无效规则格式: {rule}")
+                        continue
+
+                    # 处理Clash特殊语法（负号处理）
+                    new_type, new_value = self._convert_clash_syntax(rule_type, value)
+                    rules.append({
+                        'type': new_type,
+                        'value': new_value,
+                        'action': action
+                    })
+                    self.stats['total_rules'] += 1
+
                 elif isinstance(rule, dict):
                     # 处理字典格式的规则
                     rule_type = rule.get('type', '').upper()
                     value = rule.get('value', '').strip()
-                    
-                    if rule_type and value:
-                        rules.append({'type': rule_type, 'value': value})
-                        self.stats['total_rules'] += 1
+                    action = rule.get('action', 'REJECT').upper()
+
+                    if not rule_type or not value:
+                        logger.warning(f"无效规则格式: {rule}")
+                        continue
+
+                    new_type, new_value = self._convert_clash_syntax(rule_type, value)
+                    rules.append({
+                        'type': new_type,
+                        'value': new_value,
+                        'action': action
+                    })
+                    self.stats['total_rules'] += 1
 
             logger.info(f"成功解析 {self.stats['total_rules']} 条规则")
             return rules
@@ -136,16 +141,29 @@ class AdblockConverter:
             logger.error(f"读取输入文件失败: {str(e)}")
             return []
 
+    def _convert_clash_syntax(self, rule_type: str, value: str) -> tuple:
+        """转换Clash特殊语法为Mihomo兼容格式"""
+        if rule_type in ['DOMAIN-KEYWORD', 'DOMAIN-SUFFIX'] and value.startswith('-'):
+            # 转换负号规则为排除类型
+            new_type = f"{rule_type}-EXCLUDE"
+            new_value = value[1:]
+        else:
+            new_type = rule_type
+            new_value = value
+
+        return new_type, new_value
+
     def generate_compile_yaml(self, rules: list) -> str:
         """生成用于编译的YAML内容"""
         if not rules:
             return ""
-            
-        yaml_lines = ["payload:"]
+
+        yaml_lines = ["rules:"]  # Mihomo要求的根节点为rules
         for rule in rules:
             yaml_lines.append(f"  - type: {rule['type']}")
             yaml_lines.append(f"    value: {rule['value']}")
-            
+            yaml_lines.append(f"    action: {rule['action']}")
+
         return '\n'.join(yaml_lines)
 
     def compute_sha256(self, file_path: Path) -> str:
@@ -163,7 +181,6 @@ class AdblockConverter:
     def compile_to_mrs(self, yaml_content: str) -> bool:
         """编译为MRS格式"""
         if not yaml_content:
-            # 生成空文件避免下游错误
             with self.config.output_path.open('w', encoding='utf-8') as f:
                 f.write("")
             logger.warning("无有效规则，生成空MRS文件")
@@ -175,14 +192,14 @@ class AdblockConverter:
                 f.write(yaml_content)
                 temp_file = f.name
 
+            # 修正后的Mihomo命令参数（根据联网核实）
             result = subprocess.run(
                 [
                     str(self.config.compiler_abs_path),
-                    "convert-ruleset",
-                    "domain",
-                    "yaml",
-                    temp_file,
-                    str(self.config.output_path)
+                    "convert",  # 替换为正确的子命令
+                    "-i", temp_file,
+                    "-o", str(self.config.output_path),
+                    "-t", "domain"  # 指定规则类型
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -193,7 +210,7 @@ class AdblockConverter:
             if result.returncode != 0:
                 logger.error(
                     f"编译失败(返回码{result.returncode}):\n"
-                    f"stdout: {result.stdout[:500]}\nstderr: {result.stderr[:500]}"
+                    f"stdout: {result.stdout}\nstderr: {result.stderr}"
                 )
                 return False
 
@@ -201,7 +218,6 @@ class AdblockConverter:
                 logger.error("编译成功但输出文件为空")
                 return False
 
-            # 计算SHA256校验和
             self.stats['mrs_sha256'] = self.compute_sha256(self.config.output_path)
             if not self.stats['mrs_sha256']:
                 logger.error("无法计算MRS文件的SHA256校验和")
@@ -224,17 +240,15 @@ class AdblockConverter:
                 try:
                     os.unlink(temp_file)
                 except Exception:
-                    pass  # 忽略清理错误
+                    pass
 
     def run(self) -> int:
         """执行转换流程"""
-        # 1. 读取并解析规则
         rules = self.parse_input()
         if not rules:
             logger.error("无规则可处理，终止流程")
             return 1
 
-        # 2. 生成编译内容并编译
         yaml_content = self.generate_compile_yaml(rules)
         if not self.compile_to_mrs(yaml_content):
             return 1
