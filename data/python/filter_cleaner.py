@@ -2,21 +2,21 @@
 # -*- coding: utf-8 -*-
 
 """
-Adblock规则处理与优化脚本 (GitHub Actions 优化版)
+Adblock规则清理与优化脚本 (GitHub Actions 优化版)
 支持 AdBlock / AdGuard 语法，包含DNS验证、规则合并与去重
 模块化设计，支持国内外域名智能分流解析
 """
 
-import argparse
+import os
+import re
+import sys
+import glob
+import json
+import time
+import logging
 import asyncio
 import aiohttp
 import aiodns
-import logging
-import re
-import time
-import json
-import gzip
-import shutil
 import ipaddress
 import maxminddb
 import psutil
@@ -28,31 +28,33 @@ from urllib.parse import urlparse
 import ssl
 import certifi
 
-# 配置单例类
+# 配置类
 class Config:
+    # 基础路径
     GITHUB_WORKSPACE = Path(os.getenv('GITHUB_WORKSPACE', os.getcwd()))
+    BASE_DIR = GITHUB_WORKSPACE
     
     # 输入输出路径
-    INPUT_DIR = GITHUB_WORKSPACE / "data" / "filter"
-    OUTPUT_DIR = GITHUB_WORKSPACE / "data" / "filter"
-    CLEANED_FILE = OUTPUT_DIR / "adblock.txt"
+    INPUT_DIR = BASE_DIR / "data" / "filter"
+    OUTPUT_DIR = BASE_DIR / "data" / "filter"
+    CLEANED_FILE = OUTPUT_DIR / "adblock_filter.txt"
     
     # 依赖文件路径 (由外部脚本下载)
-    GEOIP_DB_FILE = GITHUB_WORKSPACE / "data" / "GeoLite2-Country.mmdb"
-    CHINA_IP_RANGES_FILE = GITHUB_WORKSPACE / "data" / "china_ip_list.txt"
+    GEOIP_DB_FILE = BASE_DIR / "data" / "GeoLite2-Country.mmdb"
+    CHINA_IP_RANGES_FILE = BASE_DIR / "data" / "china_ip_list.txt"
     
     # 备份与白名单
-    BACKUP_DIR = GITHUB_WORKSPACE / "data" / "mod" / "backups"
-    INVALID_DOMAINS_FILE = GITHUB_WORKSPACE / "data" / "mod" / "invalid_domains.json"
-    WHITELIST_FILE = GITHUB_WORKSPACE / "data" / "mod" / "domians.txt"
+    BACKUP_DIR = BASE_DIR / "data" / "mod" / "backups"
+    INVALID_DOMAINS_FILE = BASE_DIR / "data" / "mod" / "invalid_domains.json"
+    WHITELIST_FILE = BASE_DIR / "data" / "mod" / "domians.txt"
     
     # 性能与资源配置
-    MAX_WORKERS = 4
-    DNS_WORKERS = 30
-    BATCH_SIZE = 500
-    MAX_MEMORY_PERCENT = 80
-    DNS_TIMEOUT = 5
-    DNS_RETRIES = 2
+    MAX_WORKERS = int(os.getenv('MAX_WORKERS', 4))
+    DNS_WORKERS = int(os.getenv('DNS_WORKERS', 30))
+    BATCH_SIZE = int(os.getenv('BATCH_SIZE', 500))
+    MAX_MEMORY_PERCENT = int(os.getenv('MAX_MEMORY_PERCENT', 80))
+    DNS_TIMEOUT = int(os.getenv('DNS_TIMEOUT', 5))
+    DNS_RETRIES = int(os.getenv('DNS_RETRIES', 2))
     
     # DNS服务器配置 (国内外分流)
     DNS_SERVERS = {
@@ -81,15 +83,21 @@ class RegexPatterns:
     ADGUARD_DOMAIN = re.compile(r'^@@?\|?https?://[^/]+')
 
 # 日志配置
-def setup_logger(name: str = 'AdblockProcessor') -> logging.Logger:
+def setup_logger(name: str = 'AdblockCleaner') -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
     
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
+    # 检查是否为GitHub Actions环境
+    if os.getenv('GITHUB_ACTIONS') == 'true':
+        handler = logging.StreamHandler(sys.stdout)
+        formatter = logging.Formatter('%(message)s')
+    else:
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+    
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     
@@ -468,7 +476,7 @@ class RuleOptimizer:
         return True
 
 # 主处理器
-class AdblockProcessor:
+class AdblockCleaner:
     def __init__(self):
         self.geoip = GeoIPService(Config.GEOIP_DB_FILE)
         self.validator = DNSValidator(self.geoip)
@@ -491,7 +499,7 @@ class AdblockProcessor:
         
         try:
             # 查找所有输入文件
-            input_files = list(Config.INPUT_DIR.glob("*.txt"))
+            input_files = list(Config.INPUT_DIR.glob("adblock*.txt"))
             if not input_files:
                 logger.warning(f"未找到输入文件于 {Config.INPUT_DIR}")
                 return
@@ -616,7 +624,7 @@ class AdblockProcessor:
         }
         
         # 保存JSON统计
-        stats_file = Config.OUTPUT_DIR / "processing_stats.json"
+        stats_file = Config.OUTPUT_DIR / "cleaning_stats.json"
         try:
             with open(stats_file, 'w', encoding='utf-8') as f:
                 json.dump(stats, f, indent=2, ensure_ascii=False)
@@ -632,33 +640,15 @@ class AdblockProcessor:
         logger.info(f"DNS查询: {self.validator.stats['total_queries']} 次")
         logger.info(f"缓存命中率: {self.validator.cache.get_stats()['hit_rate']:.1%}")
 
-# 命令行接口
-def main():
-    parser = argparse.ArgumentParser(description='Adblock规则处理与优化工具')
-    parser.add_argument('--input', type=Path, default=Config.INPUT_DIR, 
-                       help='输入目录路径')
-    parser.add_argument('--output', type=Path, default=Config.OUTPUT_DIR,
-                       help='输出目录路径')
-    parser.add_argument('--geoip', type=Path, default=Config.GEOIP_DB_FILE,
-                       help='GeoIP数据库路径')
-    parser.add_argument('--workers', type=int, default=Config.MAX_WORKERS,
-                       help='工作线程数')
-    
-    args = parser.parse_args()
-    
-    # 更新配置
-    if args.input != Config.INPUT_DIR:
-        Config.INPUT_DIR = args.input
-    if args.output != Config.OUTPUT_DIR:
-        Config.OUTPUT_DIR = args.output
-    if args.geoip != Config.GEOIP_DB_FILE:
-        Config.GEOIP_DB_FILE = args.geoip
-    if args.workers != Config.MAX_WORKERS:
-        Config.MAX_WORKERS = args.workers
-    
-    # 创建处理器并运行
-    processor = AdblockProcessor()
-    asyncio.run(processor.process_files())
+# 主函数
+async def main():
+    """主函数"""
+    try:
+        cleaner = AdblockCleaner()
+        await cleaner.process_files()
+    except Exception as e:
+        logger.error(f"规则清理失败: {e}")
+        sys.exit(1)
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
