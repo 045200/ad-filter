@@ -94,11 +94,15 @@ jobs:
           DNS_TIMEOUT: 5
           DNS_RETRIES: 2
 
+      - name: Generate adguard rules
+        run: |
+          cd ${{ github.workspace }}
+          python ${{ env.PYTHON_SCRIPTS }}/filter_adg.py
+
       # 10. 生成多格式规则
       - name: Generate multi-format rules
         run: |
           cd ${{ github.workspace }}
-          python ${{ env.PYTHON_SCRIPTS }}/filter_adg.py
           python ${{ env.PYTHON_SCRIPTS }}/filter_adh.py
           python ${{ env.PYTHON_SCRIPTS }}/filter_adp.py
           python ${{ env.PYTHON_SCRIPTS }}/filter_pihole.py
