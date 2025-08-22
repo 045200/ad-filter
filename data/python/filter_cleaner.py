@@ -27,41 +27,48 @@ except ImportError:
 
 class Config:
     BASE_DIR = Path(os.getenv('GITHUB_WORKSPACE', os.getcwd()))
-    TEMP_DIR = BASE_DIR / "tmp"
-    OUTPUT_DIR = TEMP_DIR
-    CLEANED_FILE = TEMP_DIR / "adblock_merged.txt"
+    DATA_DIR = BASE_DIR / "data" / "filter"  # 修改为data/filter目录
+    OUTPUT_DIR = DATA_DIR  # 输出到data/filter目录
+    CLEANED_FILE = DATA_DIR / "filter_adblock.txt"  # 修改输出文件名
     
-    WHITELIST_FILE = BASE_DIR / "data" / "mod" / "domains.txt"
+    # 白名单文件路径
+    ALLOW_FILE = BASE_DIR / "data" / "mod" / "allow.txt"  # 新增白名单文件
+    DOMAINS_FILE = BASE_DIR / "data" / "mod" / "domains.txt"  # 保留原有白名单
     INVALID_DOMAINS_BACKUP = BASE_DIR / "data" / "mod" / "adblock_update.txt"
 
-    DNS_WORKERS = 150  # 适配CI环境的并发数
+    DNS_WORKERS = 150
     BATCH_SIZE = 5000
 
     DNS_TIMEOUT = 3
     DNS_RETRIES = 2
 
-    DNS_SERVERS_GLOBAL = ["1.1.1.1", "1.0.0.1", "8.8.8.8"]  # 增加冗余DNS
+    DNS_SERVERS_GLOBAL = ["1.1.1.1", "1.0.0.1", "8.8.8.8"]
     DNS_SERVERS_CHINA = ["119.29.29.29", "223.5.5.5", "180.76.76.76"]
 
-    MAX_CACHE_SIZE = 10000  # 降低缓存上限，减少CI内存占用
-    CACHE_TTL = 7200  # 2小时
+    MAX_CACHE_SIZE = 10000
+    CACHE_TTL = 7200
 
     PRESERVE_ELEMENT_HIDING = True
     PRESERVE_SCRIPT_RULES = True
     PRESERVE_REGEX_RULES = True
     PRESERVE_ADGUARD_RULES = True
     PRESERVE_ADGUARD_HOME_RULES = True
-    ENABLE_WHOIS_CHECK = False  # CI环境禁用WHOIS，提升效率
+    ENABLE_WHOIS_CHECK = False
 
 
 class RegexPatterns:
+    # 基础模式
     DOMAIN_EXTRACT = re.compile(r'^\|{1,2}([\w.-]+)[\^\$\|\/]')
     HOSTS_RULE = re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1)\s+([\w.-]+)$')
     COMMENT = re.compile(r'^[!#]')
     EMPTY_LINE = re.compile(r'^\s*$')
+    
+    # 元素隐藏规则
     ELEMENT_HIDING = re.compile(r'^[^#]+##')
     ELEMENT_HIDING_EXCEPTION = re.compile(r'^[^#]+#@#')
     SCRIPTLET = re.compile(r'^[^#]+#\?#')
+    
+    # AdGuard特定规则
     ADGUARD_ELEMENT_HIDING_EXT = re.compile(r'^[^#]+##\+js\(')
     ADGUARD_CSS_EXT = re.compile(r'^[^#]+##\$[^ ]+')
     ADGUARD_REDIRECT = re.compile(r'\$.*redirect(?:-rule)?=')
@@ -72,9 +79,26 @@ class RegexPatterns:
     ADGUARD_HOME_DNSREWRITE = re.compile(r'\$.*dnsrewrite=')
     ADGUARD_HOME_CNAME = re.compile(r'\$.*cname=')
     ADGUARD_HOME_IP = re.compile(r'\$.*ip=')
+    
+    # 通用模式
     GENERIC = re.compile(r'^/.*/$')
     ADBLOCK_OPTIONS = re.compile(r'\$[a-zA-Z0-9~,=+_-]+')
     ADGUARD_IMPORTANT = re.compile(r'\$.*important')
+    
+    # 白名单规则提取
+    ALLOW_RULE_EXTRACT = re.compile(r'^@@\|\|([\w.-]+)\^')
+    ALLOW_RULE_GENERIC = re.compile(r'^@@\|\|([\w.-]+)[\^\$\|\/]')
+    ALLOW_RULE_HOSTS = re.compile(r'^@@(?:0\.0\.0\.0|127\.0\.0\.1)\s+([\w.-]+)$')
+    
+    # 扩展AdGuard语法识别
+    ADGUARD_NETWORK = re.compile(r'^\|\|[\w.-]+\^?\$?(?:domain=[\w.-]+)?(?:,~?[\w.-]+)*$')
+    ADGUARD_BASIC = re.compile(r'^[\w.-]+\$.*')
+    ADGUARD_MODIFIER = re.compile(r'\$(?:dnstype|client|ctag|denyallow|dnsrewrite|redirect|removeparam|important)=')
+    
+    # AdGuard Home特定语法
+    ADGUARD_HOME_SPECIFIC = re.compile(r'^\|\|[\w.-]+\^\$dnsrewrite=')
+    ADGUARD_HOME_CNAME_SPECIFIC = re.compile(r'^\|\|[\w.-]+\^\$dnsrewrite=.*CNAME')
+    ADGUARD_HOME_ANSWER = re.compile(r'^\|\|[\w.-]+\^\$dnsrewrite=.*answer=')
 
 
 def setup_logger():
@@ -111,7 +135,7 @@ class SmartDNSValidator:
         self.valid_domains = set()
         self.invalid_domains = set()
         self.cache_timestamps = OrderedDict()
-        self.whitelist_domains = self._load_whitelist_domains()
+        self.whitelist_domains = self._load_all_whitelist_domains()
         self._preload_whitelist_to_cache()
         self.known_invalid_domains = self._load_known_invalid_domains()
 
@@ -124,17 +148,50 @@ class SmartDNSValidator:
 
         self.stats = defaultdict(int)
 
-    def _load_whitelist_domains(self) -> Set[str]:
+    def _load_all_whitelist_domains(self) -> Set[str]:
+        """从多个白名单文件中加载域名"""
         whitelist = set()
-        if Config.WHITELIST_FILE.exists():
+        
+        # 1. 从filter_allow.txt加载白名单域名
+        if Config.ALLOW_FILE.exists():
             try:
-                with open(Config.WHITELIST_FILE, 'r', encoding='utf-8') as f:
+                with open(Config.ALLOW_FILE, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith('#'):
+                            continue
+                        # 提取@@||domain^格式的域名
+                        match = RegexPatterns.ALLOW_RULE_EXTRACT.match(line)
+                        if match:
+                            domain = match.group(1)
+                            whitelist.add(domain)
+                            continue
+                        # 尝试其他白名单格式
+                        match = RegexPatterns.ALLOW_RULE_GENERIC.match(line)
+                        if match:
+                            domain = match.group(1)
+                            whitelist.add(domain)
+                            continue
+                        # 尝试hosts格式白名单
+                        match = RegexPatterns.ALLOW_RULE_HOSTS.match(line)
+                        if match:
+                            domain = match.group(1)
+                            whitelist.add(domain)
+            except Exception as e:
+                logger.error(f"错误：加载白名单文件 {Config.ALLOW_FILE} 失败 - {str(e)}")
+        
+        # 2. 从domains.txt加载白名单域名
+        if Config.DOMAINS_FILE.exists():
+            try:
+                with open(Config.DOMAINS_FILE, 'r', encoding='utf-8') as f:
                     for line in f:
                         line = line.strip()
                         if line and not line.startswith('#'):
                             whitelist.add(line[2:] if line.startswith('*.') else line)
             except Exception as e:
-                logger.error(f"错误：加载白名单失败 - {str(e)}")
+                logger.error(f"错误：加载白名单文件 {Config.DOMAINS_FILE} 失败 - {str(e)}")
+        
+        logger.info(f"加载白名单域名: {len(whitelist)} 个")
         return whitelist
 
     def _load_known_invalid_domains(self) -> Set[str]:
@@ -187,7 +244,6 @@ class SmartDNSValidator:
         resolver = self.resolver_china if is_china else self.resolver_global
         self.stats['china_domains' if is_china else 'global_domains'] += 1
 
-        # 指数退避重试策略
         retries = max_retries
         for attempt in range(retries):
             try:
@@ -198,7 +254,7 @@ class SmartDNSValidator:
             except (asyncio.TimeoutError, aiodns.error.DNSError):
                 self.stats['dns_failures'] += 1
                 if attempt < retries - 1:
-                    await asyncio.sleep(0.5 * (2 **attempt))  # 0.5s → 1s → 2s...
+                    await asyncio.sleep(0.5 * (2 **attempt))
             except Exception:
                 self.stats['dns_failures'] += 1
                 return False
@@ -223,18 +279,22 @@ class SmartDNSValidator:
 
         current_time = time.time()
 
+        # 优先级1: 白名单检查
         if domain in self.whitelist_domains:
             self.stats['whitelist_hits'] += 1
             return True
 
+        # 优先级2: 已知无效域名检查
         if domain in self.known_invalid_domains:
             return False
 
+        # 优先级3: 缓存检查
         if domain in self.cache_timestamps:
             if current_time - self.cache_timestamps[domain] < Config.CACHE_TTL:
                 self.stats['cache_hits'] += 1
                 return domain in self.valid_domains
 
+        # 优先级4: WHOIS检查 (如果启用)
         if Config.ENABLE_WHOIS_CHECK and whois:
             self.stats['whois_checks'] += 1
             try:
@@ -247,6 +307,7 @@ class SmartDNSValidator:
             except:
                 pass
 
+        # 优先级5: DNS验证
         result = await self.resolve_with_retry(domain)
         if result:
             self.valid_domains.add(domain)
@@ -254,7 +315,7 @@ class SmartDNSValidator:
         else:
             self.invalid_domains.add(domain)
             self.stats['invalid_domains'] += 1
-        
+
         self.cache_timestamps[domain] = current_time
         if len(self.valid_domains) > Config.MAX_CACHE_SIZE:
             self._cleanup_cache()
@@ -263,7 +324,7 @@ class SmartDNSValidator:
 
 class AdblockCleaner:
     def __init__(self):
-        Config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         self.regex = RegexPatterns()
         self.validator = SmartDNSValidator()
         self.resource_monitor = ResourceMonitor()
@@ -272,10 +333,12 @@ class AdblockCleaner:
         start_time = time.time()
         logger.info("Adblock规则清理工具启动（带合并去重功能）")
 
-        # 查找输入文件
+        # 查找输入文件 - 支持多种命名模式
         input_files = []
-        for pattern in ["adblock_filter.txt"]:
-            input_files.extend([Path(p) for p in glob.glob(str(Config.TEMP_DIR / pattern))])
+        patterns = ["adblock.txt"]
+        for pattern in patterns:
+            input_files.extend([Path(p) for p in glob.glob(str(Config.DATA_DIR / pattern))])
+        
         if not input_files:
             logger.error("错误：未找到输入文件，退出")
             return
@@ -293,6 +356,7 @@ class AdblockCleaner:
         logger.info("\n===== 清理完成 =====")
         logger.info(f"总耗时: {elapsed:.2f}s | 峰值内存: {self.resource_monitor.peak_memory:.1f}MB")
         logger.info(f"有效域名: {self.validator.stats['valid_domains']} | 无效域名: {self.validator.stats['invalid_domains']}")
+        logger.info(f"白名单命中: {self.validator.stats['whitelist_hits']} | 缓存命中: {self.validator.stats['cache_hits']}")
         logger.info(f"DNS查询: {self.validator.stats['dns_queries']} | 失败: {self.validator.stats['dns_failures']} | 平均耗时: {avg_query:.3f}s")
         if Config.ENABLE_WHOIS_CHECK and whois:
             logger.info(f"WHOIS检查: {self.validator.stats['whois_checks']} | 过期域名: {self.validator.stats['whois_expired']}")
@@ -323,7 +387,7 @@ class AdblockCleaner:
 
         # 过滤规则
         cleaned_lines = self._filter_rules(lines, valid_domains)
-        
+
         # 合并去重优化
         optimized_lines = self._dedup_and_optimize_rules(cleaned_lines)
         logger.info(f"规则优化: 原始 {len(cleaned_lines)} 条 | 精简后 {len(optimized_lines)} 条")
@@ -341,14 +405,19 @@ class AdblockCleaner:
         line = line.strip()
         if not line or self.regex.COMMENT.match(line):
             return False
-            
+
+        # AdGuard Home特定规则
         if Config.PRESERVE_ADGUARD_HOME_RULES and (
             self.regex.ADGUARD_HOME_DNSREWRITE.match(line) or 
             self.regex.ADGUARD_HOME_CNAME.match(line) or 
-            self.regex.ADGUARD_HOME_IP.match(line)
+            self.regex.ADGUARD_HOME_IP.match(line) or
+            self.regex.ADGUARD_HOME_SPECIFIC.match(line) or
+            self.regex.ADGUARD_HOME_CNAME_SPECIFIC.match(line) or
+            self.regex.ADGUARD_HOME_ANSWER.match(line)
         ):
             return True
-            
+
+        # AdGuard通用规则
         if Config.PRESERVE_ADGUARD_RULES and (
             self.regex.ADGUARD_ELEMENT_HIDING_EXT.match(line) or 
             self.regex.ADGUARD_CSS_EXT.match(line) or 
@@ -357,10 +426,13 @@ class AdblockCleaner:
             self.regex.ADGUARD_DENYALLOW.match(line) or 
             self.regex.ADGUARD_DNSTYPE.match(line) or 
             self.regex.ADGUARD_CLIENT_SERVER.match(line) or 
-            self.regex.ADGUARD_IMPORTANT.match(line)
+            self.regex.ADGUARD_IMPORTANT.match(line) or
+            self.regex.ADGUARD_MODIFIER.match(line) or
+            self.regex.ADGUARD_NETWORK.match(line) or
+            self.regex.ADGUARD_BASIC.match(line)
         ):
             return True
-            
+
         return False
 
     def _extract_domains_from_lines(self, lines: List[str]) -> Set[str]:
@@ -493,7 +565,7 @@ class AdblockCleaner:
         # 交替插入非域名规则（如注释、空行）和优化后的域名规则
         # 注：此处简化处理，按原始顺序合并两类规则
         final_rules = non_domain_rules + optimized_domain_rules
-        
+
         return final_rules
 
     def _backup_invalid_domains(self):
@@ -517,15 +589,13 @@ class AdblockCleaner:
             "峰值内存(MB)": self.resource_monitor.peak_memory,
             "有效域名": self.validator.stats['valid_domains'],
             "无效域名": self.validator.stats['invalid_domains'],
+            "白名单命中": self.validator.stats['whitelist_hits'],
+            "缓存命中": self.validator.stats['cache_hits'],
             "DNS查询": self.validator.stats['dns_queries'],
             "DNS失败": self.validator.stats['dns_failures'],
             "平均查询时间(秒)": self.validator.stats['query_time_total'] / max(1, self.validator.stats['dns_queries']),
-            "规则优化": {
-                "原始规则数": len(self._filter_rules([], set())),  # 实际值在_process_file中计算
-                "精简后规则数": len(self._dedup_and_optimize_rules([]))
-            }
         }
-        stats_file = Config.TEMP_DIR / "cleaning_stats.json"
+        stats_file = Config.OUTPUT_DIR / "cleaning_stats.json"
         try:
             with open(stats_file, 'w', encoding='utf-8') as f:
                 json.dump(stats, f, indent=2, ensure_ascii=False)
