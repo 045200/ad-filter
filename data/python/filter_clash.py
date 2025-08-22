@@ -3,6 +3,7 @@
 
 import os
 import re
+import sys
 from pathlib import Path
 
 GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
