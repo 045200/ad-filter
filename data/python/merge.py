@@ -44,8 +44,8 @@ class Config:
     ALLOW_PATTERNS = ['allow*.txt', 'white*.txt']
     
     # 输出文件名
-    OUTPUT_BLOCK = 'adblock_merged.txt'
-    OUTPUT_ALLOW = 'allow_merged.txt'
+    OUTPUT_BLOCK = 'adblock_filter.txt'
+    OUTPUT_ALLOW = 'allow.txt'
     OUTPUT_STATS = 'filter_stats.json'
     
     # 布隆过滤器配置
@@ -56,7 +56,7 @@ class Config:
     # Adblockparser开关 - 根据上游规则类型调整
     # True: 适用于标准AdBlock语法规则 (误判低)
     # False: 适用于AdGuard/AdGuard Home语法规则 (误判高)
-    USE_ADBLOCKPARSER = True
+    USE_ADBLOCKPARSER = False
     
     # 规则优化配置
     REMOVE_BROAD_RULES = True  # 移除过于宽泛的规则
