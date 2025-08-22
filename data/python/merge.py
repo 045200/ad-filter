@@ -1,18 +1,38 @@
 #!/usr/bin/env python3
 """
-广告规则合并去重脚本
+广告规则合并去重脚本 - 无增量更新版本
 支持AdBlock语法、AdGuard语法和hosts语法
-简洁高效版本
+每次运行都从头开始处理，不保留任何历史状态
 """
 
 import os
 import re
+import sys
 import glob
 import logging
+import asyncio
+import aiofiles
 import ipaddress
+import psutil
 from typing import List, Tuple, Optional, Dict, Any
 from pathlib import Path
 from datetime import datetime
+
+# 尝试导入必要的第三方库
+try:
+    from pybloom_live import ScalableBloomFilter
+    BLOOM_FILTER_AVAILABLE = True
+except ImportError:
+    BLOOM_FILTER_AVAILABLE = False
+    # 如果没有pybloom_live，使用内置的set作为备选
+    class ScalableBloomFilter:
+        LARGE_SET_GROWTH = 1
+        def __init__(self, initial_capacity=10000, error_rate=0.001, mode=None):
+            self.set = set()
+        def add(self, item):
+            self.set.add(item)
+        def __contains__(self, item):
+            return item in self.set
 
 # ==================== 配置区 ====================
 class Config:
@@ -21,12 +41,38 @@ class Config:
     OUTPUT_DIR = Path(os.getenv('OUTPUT_DIR', './data/filter'))
     
     # 输入文件模式
-    ADBLOCK_PATTERNS = ['adblock*.txt', '*.adb']
-    ALLOW_PATTERNS = ['allow*.txt', 'white*.txt']
+    ADBLOCK_PATTERNS = ['adblock*.txt']
+    ALLOW_PATTERNS = ['allow*.txt']
     
     # 输出文件名
     OUTPUT_BLOCK = 'adblock_filter.txt'
     OUTPUT_ALLOW = 'allow.txt'
+    
+    # 布隆过滤器配置
+    USE_BLOOM_FILTER = True  # 布隆过滤器开关
+    BLOOM_INITIAL_CAPACITY = 200000
+    BLOOM_ERROR_RATE = 0.0005
+    
+    # Adblockparser开关
+    USE_ADBLOCKPARSER = False
+    
+    # 规则优化配置
+    REMOVE_BROAD_RULES = True
+    BROAD_RULE_PATTERNS = [
+        r'^[^/*|]+\.[^/*|]+$',
+        r'^[^/*|]+\.[^/*|]+\.[^/*|]+$',
+        r'^\|\|[a-zA-Z0-9.-]+\^$',
+    ]
+    
+    # 异步I/O配置
+    ASYNC_ENABLED = True
+    ASYNC_BUFFER_SIZE = 8192
+    MAX_CONCURRENT_FILES = 5
+    
+    # 内存监控配置
+    MEMORY_MONITOR_ENABLED = True
+    MEMORY_WARNING_THRESHOLD = 512 * 1024 * 1024  # 512MB
+    MEMORY_CRITICAL_THRESHOLD = 1024 * 1024 * 1024  # 1GB
     
     # 日志配置
     LOG_LEVEL = logging.INFO
@@ -43,6 +89,37 @@ def setup_logging():
 
 logger = setup_logging()
 
+# ==================== 内存监控 ====================
+class MemoryMonitor:
+    """内存使用监控器"""
+    
+    def __init__(self):
+        self.process = psutil.Process()
+        self.peak_memory = 0
+        
+    def check_memory(self):
+        """检查当前内存使用情况"""
+        if not Config.MEMORY_MONITOR_ENABLED:
+            return True
+            
+        current_memory = self.process.memory_info().rss
+        self.peak_memory = max(self.peak_memory, current_memory)
+        
+        if current_memory > Config.MEMORY_CRITICAL_THRESHOLD:
+            logger.error(f"内存使用超过临界值: {current_memory / 1024 / 1024:.2f}MB")
+            return False
+        elif current_memory > Config.MEMORY_WARNING_THRESHOLD:
+            logger.warning(f"内存使用超过警告值: {current_memory / 1024 / 1024:.2f}MB")
+            
+        return True
+    
+    def get_stats(self):
+        """获取内存统计信息"""
+        return {
+            'current_memory': self.process.memory_info().rss,
+            'peak_memory': self.peak_memory
+        }
+
 # ==================== 分析识别区 ====================
 class RuleParser:
     """规则解析器，支持AdBlock/AdGuard语法"""
@@ -55,12 +132,27 @@ class RuleParser:
     ELEMENT_HIDING_REGEX = re.compile(r'^##')
 
     def __init__(self):
-        self.seen_rules = set()
+        # 每次运行都创建新的布隆过滤器实例
+        if Config.USE_BLOOM_FILTER and BLOOM_FILTER_AVAILABLE:
+            self.filter = ScalableBloomFilter(
+                initial_capacity=Config.BLOOM_INITIAL_CAPACITY,
+                error_rate=Config.BLOOM_ERROR_RATE
+            )
+            logger.info(f"使用布隆过滤器 (初始容量: {Config.BLOOM_INITIAL_CAPACITY}, 误判率: {Config.BLOOM_ERROR_RATE})")
+        else:
+            self.filter = set()
+            logger.info("使用简单集合进行去重")
+            
         self.rule_stats = {
             'total_processed': 0,
             'valid_rules': 0,
             'invalid_rules': 0,
-            'duplicate_rules': 0
+            'duplicate_rules': 0,
+            'hosts_rules': 0,
+            'domain_rules': 0,
+            'ip_rules': 0,
+            'element_hiding_rules': 0,
+            'adguard_rules': 0
         }
 
     def is_comment_or_empty(self, line: str) -> bool:
@@ -71,16 +163,34 @@ class RuleParser:
     def is_duplicate(self, rule: str) -> bool:
         """检查规则是否重复"""
         normalized = rule.strip().lower()
-        if normalized in self.seen_rules:
-            self.rule_stats['duplicate_rules'] += 1
-            return True
-        self.seen_rules.add(normalized)
-        return False
+        
+        if Config.USE_BLOOM_FILTER and BLOOM_FILTER_AVAILABLE:
+            # 使用布隆过滤器进行检查
+            if normalized in self.filter:
+                self.rule_stats['duplicate_rules'] += 1
+                return True
+                
+            self.filter.add(normalized)
+            return False
+        else:
+            # 使用简单集合检查
+            if normalized in self.filter:
+                self.rule_stats['duplicate_rules'] += 1
+                return True
+                
+            self.filter.add(normalized)
+            return False
 
     def validate_rule(self, rule: str) -> bool:
         """验证规则有效性"""
         self.rule_stats['total_processed'] += 1
         
+        # 检查过于宽泛的规则
+        if self.is_broad_rule(rule):
+            logger.debug(f"跳过过于宽泛的规则: {rule}")
+            self.rule_stats['invalid_rules'] += 1
+            return False
+            
         # 基本验证
         if (rule.strip() and not rule.strip().startswith(('!', '[', '#')) and 
             any(char in rule for char in ['^', '*', '|', '/', '$', '#'])):
@@ -90,11 +200,22 @@ class RuleParser:
         self.rule_stats['invalid_rules'] += 1
         return False
 
+    def is_broad_rule(self, rule: str) -> bool:
+        """检查是否是过于宽泛的规则"""
+        if not Config.REMOVE_BROAD_RULES:
+            return False
+            
+        for pattern in Config.BROAD_RULE_PATTERNS:
+            if re.match(pattern, rule):
+                return True
+        return False
+
     def parse_hosts_rule(self, line: str) -> Optional[str]:
         """解析hosts规则"""
         match = self.HOSTS_REGEX.search(line)
         if match:
             domain = match.group(1)
+            self.rule_stats['hosts_rules'] += 1
             return f"||{domain}^"
         return None
 
@@ -105,6 +226,7 @@ class RuleParser:
             domain = match.group(1)
             # 检查是否是有效域名
             if '.' in domain and not domain.startswith('.') and not domain.endswith('.'):
+                self.rule_stats['domain_rules'] += 1
                 return line
         return None
 
@@ -116,6 +238,7 @@ class RuleParser:
             try:
                 # 验证IP/CIDR格式
                 ipaddress.ip_network(ip_cidr, strict=False)
+                self.rule_stats['ip_rules'] += 1
                 return line
             except:
                 pass
@@ -124,6 +247,14 @@ class RuleParser:
     def is_element_hiding_rule(self, rule: str) -> bool:
         """检查是否是元素隐藏规则"""
         if self.ELEMENT_HIDING_REGEX.match(rule):
+            self.rule_stats['element_hiding_rules'] += 1
+            return True
+        return False
+
+    def is_adguard_rule(self, rule: str) -> bool:
+        """检查是否是AdGuard规则"""
+        if '$' in rule:
+            self.rule_stats['adguard_rules'] += 1
             return True
         return False
 
@@ -135,6 +266,10 @@ class RuleParser:
         # 跳过注释和空行
         if self.is_comment_or_empty(original_line):
             return None, False
+
+        # 特殊处理AdGuard规则
+        if self.is_adguard_rule(original_line):
+            return original_line, is_allow
 
         # 特殊处理元素隐藏规则
         if self.is_element_hiding_rule(original_line):
@@ -170,23 +305,24 @@ class RuleMerger:
 
     def __init__(self):
         self.parser = RuleParser()
+        self.memory_monitor = MemoryMonitor()
         self.block_rules = set()
         self.allow_rules = set()
-        self.processed_files = set()
 
-    def process_file(self, file_path: Path, is_allow: bool = False):
-        """处理单个文件"""
-        if file_path in self.processed_files:
-            logger.debug(f"跳过已处理文件: {file_path}")
-            return
-            
+    async def process_file_async(self, file_path: Path, is_allow: bool = False):
+        """异步处理单个文件"""
         logger.info(f"处理文件: {file_path}")
-        self.processed_files.add(file_path)
         count = 0
 
         try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
+            # 使用异步文件读取
+            async with aiofiles.open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                async for line in f:
+                    # 检查内存使用情况
+                    if not self.memory_monitor.check_memory():
+                        logger.error("内存使用超过临界值，停止处理")
+                        return count
+                    
                     rule, rule_is_allow = self.parser.classify_rule(line)
                     if rule and not self.parser.is_duplicate(rule) and self.parser.validate_rule(rule):
                         if is_allow or rule_is_allow:
@@ -195,16 +331,113 @@ class RuleMerger:
                             self.block_rules.add(rule)
                         count += 1
 
+        except UnicodeDecodeError:
+            # 尝试其他编码
+            try:
+                async with aiofiles.open(file_path, 'r', encoding='latin-1', errors='ignore') as f:
+                    async for line in f:
+                        if not self.memory_monitor.check_memory():
+                            logger.error("内存使用超过临界值，停止处理")
+                            return count
+                        
+                        rule, rule_is_allow = self.parser.classify_rule(line)
+                        if rule and not self.parser.is_duplicate(rule) and self.parser.validate_rule(rule):
+                            if is_allow or rule_is_allow:
+                                self.allow_rules.add(rule)
+                            else:
+                                self.block_rules.add(rule)
+                            count += 1
+            except Exception as e:
+                logger.error(f"处理文件 {file_path} 时出错 (latin-1编码): {e}")
+        except FileNotFoundError:
+            logger.error(f"文件不存在: {file_path}")
         except Exception as e:
-            logger.error(f"处理文件 {file_path} 时出错: {e}")
+            logger.error(f"处理文件 {file_path} 时发生未知错误: {e}")
 
         logger.info(f"从 {file_path} 添加了 {count} 条规则")
+        return count
 
-    def process_files(self, patterns: List[str], is_allow: bool = False):
-        """处理一组文件"""
+    def process_file_sync(self, file_path: Path, is_allow: bool = False):
+        """同步处理单个文件"""
+        logger.info(f"处理文件: {file_path}")
+        count = 0
+
+        try:
+            # 使用同步文件读取
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    # 检查内存使用情况
+                    if not self.memory_monitor.check_memory():
+                        logger.error("内存使用超过临界值，停止处理")
+                        return count
+                    
+                    rule, rule_is_allow = self.parser.classify_rule(line)
+                    if rule and not self.parser.is_duplicate(rule) and self.parser.validate_rule(rule):
+                        if is_allow or rule_is_allow:
+                            self.allow_rules.add(rule)
+                        else:
+                            self.block_rules.add(rule)
+                        count += 1
+
+        except UnicodeDecodeError:
+            # 尝试其他编码
+            try:
+                with open(file_path, 'r', encoding='latin-1', errors='ignore') as f:
+                    for line in f:
+                        if not self.memory_monitor.check_memory():
+                            logger.error("内存使用超过临界值，停止处理")
+                            return count
+                        
+                        rule, rule_is_allow = self.parser.classify_rule(line)
+                        if rule and not self.parser.is_duplicate(rule) and self.parser.validate_rule(rule):
+                            if is_allow or rule_is_allow:
+                                self.allow_rules.add(rule)
+                            else:
+                                self.block_rules.add(rule)
+                            count += 1
+            except Exception as e:
+                logger.error(f"处理文件 {file_path} 时出错 (latin-1编码): {e}")
+        except FileNotFoundError:
+            logger.error(f"文件不存在: {file_path}")
+        except Exception as e:
+            logger.error(f"处理文件 {file_path} 时发生未知错误: {e}")
+
+        logger.info(f"从 {file_path} 添加了 {count} 条规则")
+        return count
+
+    async def process_files_async(self, patterns: List[str], is_allow: bool = False):
+        """异步处理一组文件"""
+        tasks = []
         for pattern in patterns:
             for file_path in glob.glob(str(Config.INPUT_DIR / pattern)):
-                self.process_file(Path(file_path), is_allow)
+                tasks.append(self.process_file_async(Path(file_path), is_allow))
+        
+        # 限制并发文件处理数量
+        semaphore = asyncio.Semaphore(Config.MAX_CONCURRENT_FILES)
+        
+        async def limited_task(task):
+            async with semaphore:
+                return await task
+        
+        results = await asyncio.gather(*[limited_task(task) for task in tasks], return_exceptions=True)
+        
+        # 处理结果
+        total_count = 0
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"文件处理任务出错: {result}")
+            else:
+                total_count += result
+                
+        return total_count
+
+    def process_files_sync(self, patterns: List[str], is_allow: bool = False):
+        """同步处理一组文件"""
+        total_count = 0
+        for pattern in patterns:
+            for file_path in glob.glob(str(Config.INPUT_DIR / pattern)):
+                total_count += self.process_file_sync(Path(file_path), is_allow)
+        return total_count
 
     def remove_conflicts(self):
         """移除冲突规则（允许规则优先）"""
@@ -252,7 +485,13 @@ class RuleMerger:
 
     def get_stats(self) -> Dict[str, Any]:
         """获取处理统计信息"""
-        return self.parser.rule_stats
+        stats = self.parser.rule_stats.copy()
+        stats.update({
+            'block_rules': len(self.block_rules),
+            'allow_rules': len(self.allow_rules),
+            'memory_stats': self.memory_monitor.get_stats()
+        })
+        return stats
 
 # ==================== 输入输出区 ====================
 def ensure_directories():
@@ -260,8 +499,31 @@ def ensure_directories():
     Config.INPUT_DIR.mkdir(parents=True, exist_ok=True)
     Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-def write_rules(block_rules: List[str], allow_rules: List[str]):
-    """将规则写入文件"""
+async def write_rules_async(block_rules: List[str], allow_rules: List[str]):
+    """异步将规则写入文件"""
+    # 写入拦截规则
+    try:
+        async with aiofiles.open(Config.OUTPUT_DIR / Config.OUTPUT_BLOCK, 'w', encoding='utf-8', newline='\n') as f:
+            for rule in block_rules:
+                await f.write(f"{rule}\n")
+    except Exception as e:
+        logger.error(f"写入拦截规则文件时出错: {e}")
+        return
+
+    # 写入允许规则
+    try:
+        async with aiofiles.open(Config.OUTPUT_DIR / Config.OUTPUT_ALLOW, 'w', encoding='utf-8', newline='\n') as f:
+            for rule in allow_rules:
+                await f.write(f"{rule}\n")
+    except Exception as e:
+        logger.error(f"写入允许规则文件时出错: {e}")
+        return
+
+    logger.info(f"写入 {len(block_rules)} 条拦截规则到 {Config.OUTPUT_BLOCK}")
+    logger.info(f"写入 {len(allow_rules)} 条允许规则到 {Config.OUTPUT_ALLOW}")
+
+def write_rules_sync(block_rules: List[str], allow_rules: List[str]):
+    """同步将规则写入文件"""
     # 写入拦截规则
     try:
         with open(Config.OUTPUT_DIR / Config.OUTPUT_BLOCK, 'w', encoding='utf-8', newline='\n') as f:
@@ -284,8 +546,8 @@ def write_rules(block_rules: List[str], allow_rules: List[str]):
     logger.info(f"写入 {len(allow_rules)} 条允许规则到 {Config.OUTPUT_ALLOW}")
 
 # ==================== 主程序 ====================
-def main():
-    """主函数"""
+async def main_async():
+    """异步主函数"""
     logger.info("开始处理广告规则")
     start_time = datetime.now()
 
@@ -297,11 +559,17 @@ def main():
 
     # 处理广告拦截规则文件
     logger.info("开始处理广告拦截规则")
-    merger.process_files(Config.ADBLOCK_PATTERNS, is_allow=False)
+    if Config.ASYNC_ENABLED:
+        await merger.process_files_async(Config.ADBLOCK_PATTERNS, is_allow=False)
+    else:
+        merger.process_files_sync(Config.ADBLOCK_PATTERNS, is_allow=False)
 
     # 处理允许规则文件
     logger.info("开始处理允许规则")
-    merger.process_files(Config.ALLOW_PATTERNS, is_allow=True)
+    if Config.ASYNC_ENABLED:
+        await merger.process_files_async(Config.ALLOW_PATTERNS, is_allow=True)
+    else:
+        merger.process_files_sync(Config.ALLOW_PATTERNS, is_allow=True)
 
     # 移除冲突规则
     merger.remove_conflicts()
@@ -310,7 +578,10 @@ def main():
     block_rules, allow_rules = merger.get_sorted_rules()
 
     # 写入文件
-    write_rules(block_rules, allow_rules)
+    if Config.ASYNC_ENABLED:
+        await write_rules_async(block_rules, allow_rules)
+    else:
+        write_rules_sync(block_rules, allow_rules)
 
     # 统计信息
     end_time = datetime.now()
@@ -320,6 +591,60 @@ def main():
     logger.info(f"处理完成，耗时: {duration}")
     logger.info(f"总计: {len(block_rules)} 条拦截规则, {len(allow_rules)} 条允许规则")
     logger.info(f"处理统计: {stats['total_processed']} 条规则已处理, {stats['valid_rules']} 条有效, {stats['invalid_rules']} 条无效, {stats['duplicate_rules']} 条重复")
+    
+    # 内存统计
+    memory_stats = stats['memory_stats']
+    logger.info(f"内存使用: 峰值 {memory_stats['peak_memory'] / 1024 / 1024:.2f}MB, 当前 {memory_stats['current_memory'] / 1024 / 1024:.2f}MB")
+    
+    # 规则类型统计
+    logger.info(f"规则类型: {stats['hosts_rules']} 条hosts规则, {stats['domain_rules']} 条域名规则, {stats['ip_rules']} 条IP规则, {stats['element_hiding_rules']} 条元素隐藏规则, {stats['adguard_rules']} 条AdGuard规则")
+
+def main_sync():
+    """同步主函数"""
+    logger.info("开始处理广告规则")
+    start_time = datetime.now()
+
+    # 确保目录存在
+    ensure_directories()
+
+    # 初始化合并器
+    merger = RuleMerger()
+
+    # 处理广告拦截规则文件
+    logger.info("开始处理广告拦截规则")
+    merger.process_files_sync(Config.ADBLOCK_PATTERNS, is_allow=False)
+
+    # 处理允许规则文件
+    logger.info("开始处理允许规则")
+    merger.process_files_sync(Config.ALLOW_PATTERNS, is_allow=True)
+
+    # 移除冲突规则
+    merger.remove_conflicts()
+
+    # 获取排序后的规则
+    block_rules, allow_rules = merger.get_sorted_rules()
+
+    # 写入文件
+    write_rules_sync(block_rules, allow_rules)
+
+    # 统计信息
+    end_time = datetime.now()
+    duration = end_time - start_time
+    stats = merger.get_stats()
+    
+    logger.info(f"处理完成，耗时: {duration}")
+    logger.info(f"总计: {len(block_rules)} 条拦截规则, {len(allow_rules)} 条允许规则")
+    logger.info(f"处理统计: {stats['total_processed']} 条规则已处理, {stats['valid_rules']} 条有效, {stats['invalid_rules']} 条无效, {stats['duplicate_rules']} 条重复")
+    
+    # 内存统计
+    memory_stats = stats['memory_stats']
+    logger.info(f"内存使用: 峰值 {memory_stats['peak_memory'] / 1024 / 1024:.2f}MB, 当前 {memory_stats['current_memory'] / 1024 / 1024:.2f}MB")
+    
+    # 规则类型统计
+    logger.info(f"规则类型: {stats['hosts_rules']} 条hosts规则, {stats['domain_rules']} 条域名规则, {stats['ip_rules']} 条IP规则, {stats['element_hiding_rules']} 条元素隐藏规则, {stats['adguard_rules']} 条AdGuard规则")
 
 if __name__ == '__main__':
-    main()
+    if Config.ASYNC_ENABLED:
+        asyncio.run(main_async())
+    else:
+        main_sync()
