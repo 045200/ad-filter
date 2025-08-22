@@ -13,8 +13,8 @@ from urllib.parse import urlparse
 # 配置参数
 GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
 DATA_DIR = Path(GITHUB_WORKSPACE) / "data" / "filter"
-OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "adblock_adg.txt"  # 改为根目录
-ALLOW_FILE = Path(GITHUB_WORKSPACE) / "allow_adg.txt"   # 改为根目录
+OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "adblock_adg.txt"
+ALLOW_FILE = Path(GITHUB_WORKSPACE) / "allow_allow.txt"
 
 # 输入文件模式
 ADBLOCK_PATTERNS = ["adblock.txt"]
@@ -39,6 +39,7 @@ POPUP_RULE = re.compile(r'.*\$popup.*')
 GENERIC_RULE = re.compile(r'^\|\|.*\^$')
 URL_RULE = re.compile(r'^https?://[^\s]+$')
 MALWARE_RULE = re.compile(r'.*(malware|phishing|ransomware|trojan|virus|worm|spyware|adware|keylogger)\.', re.IGNORECASE)
+REGEX_RULE = re.compile(r'^/.*/$')
 
 # AdGuard 特定规则识别
 ADGUARD_DNSREWRITE = re.compile(r'.*\$dnsrewrite=.*')
@@ -53,6 +54,12 @@ ADGUARD_REDIRECT = re.compile(r'.*\$redirect=.*')
 ADGUARD_REMOVEHEADER = re.compile(r'.*\$removeheader=.*')
 ADGUARD_REMOVEPARAM = re.compile(r'.*\$removeparam=.*')
 ADGUARD_APP = re.compile(r'.*\$app=.*')
+
+# AdGuard Home 支持的修饰符
+ADGUARD_HOME_MODIFIERS = {
+    '$domain', '$client', '$important', '$dnstype', '$dnsrewrite',
+    '$ctag', '$badfilter', '$redirect', '~third-party', '$third-party'
+}
 
 # 域名黑名单
 DOMAIN_BLACKLIST = {
@@ -111,6 +118,20 @@ def is_adguard_rule(rule: str) -> bool:
     ])
 
 
+def is_adguard_home_compatible(rule: str) -> bool:
+    """检查规则是否与AdGuard Home兼容"""
+    # 跳过元素隐藏规则
+    if '##' in rule:
+        return False
+    
+    # 检查是否包含AdGuard Home不支持的修饰符
+    for modifier in SUPPORTED_MODIFIERS:
+        if modifier in rule and modifier not in ADGUARD_HOME_MODIFIERS:
+            return False
+    
+    return True
+
+
 def normalize_rule(rule: str) -> str:
     """规范化规则以提高匹配率"""
     # 移除不必要的通配符
@@ -146,6 +167,10 @@ def convert_adblock_to_adguard(rule: str) -> str:
     """将AdBlock规则转换为AdGuard规则"""
     # 如果是AdGuard特定规则，直接返回
     if is_adguard_rule(rule):
+        return rule
+    
+    # 处理正则表达式规则
+    if REGEX_RULE.match(rule):
         return rule
     
     # 处理元素隐藏规则
