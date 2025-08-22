@@ -37,7 +37,7 @@ class Config:
     ALLOW_PATTERNS = ['allow*.txt']
     
     # 输出文件名
-    OUTPUT_BLOCK = 'adblock.txt'
+    OUTPUT_BLOCK = 'filter_adblock.txt'
     OUTPUT_ALLOW = 'allow.txt'
     
     # 布隆过滤器配置
