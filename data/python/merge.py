@@ -40,8 +40,8 @@ class Config:
     CACHE_DIR = Path(os.getenv('CACHE_DIR', './data/cache'))
     
     # 输入文件模式
-    ADBLOCK_PATTERNS = ['adblock*.txt', '*.adb', '*.txt']
-    ALLOW_PATTERNS = ['allow*.txt', 'white*.txt']
+    ADBLOCK_PATTERNS = ['adblock*.txt']
+    ALLOW_PATTERNS = ['allow*.txt']
     
     # 输出文件名
     OUTPUT_BLOCK = 'adblock_filter.txt'
@@ -427,21 +427,32 @@ class AdvancedRuleMerger:
         self.parser = AdvancedRuleParser()
         self.block_rules = set()
         self.allow_rules = set()
+        self.processed_files = set()  # 记录已处理的文件
 
-    def process_file(self, file_path: Path):
+    def process_file(self, file_path: Path, is_allow: bool = False):
         """处理单个文件"""
+        if file_path in self.processed_files:
+            logger.debug(f"跳过已处理文件: {file_path}")
+            return
+            
         logger.info(f"处理文件: {file_path}")
+        self.processed_files.add(file_path)
         count = 0
 
         try:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 for line_num, line in enumerate(f, 1):
-                    rule, is_allow = self.parser.classify_rule(line)
+                    rule, rule_is_allow = self.parser.classify_rule(line)
                     if rule and not self.parser.is_duplicate(rule) and self.parser.validate_rule(rule):
+                        # 如果明确指定了规则类型，使用指定的类型
                         if is_allow:
                             self.allow_rules.add(rule)
                         else:
-                            self.block_rules.add(rule)
+                            # 否则使用规则自身的类型
+                            if rule_is_allow:
+                                self.allow_rules.add(rule)
+                            else:
+                                self.block_rules.add(rule)
                         count += 1
 
                     # 每处理10000行输出一次进度
@@ -453,11 +464,11 @@ class AdvancedRuleMerger:
 
         logger.info(f"从 {file_path} 添加了 {count} 条规则")
 
-    def process_files(self, patterns: List[str]):
+    def process_files(self, patterns: List[str], is_allow: bool = False):
         """处理一组文件"""
         for pattern in patterns:
             for file_path in glob.glob(str(Config.INPUT_DIR / pattern)):
-                self.process_file(Path(file_path))
+                self.process_file(Path(file_path), is_allow)
 
     def remove_conflicts(self):
         """移除冲突规则（允许规则优先）"""
@@ -649,11 +660,11 @@ def main():
 
     # 处理广告拦截规则文件
     logger.info("开始处理广告拦截规则")
-    merger.process_files(Config.ADBLOCK_PATTERNS)
+    merger.process_files(Config.ADBLOCK_PATTERNS, is_allow=False)
 
     # 处理允许规则文件
     logger.info("开始处理允许规则")
-    merger.process_files(Config.ALLOW_PATTERNS)
+    merger.process_files(Config.ALLOW_PATTERNS, is_allow=True)
 
     # 移除冲突规则
     merger.remove_conflicts()
