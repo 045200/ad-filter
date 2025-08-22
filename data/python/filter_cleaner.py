@@ -39,7 +39,7 @@ class Config:
     # 输入输出路径
     INPUT_DIR = BASE_DIR / "data" / "filter"
     OUTPUT_DIR = BASE_DIR / "data" / "filter"
-    CLEANED_FILE = OUTPUT_DIR / "adblock_filter.txt"
+    CLEANED_FILE = OUTPUT_DIR / "adblock.txt"
     
     # 依赖文件路径 (由外部脚本下载)
     GEOIP_DB_FILE = BASE_DIR / "data" / "GeoLite2-Country.mmdb"
@@ -584,7 +584,7 @@ class AdblockCleaner:
         
         try:
             # 查找所有输入文件
-            input_files = list(Config.INPUT_DIR.glob("adblock*.txt"))
+            input_files = list(Config.INPUT_DIR.glob("adblock_filter.txt"))
             if not input_files:
                 logger.warning(f"未找到输入文件于 {Config.INPUT_DIR}")
                 return
