@@ -10,7 +10,7 @@ import yaml
 
 GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
 INPUT_BLOCK = Path(GITHUB_WORKSPACE) / "adblock_adg.txt"
-INPUT_ALLOW = Path(GITHUB_WORKSPACE) / "allow_allow.txt"
+INPUT_ALLOW = Path(GITHUB_WORKSPACE) / "allow_adg.txt"
 OUTPUT_CLASH = Path(GITHUB_WORKSPACE) / "adblock_clash.yaml"
 OUTPUT_SURGE = Path(GITHUB_WORKSPACE) / "adblock_surge.conf"
 
