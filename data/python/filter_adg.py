@@ -13,8 +13,8 @@ from urllib.parse import urlparse
 # 配置参数
 GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
 DATA_DIR = Path(GITHUB_WORKSPACE) / "data" / "filter"
-OUTPUT_FILE = GITHUB_WORKSPACE / "adblock_adg.txt"
-ALLOW_FILE = GITHUB_WORKSPACE / "allow_adh.txt"
+OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "adblock_adg.txt"  # 改为根目录
+ALLOW_FILE = Path(GITHUB_WORKSPACE) / "allow_adg.txt"   # 改为根目录
 
 # 输入文件模式
 ADBLOCK_PATTERNS = ["adblock.txt"]
@@ -266,19 +266,73 @@ def process_rules(input_rules, is_allow=False):
     return processed_rules
 
 
+def merge_and_deduplicate(rules, allows):
+    """合并和去重规则，确保白名单优先"""
+    # 创建规则字典以便快速查找
+    rule_dict = {}
+    for rule in rules:
+        # 提取域名部分作为键
+        domain_key = extract_domain(rule)
+        if domain_key:
+            if domain_key not in rule_dict:
+                rule_dict[domain_key] = []
+            rule_dict[domain_key].append(rule)
+    
+    # 应用白名单规则
+    for allow_rule in allows:
+        domain_key = extract_domain(allow_rule)
+        if domain_key and domain_key in rule_dict:
+            # 移除匹配的拦截规则
+            del rule_dict[domain_key]
+    
+    # 重新构建规则列表
+    merged_rules = []
+    for domain_rules in rule_dict.values():
+        merged_rules.extend(domain_rules)
+    
+    # 添加白名单规则
+    merged_rules.extend(allows)
+    
+    return merged_rules
+
+
+def extract_domain(rule: str) -> str:
+    """从规则中提取域名"""
+    if rule.startswith('@@'):
+        rule = rule[2:]
+    
+    # 处理 ||domain^ 格式
+    if rule.startswith('||') and rule.endswith('^'):
+        return rule[2:-1]
+    
+    # 处理 domain^ 格式
+    if rule.endswith('^'):
+        return rule[:-1]
+    
+    # 处理普通域名
+    if PLAIN_DOMAIN.match(rule):
+        return rule
+    
+    return None
+
+
 def write_output(rules, allows):
     """写入输出文件"""
     # 确保输出目录存在
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    Path(GITHUB_WORKSPACE).mkdir(parents=True, exist_ok=True)
     
-    # 直接写入规则，不添加任何头信息
+    # 合并和去重规则
+    merged_rules = merge_and_deduplicate(rules, allows)
+    
+    # 写入合并后的规则
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(rules) + '\n')
+        f.write('\n'.join(merged_rules) + '\n')
 
+    # 单独写入白名单规则
     with open(ALLOW_FILE, 'w', encoding='utf-8') as f:
         f.write('\n'.join(allows) + '\n')
 
-    print(f"已生成拦截规则: {len(rules)} 条")
+    print(f"已生成合并规则: {len(merged_rules)} 条")
     print(f"已生成白名单规则: {len(allows)} 条")
 
 
