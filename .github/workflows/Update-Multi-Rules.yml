@@ -30,7 +30,26 @@ jobs:
           fetch-depth: 0
           ref: ${{ env.MAIN_BRANCH }}
 
-      # 3. 检测文件变更
+      # 2. 设置Python环境
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # 3. 安装系统依赖
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq moreutils
+
+      # 4. 安装Python依赖
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests aiodns pyyaml beautifulsoup4 pytz chardet aiohttp psutil tldextract maxminddb xxhash python-whois aiodns
+          pip install adblockparser IPy ipfilter pybloom-live counting_bloom_filter
+
+      # 5. 检测文件变更
       - name: Detect changed files
         id: changes
         uses: tj-actions/changed-files@v42
@@ -38,30 +57,26 @@ jobs:
           files: |
             data/mod/**
 
-      # 4. 设置Python环境
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      # 5. 安装依赖
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq moreutils
-          pip install --upgrade pip
-          pip install requests aiodns pyyaml beautifulsoup4 pytz chardet aiohttp psutil tldextract maxminddb xxhash python-whois aiodns python-whois
-
-
-      # 7. 处理基础规则和广告拦截规则清理（合并后的步骤）
-      - name: Process base rules and clean adblock
+      # 6. 运行dl.py（独立步骤）
+      - name: Run dl.py
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/dl.py
+
+      # 7. 运行merge.py（独立步骤）
+      - name: Run merge.py (广告规则合并去重)
+        run: |
+          cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/merge.py
+          echo "广告规则合并完成"
+
+      # 8. 运行filter_cleaner.py（独立步骤）
+      - name: Run filter_cleaner.py
+        run: |
+          cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py
 
-      # 8. 生成多格式规则（原来的第九步）
+      # 9. 生成多格式规则
       - name: Generate multi-format rules
         run: |
           cd ${{ github.workspace }}
@@ -76,13 +91,14 @@ jobs:
           python ${{ env.PYTHON_SCRIPTS }}/filter_clash.py
           python ${{ env.PYTHON_SCRIPTS }}/filter_mihomo.py
 
-      # 9. 更新文档
+      # 10. 更新文档
       - name: Update documentation
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/title.py
           python ${{ env.PYTHON_SCRIPTS }}/readme.py
-      # 10. 提交变更
+
+      # 11. 提交变更
       - name: Commit changes
         id: commit
         run: |
@@ -96,11 +112,12 @@ jobs:
             echo "has_changes=false" >> $GITHUB_OUTPUT
           else
             echo "has_changes=true" >> $GITHUB_OUTPUT
-             git commit -m "Multi-format update: Rules [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
+            git commit -m "Multi-format update: Rules [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
           fi
 
-      # 11. 推送变更
+      # 12. 推送变更
       - name: Push changes
+        if: steps.commit.outputs.has_changes == 'true'
         run: |
           cd ${{ github.workspace }}
           for i in 1 2 3; do
@@ -108,7 +125,7 @@ jobs:
             git push origin ${{ env.MAIN_BRANCH }} && break || sleep 5
           done
 
-      # 12. 清理旧工作流
+      # 13. 清理旧工作流
       - name: Cleanup old workflows
         uses: Mattraks/delete-workflow-runs@v2
         with:
