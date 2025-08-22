@@ -7,6 +7,7 @@
 
 import os
 import re
+import sys
 import glob
 import logging
 import hashlib
@@ -65,14 +66,26 @@ class Config:
         r'^\|\|[a-zA-Z0-9.-]+\^$',  # 基础域名拦截
     ]
     
-    # 中文区常见误杀域名白名单
-    CHINESE_WHITELIST = [
+    # 中文区重要域名保护列表（主域名，不拦截）
+    CHINESE_MAIN_DOMAINS = [
         '360.com', '360.cn', 'baidu.com', 'baidu.cn',
         'aliyun.com', 'alipay.com', 'taobao.com', 'tmall.com',
         'qq.com', 'weixin.qq.com', 'jd.com', '163.com',
         'sina.com.cn', 'sohu.com', 'ifeng.com', 'xinhuanet.com',
         'people.com.cn', 'gov.cn', 'edu.cn', 'mi.com',
         'xiaomi.com', 'huawei.com', 'oppo.com', 'vivo.com'
+    ]
+    
+    # 中文区广告子域名模式（可以拦截）
+    CHINESE_AD_PATTERNS = [
+        r'.*\.ad\..*', r'.*\.ads\..*', r'.*\.adx\..*', r'.*\.adv\..*',
+        r'.*\.publicidad\..*', r'.*\.adserver\..*', r'.*\.adbanner\..*',
+        r'.*\.advert\..*', r'.*\.promo\..*', r'.*\.tracking\..*',
+        r'.*\.analytics\..*', r'.*\.stat\..*', r'.*\.count\..*',
+        r'ad.*\..*', r'ads.*\..*', r'adx.*\..*', r'adv.*\..*',
+        r'.*\.doubleclick\.net', r'.*\.googleadservices\.com',
+        r'.*\.googlesyndication\.com', r'.*\.moatads\.com',
+        r'.*\.scorecardresearch\.com', r'.*\.exosrv\.com'
     ]
     
     # 日志配置
@@ -147,8 +160,13 @@ class AdvancedRuleParser:
             'hosts_rules': 0,
             'domain_rules': 0,
             'element_hiding_rules': 0,
-            'adguard_rules': 0
+            'adguard_rules': 0,
+            'chinese_main_domain_rules_skipped': 0,
+            'chinese_ad_rules_kept': 0
         }
+        
+        # 预编译中文区广告模式正则
+        self.chinese_ad_regexes = [re.compile(pattern) for pattern in Config.CHINESE_AD_PATTERNS]
         
         logger.info(f"使用可扩展布隆过滤器 (初始容量: {Config.BLOOM_INITIAL_CAPACITY}, 误判率: {Config.BLOOM_ERROR_RATE})")
         logger.info(f"Adblockparser验证: {'启用' if Config.USE_ADBLOCKPARSER and ADBLOCKPARSER_AVAILABLE else '禁用'}")
@@ -192,22 +210,67 @@ class AdvancedRuleParser:
                 return True
         return False
 
-    def is_chinese_whitelisted(self, rule: str) -> bool:
-        """检查是否匹配中文区白名单"""
-        for domain in Config.CHINESE_WHITELIST:
-            if domain in rule:
+    def is_chinese_main_domain(self, rule: str) -> bool:
+        """检查是否匹配中文区主域名（需要保护）"""
+        # 提取规则中的域名部分
+        domain = self.extract_domain_from_rule(rule)
+        if not domain:
+            return False
+            
+        # 检查是否匹配中文区主域名
+        for main_domain in Config.CHINESE_MAIN_DOMAINS:
+            if domain == main_domain or domain.endswith('.' + main_domain):
                 return True
         return False
+
+    def is_chinese_ad_domain(self, rule: str) -> bool:
+        """检查是否匹配中文区广告域名（可以拦截）"""
+        # 提取规则中的域名部分
+        domain = self.extract_domain_from_rule(rule)
+        if not domain:
+            return False
+            
+        # 检查是否匹配广告模式
+        for regex in self.chinese_ad_regexes:
+            if regex.match(domain):
+                return True
+        return False
+
+    def extract_domain_from_rule(self, rule: str) -> Optional[str]:
+        """从规则中提取域名"""
+        # 处理 ||domain^ 格式
+        if rule.startswith('||') and rule.endswith('^'):
+            return rule[2:-1]
+            
+        # 处理 domain##selector 格式
+        if '##' in rule:
+            parts = rule.split('##')
+            if parts[0]:  # 有域名部分
+                return parts[0]
+                
+        # 处理普通域名规则
+        match = self.DOMAIN_REGEX.match(rule)
+        if match:
+            return match.group(1)
+            
+        return None
 
     def validate_rule(self, rule: str) -> bool:
         """验证规则有效性"""
         self.rule_stats['total_processed'] += 1
         
-        # 检查中文区白名单
-        if self.is_chinese_whitelisted(rule):
-            logger.debug(f"跳过中文区白名单规则: {rule}")
+        # 检查中文区主域名（需要保护）
+        if self.is_chinese_main_domain(rule):
+            logger.debug(f"跳过中文区主域名规则: {rule}")
+            self.rule_stats['chinese_main_domain_rules_skipped'] += 1
             self.rule_stats['invalid_rules'] += 1
             return False
+            
+        # 检查中文区广告域名（可以拦截）
+        if self.is_chinese_ad_domain(rule):
+            logger.debug(f"保留中文区广告域名规则: {rule}")
+            self.rule_stats['chinese_ad_rules_kept'] += 1
+            # 继续后续验证
             
         # 检查过于宽泛的规则
         if self.is_broad_rule(rule):
@@ -501,7 +564,9 @@ class AdvancedRuleMerger:
             'hosts_rules': self.parser.rule_stats['hosts_rules'],
             'domain_rules': self.parser.rule_stats['domain_rules'],
             'adguard_rules': self.parser.rule_stats['adguard_rules'],
-            'element_hiding_rules_count': self.parser.rule_stats['element_hiding_rules']
+            'element_hiding_rules_count': self.parser.rule_stats['element_hiding_rules'],
+            'chinese_main_domain_rules_skipped': self.parser.rule_stats['chinese_main_domain_rules_skipped'],
+            'chinese_ad_rules_kept': self.parser.rule_stats['chinese_ad_rules_kept']
         }
 
 # ==================== 输入输出区 ====================
@@ -615,6 +680,7 @@ def main():
     logger.info(f"处理完成，耗时: {duration}")
     logger.info(f"总计: {len(block_rules)} 条拦截规则, {len(allow_rules)} 条允许规则")
     logger.info(f"处理统计: {stats['total_processed']} 条规则已处理, {stats['valid_rules']} 条有效, {stats['invalid_rules']} 条无效, {stats['duplicate_rules']} 条重复")
+    logger.info(f"中文区处理: 跳过 {stats['chinese_main_domain_rules_skipped']} 条主域名规则, 保留 {stats['chinese_ad_rules_kept']} 条广告域名规则")
 
 if __name__ == '__main__':
     main()
