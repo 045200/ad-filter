@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-优化版广告规则合并去重脚本
-支持AdBlock语法、AdGuard语法和hosts语法
-针对GitHub Action环境优化
+高级广告规则合并去重脚本
+支持AdBlock语法、AdGuard语法(含AdGuard Home)和hosts语法
+针对中文区广告过滤优化，集成anti-AD项目最佳实践
 """
 
 import os
@@ -11,10 +11,11 @@ import glob
 import logging
 import hashlib
 import ipaddress
-from typing import Set, List, Tuple, Optional, Dict
+import urllib.request
+import json
+from typing import Set, List, Tuple, Optional, Dict, Any
 from pathlib import Path
 from datetime import datetime
-from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # 尝试导入必要的第三方库
 try:
@@ -30,39 +31,70 @@ except ImportError:
         def __contains__(self, item):
             return item in self.set
 
-try:
-    from adblockparser import AdblockRule
-except ImportError:
-    # 简单的AdblockRule模拟类
-    class AdblockRule:
-        def __init__(self, rule):
-            self.rule = rule
-            self.is_filtering_rule = bool(rule.strip()) and not rule.strip().startswith(('!', '[', '#'))
-
 # ==================== 配置区 ====================
 class Config:
     # 输入输出路径
     INPUT_DIR = Path(os.getenv('INPUT_DIR', './data/filter'))
     OUTPUT_DIR = Path(os.getenv('OUTPUT_DIR', './data/filter'))
-
+    CACHE_DIR = Path(os.getenv('CACHE_DIR', './data/cache'))
+    
     # 输入文件模式
-    ADBLOCK_PATTERNS = ['adblock*.txt']
-    ALLOW_PATTERNS = ['allow*.txt']
-
+    ADBLOCK_PATTERNS = ['adblock*.txt', '*.adb', '*.txt']
+    ALLOW_PATTERNS = ['allow*.txt', 'white*.txt']
+    
     # 输出文件名
-    OUTPUT_BLOCK = 'adblock_filter.txt'
-    OUTPUT_ALLOW = 'allow.txt'
-
+    OUTPUT_BLOCK = 'adblock_merged.txt'
+    OUTPUT_ALLOW = 'allow_merged.txt'
+    OUTPUT_STATS = 'filter_stats.json'
+    
     # 布隆过滤器配置
-    BLOOM_INITIAL_CAPACITY = 100000
+    BLOOM_INITIAL_CAPACITY = 200000
     BLOOM_ERROR_RATE = 0.001
     BLOOM_GROWTH_MODE = ScalableBloomFilter.LARGE_SET_GROWTH
-
-    # 处理模式
-    MAX_WORKERS = os.cpu_count() or 4
-
+    
+    # Adblockparser开关 - 根据上游规则类型调整
+    # True: 适用于标准AdBlock语法规则 (误判低)
+    # False: 适用于AdGuard/AdGuard Home语法规则 (误判高)
+    USE_ADBLOCKPARSER = True
+    
+    # 规则优化配置
+    REMOVE_BROAD_RULES = True  # 移除过于宽泛的规则
+    BROAD_RULE_PATTERNS = [
+        r'^[^/*|]+\.[^/*|]+$',  # 简单域名规则
+        r'^[^/*|]+\.[^/*|]+\.[^/*|]+$',  # 二级域名规则
+        r'^\|\|[a-zA-Z0-9.-]+\^$',  # 基础域名拦截
+    ]
+    
+    # 中文区常见误杀域名白名单
+    CHINESE_WHITELIST = [
+        '360.com', '360.cn', 'baidu.com', 'baidu.cn',
+        'aliyun.com', 'alipay.com', 'taobao.com', 'tmall.com',
+        'qq.com', 'weixin.qq.com', 'jd.com', '163.com',
+        'sina.com.cn', 'sohu.com', 'ifeng.com', 'xinhuanet.com',
+        'people.com.cn', 'gov.cn', 'edu.cn', 'mi.com',
+        'xiaomi.com', 'huawei.com', 'oppo.com', 'vivo.com'
+    ]
+    
     # 日志配置
     LOG_LEVEL = logging.INFO
+    
+    # 测试配置
+    TEST_DOMAINS = [
+        'www.example.com', 'example.com', 'test.com',
+        'ad.example.com', 'tracking.example.com'
+    ]
+
+# 尝试导入adblockparser
+if Config.USE_ADBLOCKPARSER:
+    try:
+        from adblockparser import AdblockRule
+        ADBLOCKPARSER_AVAILABLE = True
+    except ImportError:
+        ADBLOCKPARSER_AVAILABLE = False
+        print("警告: adblockparser不可用，使用简化规则验证")
+else:
+    ADBLOCKPARSER_AVAILABLE = False
+    print("信息: adblockparser验证已禁用")
 
 # ==================== 初始化日志 ====================
 def setup_logging():
@@ -77,8 +109,8 @@ def setup_logging():
 logger = setup_logging()
 
 # ==================== 分析识别区 ====================
-class EnhancedRuleParser:
-    """增强型规则解析器，支持更多语法"""
+class AdvancedRuleParser:
+    """高级规则解析器，支持AdBlock/AdGuard语法和中文区优化"""
 
     # 预编译正则表达式
     HOSTS_REGEX = re.compile(r'^(?:\d{1,3}\.){3}\d{1,3}\s+([^#\s]+)')
@@ -88,6 +120,16 @@ class EnhancedRuleParser:
     IP_CIDR_REGEX = re.compile(r'^(\||@@\||)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2}|))')
     MODIFIER_REGEX = re.compile(r'^(.*?)\$(.+)$')
     REGEX_RULE_REGEX = re.compile(r'^/(.*)/$')
+    ELEMENT_HIDING_REGEX = re.compile(r'^##')
+    
+    # AdGuard修饰符
+    ADGUARD_MODIFIERS = {
+        'document', 'script', 'stylesheet', 'subdocument', 'object', 'image',
+        'xmlhttprequest', 'websocket', 'webrtc', 'popup', 'elemhide',
+        'generichide', 'genericblock', 'content', 'other', 'third-party',
+        'match-case', 'donottrack', 'sitekey', 'denyallow', 'redirect',
+        'removeparam', 'important', 'badfilter', 'empty', 'mp4', 'app'
+    }
 
     def __init__(self):
         # 使用可扩展的布隆过滤器
@@ -97,7 +139,19 @@ class EnhancedRuleParser:
             mode=Config.BLOOM_GROWTH_MODE
         )
         self.exact_seen_rules = set()
+        self.rule_stats = {
+            'total_processed': 0,
+            'valid_rules': 0,
+            'invalid_rules': 0,
+            'duplicate_rules': 0,
+            'hosts_rules': 0,
+            'domain_rules': 0,
+            'element_hiding_rules': 0,
+            'adguard_rules': 0
+        }
+        
         logger.info(f"使用可扩展布隆过滤器 (初始容量: {Config.BLOOM_INITIAL_CAPACITY}, 误判率: {Config.BLOOM_ERROR_RATE})")
+        logger.info(f"Adblockparser验证: {'启用' if Config.USE_ADBLOCKPARSER and ADBLOCKPARSER_AVAILABLE else '禁用'}")
 
     def is_comment_or_empty(self, line: str) -> bool:
         """检查是否是注释或空行"""
@@ -106,6 +160,7 @@ class EnhancedRuleParser:
 
     def normalize_rule(self, rule: str) -> str:
         """规范化规则以便比较"""
+        # 移除多余空格，转换为小写，但保留原始修饰符
         return rule.strip().lower()
 
     def is_duplicate(self, rule: str) -> bool:
@@ -120,22 +175,69 @@ class EnhancedRuleParser:
 
         # 精确集合确认
         if normalized in self.exact_seen_rules:
+            self.rule_stats['duplicate_rules'] += 1
             return True
 
         # 布隆过滤器误判情况处理
         self.exact_seen_rules.add(normalized)
         return False
 
+    def is_broad_rule(self, rule: str) -> bool:
+        """检查是否是过于宽泛的规则"""
+        if not Config.REMOVE_BROAD_RULES:
+            return False
+            
+        for pattern in Config.BROAD_RULE_PATTERNS:
+            if re.match(pattern, rule):
+                return True
+        return False
+
+    def is_chinese_whitelisted(self, rule: str) -> bool:
+        """检查是否匹配中文区白名单"""
+        for domain in Config.CHINESE_WHITELIST:
+            if domain in rule:
+                return True
+        return False
+
     def validate_rule(self, rule: str) -> bool:
         """验证规则有效性"""
+        self.rule_stats['total_processed'] += 1
+        
+        # 检查中文区白名单
+        if self.is_chinese_whitelisted(rule):
+            logger.debug(f"跳过中文区白名单规则: {rule}")
+            self.rule_stats['invalid_rules'] += 1
+            return False
+            
+        # 检查过于宽泛的规则
+        if self.is_broad_rule(rule):
+            logger.debug(f"跳过过于宽泛的规则: {rule}")
+            self.rule_stats['invalid_rules'] += 1
+            return False
+            
         try:
-            # 使用adblockparser验证规则
-            adblock_rule = AdblockRule(rule)
-            return adblock_rule.is_filtering_rule
+            if Config.USE_ADBLOCKPARSER and ADBLOCKPARSER_AVAILABLE:
+                # 使用adblockparser验证规则
+                adblock_rule = AdblockRule(rule)
+                if adblock_rule.is_filtering_rule:
+                    self.rule_stats['valid_rules'] += 1
+                    return True
+            else:
+                # 使用简化验证
+                if (rule.strip() and not rule.strip().startswith(('!', '[', '#')) and 
+                    any(char in rule for char in ['^', '*', '|', '/', '$', '#'])):
+                    self.rule_stats['valid_rules'] += 1
+                    return True
+                    
+            self.rule_stats['invalid_rules'] += 1
+            return False
         except:
             # 特殊规则处理（如hosts规则、IP规则等）
             if self.parse_hosts_rule(rule) or self.parse_ip_rule(rule):
+                self.rule_stats['valid_rules'] += 1
                 return True
+                
+            self.rule_stats['invalid_rules'] += 1
             return False
 
     def parse_hosts_rule(self, line: str) -> Optional[str]:
@@ -144,12 +246,14 @@ class EnhancedRuleParser:
         match = self.HOSTS_REGEX.search(line)
         if match:
             domain = match.group(1)
+            self.rule_stats['hosts_rules'] += 1
             return f"||{domain}^"
 
         # 尝试IPv6格式
         match = self.HOSTS_IPV6_REGEX.search(line)
         if match:
             domain = match.group(1)
+            self.rule_stats['hosts_rules'] += 1
             return f"||{domain}^"
 
         return None
@@ -161,6 +265,7 @@ class EnhancedRuleParser:
             domain = match.group(1)
             # 检查是否是有效域名
             if '.' in domain and not domain.startswith('.') and not domain.endswith('.'):
+                self.rule_stats['domain_rules'] += 1
                 return line
         return None
 
@@ -177,6 +282,26 @@ class EnhancedRuleParser:
                 pass
         return None
 
+    def is_adguard_rule(self, rule: str) -> bool:
+        """检查是否是AdGuard规则"""
+        if '$' in rule:
+            # 提取修饰符部分
+            parts = rule.split('$')
+            if len(parts) > 1:
+                modifiers = parts[-1].split(',')
+                for mod in modifiers:
+                    if mod.strip() in self.ADGUARD_MODIFIERS:
+                        self.rule_stats['adguard_rules'] += 1
+                        return True
+        return False
+
+    def is_element_hiding_rule(self, rule: str) -> bool:
+        """检查是否是元素隐藏规则"""
+        if self.ELEMENT_HIDING_REGEX.match(rule):
+            self.rule_stats['element_hiding_rules'] += 1
+            return True
+        return False
+
     def classify_rule(self, line: str) -> Tuple[Optional[str], bool]:
         """分类规则并返回处理后的规则和是否是允许规则"""
         original_line = line.strip()
@@ -186,8 +311,12 @@ class EnhancedRuleParser:
         if self.is_comment_or_empty(original_line):
             return None, False
 
-        # 特殊处理AdGuard文档级拦截规则[citation:7]
-        if '$document' in original_line:
+        # 特殊处理AdGuard规则
+        if self.is_adguard_rule(original_line):
+            return original_line, is_allow
+
+        # 特殊处理元素隐藏规则
+        if self.is_element_hiding_rule(original_line):
             return original_line, is_allow
 
         # 尝试解析为各种规则类型
@@ -210,11 +339,16 @@ class EnhancedRuleParser:
 
         # 4. 使用adblockparser验证规则
         try:
-            adblock_rule = AdblockRule(original_line)
-            if adblock_rule.is_filtering_rule:
-                return original_line, is_allow
-        except:
-            pass
+            if Config.USE_ADBLOCKPARSER and ADBLOCKPARSER_AVAILABLE:
+                adblock_rule = AdblockRule(original_line)
+                if adblock_rule.is_filtering_rule:
+                    return original_line, is_allow
+            else:
+                # 简化验证
+                if any(char in original_line for char in ['^', '*', '|', '/', '$']):
+                    return original_line, is_allow
+        except Exception as e:
+            logger.debug(f"规则解析错误: {original_line}, 错误: {e}")
 
         # 5. 如果所有解析都失败，保留原始规则
         if any(char in original_line for char in ['^', '*', '|', '/', '$']):
@@ -223,11 +357,11 @@ class EnhancedRuleParser:
         return None, False
 
 # ==================== 合并去重区 ====================
-class EnhancedRuleMerger:
-    """增强型规则合并器"""
+class AdvancedRuleMerger:
+    """高级规则合并器，支持多种优化策略"""
 
     def __init__(self):
-        self.parser = EnhancedRuleParser()
+        self.parser = AdvancedRuleParser()
         self.block_rules = set()
         self.allow_rules = set()
 
@@ -262,32 +396,80 @@ class EnhancedRuleMerger:
             for file_path in glob.glob(str(Config.INPUT_DIR / pattern)):
                 self.process_file(Path(file_path))
 
-    def parallel_process_files(self, patterns: List[str]):
-        """并行处理文件组"""
-        with ProcessPoolExecutor(max_workers=Config.MAX_WORKERS) as executor:
-            # 提交所有文件处理任务
-            future_to_file = {}
-            for pattern in patterns:
-                for file_path in glob.glob(str(Config.INPUT_DIR / pattern)):
-                    future = executor.submit(self.process_file, Path(file_path))
-                    future_to_file[future] = file_path
-
-            # 等待所有任务完成
-            for future in as_completed(future_to_file):
-                file_path = future_to_file[future]
-                try:
-                    future.result()
-                except Exception as exc:
-                    logger.error(f"处理文件 {file_path} 时生成异常: {exc}")
-
     def remove_conflicts(self):
         """移除冲突规则（允许规则优先）"""
         before = len(self.block_rules)
-        self.block_rules -= self.allow_rules
+        
+        # 创建允许规则的域名集合用于快速查找
+        allow_domains = set()
+        for rule in self.allow_rules:
+            if rule.startswith('@@||') and rule.endswith('^'):
+                domain = rule[4:-1]  # 提取域名部分
+                allow_domains.add(domain)
+        
+        # 移除被允许规则覆盖的拦截规则
+        rules_to_remove = set()
+        for rule in self.block_rules:
+            if rule.startswith('||') and rule.endswith('^'):
+                domain = rule[2:-1]  # 提取域名部分
+                if domain in allow_domains:
+                    rules_to_remove.add(rule)
+        
+        self.block_rules -= rules_to_remove
         after = len(self.block_rules)
         removed = before - after
+        
         if removed > 0:
             logger.info(f"移除 {removed} 条冲突规则")
+
+    def optimize_rules(self):
+        """优化规则集，移除冗余规则"""
+        # 实现基于anti-AD项目的优化策略
+        logger.info("开始规则优化...")
+        
+        # 统计优化前的规则数量
+        before_block = len(self.block_rules)
+        before_allow = len(self.allow_rules)
+        
+        # 移除被更通用规则覆盖的特定规则
+        self._remove_redundant_rules()
+        
+        # 统计优化后的规则数量
+        after_block = len(self.block_rules)
+        after_allow = len(self.allow_rules)
+        
+        logger.info(f"规则优化完成: 拦截规则 {before_block} -> {after_block}, " +
+                   f"允许规则 {before_allow} -> {after_allow}")
+
+    def _remove_redundant_rules(self):
+        """移除冗余规则"""
+        # 实现基于anti-AD项目的冗余规则移除逻辑
+        redundant_rules = set()
+        
+        # 将规则按类型分组
+        domain_rules = [r for r in self.block_rules if r.startswith('||') and r.endswith('^')]
+        other_rules = self.block_rules - set(domain_rules)
+        
+        # 创建域名到规则的映射
+        domain_map = {}
+        for rule in domain_rules:
+            domain = rule[2:-1]  # 移除||和^
+            domain_map[domain] = rule
+        
+        # 检查其他规则是否被域名规则覆盖
+        for rule in other_rules:
+            # 提取规则中的域名部分
+            domain_match = re.search(r'\|\|([a-zA-Z0-9.-]+)\^', rule)
+            if domain_match:
+                domain = domain_match.group(1)
+                if domain in domain_map:
+                    redundant_rules.add(rule)
+        
+        # 移除冗余规则
+        self.block_rules -= redundant_rules
+        
+        if redundant_rules:
+            logger.info(f"移除 {len(redundant_rules)} 条冗余规则")
 
     def get_sorted_rules(self) -> Tuple[List[str], List[str]]:
         """获取排序后的规则列表"""
@@ -304,13 +486,30 @@ class EnhancedRuleMerger:
 
         block_list = sorted(self.block_rules, key=rule_key)
         allow_list = sorted(self.allow_rules, key=rule_key)
+        
         return block_list, allow_list
+
+    def get_stats(self) -> Dict[str, Any]:
+        """获取处理统计信息"""
+        return {
+            'total_processed': self.parser.rule_stats['total_processed'],
+            'valid_rules': self.parser.rule_stats['valid_rules'],
+            'invalid_rules': self.parser.rule_stats['invalid_rules'],
+            'duplicate_rules': self.parser.rule_stats['duplicate_rules'],
+            'block_rules': len(self.block_rules),
+            'allow_rules': len(self.allow_rules),
+            'hosts_rules': self.parser.rule_stats['hosts_rules'],
+            'domain_rules': self.parser.rule_stats['domain_rules'],
+            'adguard_rules': self.parser.rule_stats['adguard_rules'],
+            'element_hiding_rules_count': self.parser.rule_stats['element_hiding_rules']
+        }
 
 # ==================== 输入输出区 ====================
 def ensure_directories():
     """确保输入输出目录存在"""
     Config.INPUT_DIR.mkdir(parents=True, exist_ok=True)
     Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    Config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 def write_rules(block_rules: List[str], allow_rules: List[str]):
     """将规则写入文件（纯净语法，无元信息）"""
@@ -335,6 +534,42 @@ def write_rules(block_rules: List[str], allow_rules: List[str]):
     logger.info(f"写入 {len(block_rules)} 条拦截规则到 {Config.OUTPUT_BLOCK}")
     logger.info(f"写入 {len(allow_rules)} 条允许规则到 {Config.OUTPUT_ALLOW}")
 
+def write_stats(stats: Dict[str, Any]):
+    """写入统计信息"""
+    try:
+        with open(Config.OUTPUT_DIR / Config.OUTPUT_STATS, 'w', encoding='utf-8') as f:
+            json.dump(stats, f, indent=2, ensure_ascii=False)
+        logger.info(f"统计信息已写入 {Config.OUTPUT_STATS}")
+    except Exception as e:
+        logger.error(f"写入统计信息时出错: {e}")
+
+# ==================== 测试验证区 ====================
+def test_rules(block_rules: List[str], allow_rules: List[str]):
+    """测试规则有效性"""
+    logger.info("开始规则测试...")
+    
+    # 创建测试规则集
+    test_rules = block_rules + allow_rules
+    
+    # 简单的语法检查
+    valid_count = 0
+    invalid_count = 0
+    
+    for rule in test_rules:
+        if not rule.strip() or rule.strip().startswith('!'):
+            continue
+            
+        # 基本语法检查
+        if any(char in rule for char in ['^', '*', '|', '/', '$', '#']):
+            valid_count += 1
+        else:
+            invalid_count += 1
+            logger.warning(f"可疑规则: {rule}")
+    
+    logger.info(f"规则测试完成: 有效 {valid_count}, 可疑 {invalid_count}")
+    
+    return valid_count, invalid_count
+
 # ==================== 主程序 ====================
 def main():
     """主函数"""
@@ -345,30 +580,41 @@ def main():
     ensure_directories()
 
     # 初始化合并器
-    merger = EnhancedRuleMerger()
+    merger = AdvancedRuleMerger()
 
-    # 处理广告拦截规则文件（并行处理）
-    logger.info("开始并行处理广告拦截规则")
-    merger.parallel_process_files(Config.ADBLOCK_PATTERNS)
+    # 处理广告拦截规则文件
+    logger.info("开始处理广告拦截规则")
+    merger.process_files(Config.ADBLOCK_PATTERNS)
 
-    # 处理允许规则文件（并行处理）
-    logger.info("开始并行处理允许规则")
-    merger.parallel_process_files(Config.ALLOW_PATTERNS)
+    # 处理允许规则文件
+    logger.info("开始处理允许规则")
+    merger.process_files(Config.ALLOW_PATTERNS)
 
     # 移除冲突规则
     merger.remove_conflicts()
 
+    # 优化规则集
+    merger.optimize_rules()
+
     # 获取排序后的规则
     block_rules, allow_rules = merger.get_sorted_rules()
 
+    # 测试规则
+    test_rules(block_rules, allow_rules)
+
     # 写入文件
     write_rules(block_rules, allow_rules)
+
+    # 写入统计信息
+    stats = merger.get_stats()
+    write_stats(stats)
 
     # 统计信息
     end_time = datetime.now()
     duration = end_time - start_time
     logger.info(f"处理完成，耗时: {duration}")
     logger.info(f"总计: {len(block_rules)} 条拦截规则, {len(allow_rules)} 条允许规则")
+    logger.info(f"处理统计: {stats['total_processed']} 条规则已处理, {stats['valid_rules']} 条有效, {stats['invalid_rules']} 条无效, {stats['duplicate_rules']} 条重复")
 
 if __name__ == '__main__':
     main()
