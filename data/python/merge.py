@@ -1,326 +1,367 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""
+优化版广告规则合并去重脚本
+支持AdBlock语法、AdGuard语法和hosts语法
+"""
 
 import os
-import sys
 import re
-import time
-import xxhash
-import chardet
+import glob
 import logging
+import hashlib
+from typing import Set, List, Tuple, Dict, Optional
 from pathlib import Path
-from collections import defaultdict
-from typing import List, Optional, Callable
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from datetime import datetime
+from collections import OrderedDict
 
-# 配置日志（适配GitHub Action）
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(levelname)s - %(message)s',  # 简化格式，GitHub会自动添加时间
-    stream=sys.stdout  # 确保日志输出到stdout，GitHub Action能捕获
-)
-logger = logging.getLogger(__name__)
+# 第三方库导入
+try:
+    from adblockparser import AdblockRule
+    from IPy import IP
+    import ipfilter
+    from pybloom_live import BloomFilter
+    from counting_bloom_filter import CountingBloomFilter  # 支持删除的布隆过滤器
+except ImportError as e:
+    print(f"缺少必要的依赖库: {e}")
+    print("请使用 pip install adblockparser IPy ipfilter pybloom-live counting_bloom_filter 安装")
+    exit(1)
 
-# 读取GitHub环境变量（用于日志标记）
-GITHUB_RUN_ID = os.getenv('GITHUB_RUN_ID', 'unknown-run')
-GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
-BASE_DIR = Path(GITHUB_WORKSPACE)
-TEMP_DIR = BASE_DIR / os.getenv('TEMP_DIR', 'tmp')
-OUTPUT_FILE = TEMP_DIR / "adblock_filter.txt"
+# ==================== 配置区 ====================
+class Config:
+    # 输入输出路径
+    INPUT_DIR = Path(os.getenv('INPUT_DIR', './data/filter'))
+    OUTPUT_DIR = Path(os.getenv('OUTPUT_DIR', './data/filter'))
+    
+    # 输入文件模式
+    ADBLOCK_PATTERNS = ['adblock*.txt', 'adguard*.txt', 'filter*.txt']
+    ALLOW_PATTERNS = ['allow*.txt', 'whitelist*.txt']
+    
+    # 输出文件名
+    OUTPUT_BLOCK = 'filter_adblock.txt'
+    OUTPUT_ALLOW = 'filter_allow.txt'
+    
+    # 布隆过滤器配置
+    BLOOM_CAPACITY = 300000
+    BLOOM_ERROR_RATE = 0.005
+    
+    # 缓存大小
+    LRU_CACHE_SIZE = 10000
+    
+    # 日志配置
+    LOG_LEVEL = logging.INFO
 
-MAX_WORKERS = int(os.getenv('MAX_WORKERS', 4))
-INPUT_PATTERNS = ["adblock*.txt", "allow*.txt", "hosts*", "adg*.txt", "adh*.txt", "filter*.txt"]
-HASH_SALT = "adblock_salt_2024_v5"
+# ==================== 初始化日志 ====================
+def setup_logging():
+    """配置日志系统"""
+    logging.basicConfig(
+        level=Config.LOG_LEVEL,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler()]
+    )
+    return logging.getLogger(__name__)
 
-# 预编译正则表达式
-COMMENT = re.compile(r'^[!#]')
-EMPTY_LINE = re.compile(r'^\s*$')
-HOSTS_LINE = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}')
-ADH_IP_RULE = re.compile(r'^(IP-CIDR|IP-CIDR6):[^,]+,[A-Za-z]+$', re.IGNORECASE)
-ADG_DNSREWRITE = re.compile(r'^\|\|.*\$dnsrewrite=')
-ADG_SCRIPTLET = re.compile(r'(##\+js\(|#%#//scriptlet\()')
-ADG_CSS = re.compile(r'^##|^#@#')
-ADG_MODIFIER = re.compile(r'^.*\$[a-zA-Z0-9_]+(=[^,]+)?(,[a-zA-Z0-9_]+(=[^,]+)?)*$')
-ADG_NETWORK = re.compile(r'^\|\|.*\^')
-ADG_COSMETIC = re.compile(r'^##.*')
-ADB_EXCEPTION = re.compile(r'^@@')
+logger = setup_logging()
 
-
-class AdblockMerger:
+# ==================== 分析识别区 ====================
+class EnhancedRuleParser:
+    """增强型规则解析器，支持更多语法"""
+    
+    # 预编译正则表达式
+    HOSTS_REGEX = re.compile(r'^(?:\d{1,3}\.){3}\d{1,3}\s+([^#\s]+)')
+    HOSTS_IPV6_REGEX = re.compile(r'^(?:[0-9a-fA-F:]+)\s+([^#\s]+)')
+    COMMENT_REGEX = re.compile(r'^\s*[!#]|\[Adblock')
+    DOMAIN_REGEX = re.compile(r'^(?:\|\|)?([a-zA-Z0-9.-]+)[\^\\/*]?')
+    IP_CIDR_REGEX = re.compile(r'^(\||@@\||)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2}|))')
+    MODIFIER_REGEX = re.compile(r'^(.*?)\$(.+)$')
+    REGEX_RULE_REGEX = re.compile(r'^/(.*)/$')
+    
     def __init__(self):
-        # 确保临时目录存在
-        TEMP_DIR.mkdir(parents=True, exist_ok=True)
-        self.input_files: List[Path] = []
-        self.file_hashes: set[str] = set()
-        self.unique_rules: dict[int, str] = {}  # 用普通字典替代OrderedDict
-        self.rule_counters: defaultdict[str, int] = defaultdict(int)
-        # 规则归一化方法映射（确保调用与定义一致）
-        self._normalize_map: dict[str, Callable[[str], str]] = {
-            "exception": self._normalize_exception_rule,
-            "ip": self._normalize_ip_rule,
-            "dns_rewrite": self._normalize_dns_rewrite_rule,
-            "script": self._normalize_script_rule,
-            "css": self._normalize_css_rule,
-            "cosmetic": self._normalize_cosmetic_rule,
-            "option": self._normalize_option_rule,
-            "network": self._normalize_network_rule,
-            "hosts": self._normalize_hosts_rule,
-            "standard": self._normalize_standard_rule,
-        }
-
-    def run(self) -> None:
-        """主运行方法"""
-        start_time = time.time()
-        self._discover_input_files()
-
-        if not self.input_files:
-            logger.warning(f"[Run {GITHUB_RUN_ID}] 未找到有效规则文件（匹配模式：{INPUT_PATTERNS}）")
-            return
-
-        logger.info(f"[Run {GITHUB_RUN_ID}] 发现规则文件: {len(self.input_files)} 个，开始处理...")
-        self._process_files_parallel()
-
-        elapsed = time.time() - start_time
-        logger.info(
-            f"[Run {GITHUB_RUN_ID}] 合并完成 | "
-            f"处理文件: {len(self.input_files)} | "
-            f"去重后规则数: {len(self.unique_rules)} | "
-            f"耗时: {elapsed:.2f}s"
+        # 双结构去重：布隆过滤器(快速初步检查)+哈希集合(精确判断)
+        self.bloom_filter = BloomFilter(
+            capacity=Config.BLOOM_CAPACITY,
+            error_rate=Config.BLOOM_ERROR_RATE
         )
-
-        self._write_output()
-
-    def _discover_input_files(self) -> None:
-        """发现输入文件（去重）"""
-        for pattern in INPUT_PATTERNS:
-            for file_path in TEMP_DIR.glob(pattern):
-                if file_path == OUTPUT_FILE or not file_path.is_file():
-                    continue
-
-                file_hash = self._calculate_file_hash(file_path)
-                if file_hash in self.file_hashes:
-                    logger.debug(f"[Run {GITHUB_RUN_ID}] 跳过重复文件: {file_path}")
-                    continue
-
-                self.file_hashes.add(file_hash)
-                self.input_files.append(file_path)
-
-    def _calculate_file_hash(self, file_path: Path) -> str:
-        """计算文件哈希值（用于去重）"""
-        try:
-            hasher = xxhash.xxh64()
-            with open(file_path, 'rb') as f:
-                # 读取文件头部和大小作为哈希依据（避免全量读取大文件）
-                hasher.update(f.read(1024))
-                hasher.update(str(file_path.stat().st_size).encode())
-            return hasher.hexdigest()
-        except IOError as e:
-            logger.error(f"[Run {GITHUB_RUN_ID}] 计算文件哈希失败 {file_path}: {e}")
-            return str(file_path)  # 失败时用路径作为哈希（仅作保底）
-
-    def _process_files_parallel(self) -> None:
-        """并行处理文件（适配GitHub Action资源限制）"""
-        try:
-            with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                future_to_file = {executor.submit(self._process_file, fp): fp for fp in self.input_files}
-
-                for future in as_completed(future_to_file):
-                    file_path = future_to_file[future]
-                    try:
-                        file_rules = future.result()
-                        for rule in file_rules:
-                            self._add_rule(rule)
-                        logger.debug(f"[Run {GITHUB_RUN_ID}] 完成处理文件: {file_path}（规则数：{len(file_rules)}）")
-                    except UnicodeDecodeError as e:
-                        logger.error(f"[Run {GITHUB_RUN_ID}] 文件编码错误 {file_path}: {e}")
-                    except Exception as e:
-                        logger.error(f"[Run {GITHUB_RUN_ID}] 处理文件失败 {file_path}: {e}", exc_info=True)
-        except Exception as e:
-            logger.error(f"[Run {GITHUB_RUN_ID}] 线程池初始化失败: {e}")
-
-    def _process_file(self, file_path: Path) -> List[str]:
-        """处理单个文件，返回归一化后的规则列表"""
-        rules: List[str] = []
-        encoding = detect_encoding(file_path)
-
-        try:
-            with open(file_path, 'r', encoding=encoding, errors='replace') as f:
-                for line_num, line in enumerate(f, 1):
-                    line = line.strip()
-                    if not line or COMMENT.match(line) or EMPTY_LINE.match(line):
-                        continue
-
-                    try:
-                        rule = self._parse_line(line)
-                        if rule:
-                            rules.append(rule)
-                    except Exception as e:
-                        logger.warning(
-                            f"[Run {GITHUB_RUN_ID}] 解析规则失败（{file_path}:{line_num}）: "
-                            f"内容={line[:50]}... | 错误={e}"
-                        )
-        except IOError as e:
-            logger.error(f"[Run {GITHUB_RUN_ID}] 读取文件失败 {file_path}: {e}")
-
-        return rules
-
-    def _parse_line(self, line: str) -> Optional[str]:
-        """解析单行规则并归一化"""
-        # 移除行内注释
-        if '#' in line:
-            line = line.split('#', 1)[0].strip()
-        if '!' in line:
-            line = line.split('!', 1)[0].strip()
-        if not line:
-            return None
-
-        # 分类并归一化规则（基于映射表确保方法存在）
-        if ADB_EXCEPTION.match(line):
-            return self._normalize_map["exception"](line)
-        elif ADH_IP_RULE.match(line):
-            return self._normalize_map["ip"](line)
-        elif ADG_DNSREWRITE.search(line):
-            return self._normalize_map["dns_rewrite"](line)
-        elif ADG_SCRIPTLET.search(line):
-            return self._normalize_map["script"](line)
-        elif ADG_CSS.match(line):
-            return self._normalize_map["css"](line)
-        elif ADG_COSMETIC.match(line):
-            return self._normalize_map["cosmetic"](line)
-        elif ADG_MODIFIER.match(line) and '$' in line:
-            return self._normalize_map["option"](line)
-        elif ADG_NETWORK.match(line):
-            return self._normalize_map["network"](line)
-        elif HOSTS_LINE.match(line):
-            return self._normalize_map["hosts"](line)
-        else:
-            return self._normalize_map["standard"](line)
-
-    def _normalize_domain_part(self, domain_part: str) -> str:
-        """标准化域名部分（通用逻辑）"""
-        domain = domain_part.strip()
-        if not domain:
-            return ""
-
-        domain = re.sub(r'^https?://', '', domain)  # 移除协议头
-        domain = re.sub(r'^\*\.', '||', domain)      # 转换*.domain为||domain
-        domain = re.sub(r'\|$', '^', domain)         # 转换domain|为domain^
-        domain = re.sub(r'\*+', '*', domain)         # 合并连续星号
-        return domain
-
-    def _add_rule(self, rule: str) -> None:
-        """添加规则到去重集合"""
-        rule_hash = xxhash.xxh3_64(rule + HASH_SALT).intdigest()
-        if rule_hash not in self.unique_rules:
-            self.unique_rules[rule_hash] = rule
-            rule_type = self._classify_rule(rule)
-            self.rule_counters[rule_type] += 1
-
-    def _classify_rule(self, rule: str) -> str:
-        """规则分类（用于统计）"""
-        if rule.startswith('@@'):
-            return "exception_rules"
-        elif rule.startswith(('IP-CIDR', 'IP-CIDR6')):
-            return "ip_rules"
-        elif '$dnsrewrite=' in rule:
-            return "dns_rewrite_rules"
-        elif '##+js(' in rule or '#%#//scriptlet(' in rule:
-            return "script_rules"
-        elif rule.startswith(('##', '#@#')):
-            return "cosmetic_rules"
-        elif '$' in rule:
-            return "option_rules"
-        elif rule.startswith('||'):
-            return "network_rules"
-        else:
-            return "standard_rules"
-
-    def _write_output(self) -> None:
-        """写入合并结果（适配GitHub Action输出路径）"""
-        try:
-            with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-                f.write(f'! 合并广告过滤规则（GitHub Run ID: {GITHUB_RUN_ID}）\n')
-                f.write(f'! 生成时间: {time.strftime("%Y-%m-%d %H:%M:%S")}\n')
-                f.write(f'! 规则总数: {len(self.unique_rules)}\n')
-
-                for rule_type, count in self.rule_counters.items():
-                    f.write(f'! {rule_type}: {count}\n')
-
-                f.write('!\n')
-                for rule in self.unique_rules.values():
-                    f.write(rule + '\n')
-
-            logger.info(f"[Run {GITHUB_RUN_ID}] 已写入合并规则: {OUTPUT_FILE}（大小：{OUTPUT_FILE.stat().st_size//1024}KB）")
-        except IOError as e:
-            logger.error(f"[Run {GITHUB_RUN_ID}] 写入输出文件失败 {OUTPUT_FILE}: {e}")
-            sys.exit(1)
-
-    # 规则归一化方法（完整实现）
-    def _normalize_exception_rule(self, rule: str) -> str:
-        """标准化例外规则（@@开头）"""
-        return self._normalize_domain_part(rule)
-
-    def _normalize_ip_rule(self, rule: str) -> str:
-        """标准化IP规则（IP-CIDR/IP-CIDR6）"""
-        return rule.strip().upper()  # 统一大写格式（如IP-CIDR而非ip-cidr）
-
-    def _normalize_dns_rewrite_rule(self, rule: str) -> str:
-        """标准化DNS重写规则"""
-        return rule.strip()
-
-    def _normalize_script_rule(self, rule: str) -> str:
-        """标准化脚本规则（scriptlet）"""
-        return rule.strip()
-
-    def _normalize_css_rule(self, rule: str) -> str:
-        """标准化CSS规则"""
-        return rule.strip()
-
-    def _normalize_cosmetic_rule(self, rule: str) -> str:
-        """标准化美化规则"""
-        return rule.strip()
-
-    def _normalize_option_rule(self, rule: str) -> str:
-        """标准化带选项的规则（含$）"""
-        return rule.strip()
-
-    def _normalize_network_rule(self, rule: str) -> str:
-        """标准化网络规则（||开头）"""
-        return self._normalize_domain_part(rule)
-
-    def _normalize_hosts_rule(self, rule: str) -> str:
-        """将hosts规则转换为adblock格式（||domain^）"""
-        match = HOSTS_LINE.match(rule)
+        self.exact_seen_rules = set()
+        self.lru_cache = OrderedDict()
+        
+    def is_comment_or_empty(self, line: str) -> bool:
+        """检查是否是注释或空行"""
+        line = line.strip()
+        return not line or self.COMMENT_REGEX.match(line)
+    
+    def normalize_rule(self, rule: str) -> str:
+        """规范化规则以便比较"""
+        return rule.strip().lower()
+    
+    def is_duplicate(self, rule: str) -> bool:
+        """检查规则是否重复（双结构检查）"""
+        normalized = self.normalize_rule(rule)
+        
+        # LRU缓存检查
+        if normalized in self.lru_cache:
+            return True
+            
+        # 布隆过滤器初步检查
+        if normalized not in self.bloom_filter:
+            self.bloom_filter.add(normalized)
+            self.exact_seen_rules.add(normalized)
+            # 更新LRU缓存
+            self._update_lru_cache(normalized)
+            return False
+        
+        # 精确集合确认
+        if normalized in self.exact_seen_rules:
+            return True
+            
+        # 布隆过滤器误判情况处理
+        self.exact_seen_rules.add(normalized)
+        self._update_lru_cache(normalized)
+        return False
+        
+    def _update_lru_cache(self, rule: str):
+        """更新LRU缓存"""
+        if len(self.lru_cache) >= Config.LRU_CACHE_SIZE:
+            self.lru_cache.popitem(last=False)
+        self.lru_cache[rule] = True
+    
+    def parse_hosts_rule(self, line: str) -> Optional[str]:
+        """解析hosts规则（支持IPv4和IPv6）"""
+        # 尝试IPv4格式
+        match = self.HOSTS_REGEX.search(line)
         if match:
-            domain = match.group(2)
+            domain = match.group(1)
             return f"||{domain}^"
-        return self._normalize_standard_rule(rule)
+            
+        # 尝试IPv6格式
+        match = self.HOSTS_IPV6_REGEX.search(line)
+        if match:
+            domain = match.group(1)
+            return f"||{domain}^"
+            
+        return None
+    
+    def parse_modifier_rule(self, line: str) -> Optional[Tuple[str, bool]]:
+        """解析带修饰符的规则"""
+        match = self.MODIFIER_REGEX.search(line)
+        if match:
+            pattern, modifiers = match.groups()
+            # 检查常见修饰符
+            if 'client=' in modifiers or 'dnstype=' in modifiers:
+                return line, line.startswith('@@')
+        return None
+        
+    def parse_regex_rule(self, line: str) -> Optional[str]:
+        """解析正则表达式规则"""
+        if line.startswith('/') and line.endswith('/'):
+            return line
+        return None
+    
+    def classify_rule(self, line: str) -> Tuple[Optional[str], bool]:
+        """分类规则并返回处理后的规则和是否是允许规则"""
+        original_line = line.strip()
+        is_allow = original_line.startswith('@@')
+        
+        # 跳过注释和空行
+        if self.is_comment_or_empty(original_line):
+            return None, False
+        
+        # 尝试解析为各种规则类型（按复杂度从高到低尝试）
+        rule = None
+        
+        # 1. 正则表达式规则
+        rule = self.parse_regex_rule(original_line)
+        if rule:
+            return rule, is_allow
+        
+        # 2. 带修饰符的规则
+        result = self.parse_modifier_rule(original_line)
+        if result:
+            return result
+            
+        # 3. 检查是否是hosts规则
+        rule = self.parse_hosts_rule(original_line)
+        if rule:
+            return rule, is_allow
+        
+        # 4. 检查是否是域名规则
+        rule = self.parse_domain_rule(original_line)
+        if rule:
+            return rule, is_allow
+        
+        # 5. 检查是否是IP/CIDR规则
+        rule = self.parse_ip_rule(original_line)
+        if rule:
+            return rule, is_allow
+        
+        # 6. 使用adblockparser验证规则
+        try:
+            adblock_rule = AdblockRule(original_line)
+            if adblock_rule.is_filtering_rule:
+                return original_line, is_allow
+        except:
+            pass
+        
+        # 7. 如果所有解析都失败，尝试基本清理
+        if any(char in original_line for char in ['^', '*', '|', '/', '$']):
+            return original_line, is_allow
+        
+        return None, False
 
-    def _normalize_standard_rule(self, rule: str) -> str:
-        """标准化标准规则"""
-        return self._normalize_domain_part(rule)
+# ==================== 合并去重区 ====================
+class EnhancedRuleMerger:
+    """增强型规则合并器"""
+    
+    def __init__(self):
+        self.parser = EnhancedRuleParser()
+        self.block_rules = set()
+        self.allow_rules = set()
+        self.rule_sources = {}  # 跟踪规则来源
+        
+    def process_file(self, file_path: Path):
+        """处理单个文件"""
+        logger.info(f"处理文件: {file_path}")
+        count = 0
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                for line_num, line in enumerate(f, 1):
+                    rule, is_allow = self.parser.classify_rule(line)
+                    if rule and not self.parser.is_duplicate(rule):
+                        if is_allow:
+                            self.allow_rules.add(rule)
+                        else:
+                            self.block_rules.add(rule)
+                        # 记录规则来源
+                        self.rule_sources[rule] = f"{file_path.name}:{line_num}"
+                        count += 1
+        except Exception as e:
+            logger.error(f"处理文件 {file_path} 时出错: {e}")
+        
+        logger.info(f"从 {file_path} 添加了 {count} 条规则")
+    
+    def process_files(self, patterns: List[str], is_allow: bool = False):
+        """处理一组文件"""
+        for pattern in patterns:
+            for file_path in glob.glob(str(Config.INPUT_DIR / pattern)):
+                self.process_file(Path(file_path))
+    
+    def remove_conflicts(self):
+        """移除冲突规则（允许规则优先）"""
+        # 从拦截规则中移除允许列表中存在的规则
+        before = len(self.block_rules)
+        self.block_rules -= self.allow_rules
+        after = len(self.block_rules)
+        logger.info(f"移除 {before - after} 条冲突规则")
+    
+    def get_sorted_rules(self) -> Tuple[List[str], List[str]]:
+        """获取排序后的规则列表"""
+        # 按规则类型和字母顺序排序
+        def rule_key(rule):
+            if rule.startswith('||'):
+                return (0, rule)
+            elif rule.startswith('@@'):
+                return (1, rule)
+            elif rule.startswith('/') and rule.endswith('/'):
+                return (2, rule)
+            else:
+                return (3, rule)
+                
+        block_list = sorted(self.block_rules, key=rule_key)
+        allow_list = sorted(self.allow_rules, key=rule_key)
+        return block_list, allow_list
 
+# ==================== 输入输出区 ====================
+def ensure_directories():
+    """确保输入输出目录存在"""
+    Config.INPUT_DIR.mkdir(parents=True, exist_ok=True)
+    Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-def detect_encoding(file_path: Path) -> str:
-    """检测文件编码（适配多编码场景）"""
-    try:
-        with open(file_path, 'rb') as f:
-            raw_data = f.read(4096)  # 读取前4KB检测编码
-            result = chardet.detect(raw_data)
-            encoding = result['encoding'] or 'utf-8'
-            # 修正常见编码误判
-            if encoding in ['ISO-8859-1', 'Windows-1252']:
-                return 'utf-8'
-            return encoding
-    except IOError as e:
-        logger.warning(f"[Run {GITHUB_RUN_ID}] 检测编码失败 {file_path}: {e}，使用默认utf-8")
-        return 'utf-8'
+def read_existing_rules() -> Tuple[Set[str], Set[str]]:
+    """读取已存在的规则文件以实现增量更新"""
+    block_rules = set()
+    allow_rules = set()
+    parser = EnhancedRuleParser()
+    
+    output_block = Config.OUTPUT_DIR / Config.OUTPUT_BLOCK
+    output_allow = Config.OUTPUT_DIR / Config.OUTPUT_ALLOW
+    
+    for file_path in [output_block, output_allow]:
+        if file_path.exists():
+            is_allow = file_path == output_allow
+            with open(file_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    rule, _ = parser.classify_rule(line)
+                    if rule:
+                        if is_allow:
+                            allow_rules.add(rule)
+                        else:
+                            block_rules.add(rule)
+                        # 标记为已存在以避免重复
+                        parser.is_duplicate(rule)
+    
+    return block_rules, allow_rules
 
+def write_rules(block_rules: List[str], allow_rules: List[str]):
+    """将规则写入文件"""
+    # 写入拦截规则
+    with open(Config.OUTPUT_DIR / Config.OUTPUT_BLOCK, 'w', encoding='utf-8', newline='\n') as f:
+        for rule in block_rules:
+            f.write(f"{rule}\n")
+    
+    # 写入允许规则
+    with open(Config.OUTPUT_DIR / Config.OUTPUT_ALLOW, 'w', encoding='utf-8', newline='\n') as f:
+        for rule in allow_rules:
+            f.write(f"{rule}\n")
+    
+    logger.info(f"写入 {len(block_rules)} 条拦截规则到 {Config.OUTPUT_BLOCK}")
+    logger.info(f"写入 {len(allow_rules)} 条允许规则到 {Config.OUTPUT_ALLOW}")
+
+# ==================== 主程序 ====================
+def main():
+    """主函数"""
+    logger.info("开始处理广告规则")
+    start_time = datetime.now()
+    
+    # 确保目录存在
+    ensure_directories()
+    
+    # 初始化合并器
+    merger = EnhancedRuleMerger()
+    
+    # 读取已存在的规则以实现增量更新
+    existing_block, existing_allow = read_existing_rules()
+    merger.block_rules.update(existing_block)
+    merger.allow_rules.update(existing_allow)
+    
+    logger.info(f"已加载 {len(existing_block)} 条现有拦截规则和 {len(existing_allow)} 条允许规则")
+    
+    # 处理广告拦截规则文件
+    merger.process_files(Config.ADBLOCK_PATTERNS)
+    
+    # 处理允许规则文件
+    merger.process_files(Config.ALLOW_PATTERNS, is_allow=True)
+    
+    # 移除冲突规则
+    merger.remove_conflicts()
+    
+    # 获取排序后的规则
+    block_rules, allow_rules = merger.get_sorted_rules()
+    
+    # 写入文件
+    write_rules(block_rules, allow_rules)
+    
+    # 统计信息
+    end_time = datetime.now()
+    duration = end_time - start_time
+    logger.info(f"处理完成，耗时: {duration}")
+    logger.info(f"总计: {len(block_rules)} 条拦截规则, {len(allow_rules)} 条允许规则")
+    
+    # 输出语法覆盖统计
+    logger.info("规则类型统计:")
+    logger.info(f"  - 基本域名规则: {sum(1 for r in block_rules if r.startswith('||'))}")
+    logger.info(f"  - 例外规则: {len(allow_rules)}")
+    logger.info(f"  - 正则表达式规则: {sum(1 for r in block_rules if r.startswith('/') and r.endswith('/'))}")
+    logger.info(f"  - 带修饰符规则: {sum(1 for r in block_rules if '$' in r)}")
 
 if __name__ == '__main__':
-    try:
-        AdblockMerger().run()
-        sys.exit(0)
-    except Exception as e:
-        logger.error(f"[Run {GITHUB_RUN_ID}] 执行失败: {e}", exc_info=True)
-        sys.exit(1)
+    main()
