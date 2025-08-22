@@ -4,263 +4,108 @@
 import os
 import sys
 import re
+import hashlib
 from pathlib import Path
 
-
-# 基础配置
+# 配置参数
 GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
-INPUT_DIR = Path(GITHUB_WORKSPACE) / "tmp"
-OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "adblock_adp.txt"
-ALLOW_FILE = Path(GITHUB_WORKSPACE) / "allow_adp.txt"
-INPUT_FILE = INPUT_DIR / "adblock_merged.txt"
+BLOCK_INPUT_FILE = Path(GITHUB_WORKSPACE) / "adblock_adg.txt"
+ALLOW_INPUT_FILE = Path(GITHUB_WORKSPACE) / "allow_allow.txt"
+ABP_BLOCK_OUTPUT = Path(GITHUB_WORKSPACE) / "adblock_plus.txt"
+ABP_ALLOW_OUTPUT = Path(GITHUB_WORKSPACE) / "adblock_plus_allow.txt"
 
-# 预编译正则表达式
-ADBLOCK_DOMAIN = re.compile(r'^\|\|([\w.-]+)(\^|\$.*)?$')
-ADBLOCK_WHITELIST = re.compile(r'^@@\|\|([\w.-]+)(\^|\$.*)?$')
-HOSTS_RULE = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')
-COMMENT = re.compile(r'^[!#]')
-EMPTY_LINE = re.compile(r'^\s*$')
-IP_ADDRESS = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
-DOMAIN_ONLY = re.compile(r'^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$')
-WILDCARD_RULE = re.compile(r'^\*[^*]+\*$')
-ELEMENT_HIDING = re.compile(r'^.*##[^#]+$')
-ELEMENT_HIDING_EXCEPTION = re.compile(r'^.*#@#[^#]+$')
-URL_RULE = re.compile(r'^https?://[^\s]+$')
-GENERIC_RULE = re.compile(r'^\|\|.*\^$')
-
-# AdBlock Plus 支持的修饰符
-SUPPORTED_MODIFIERS = {
-    '$domain', '$third-party', '~third-party', '$script', 
-    '$image', '$stylesheet', '$object', '$object-subrequest',
-    '$subdocument', '$document', '$elemhide', '$generichide',
-    '$genericblock', '$popup', '$match-case', '$collapse',
-    '$badfilter', '$important'
+# AdBlock Plus 不支持的特殊修饰符 (AdGuard/AdGuard Home 特有)
+ABP_UNSUPPORTED_MODIFIERS = {
+    '$dnsrewrite', '$cname', '$client', '$dnstype', '$denyallow',
+    '$ctag', '$badfilter', '$redirect', '$removeheader', '$removeparam',
+    '$app'
 }
 
-# AdBlock Plus 不支持的修饰符
-UNSUPPORTED_MODIFIERS = {
-    '$csp', '$redirect', '$removeparam', '$removeheader',
-    '$hiden', '$jsonprune', '$replace', '$cookie', '$all',
-    '$app', '$network', '$ping', '$websocket', '$webrtc',
-    '$xmlhttprequest'
-}
+def convert_to_abp_format(rule, is_allow=False):
+    """
+    将 AdGuard 规则转换为 AdBlock Plus 格式。
+    参考：https://adguard-dns.io/kb/zh-CN/general/dns-filtering-syntax/[citation:1]
+    """
+    # 注释和空行直接保留
+    if rule.strip().startswith(('!', '#')) or not rule.strip():
+        return rule
 
-# 域名黑名单
-DOMAIN_BLACKLIST = {
-    'localhost', 'localdomain', 'example.com', 'example.org', 
-    'example.net', 'test.com', 'invalid.com', '0.0.0.0', '127.0.0.1',
-    '::1', '255.255.255.255', 'localhost.localdomain'
-}
+    # 处理白名单规则（例外规则）
+    exception_prefix = "@@"
+    is_exception = rule.startswith(exception_prefix)
+    clean_rule = rule[len(exception_prefix):] if is_exception else rule
 
+    # 检查并移除 AdBlock Plus 不支持的修饰符
+    for modifier in ABP_UNSUPPORTED_MODIFIERS:
+        # 确保修饰符前后有适当的边界（如$或逗号）
+        pattern = r'[,$]' + re.escape(modifier) + r'([=,][^,$]+)?'
+        clean_rule = re.sub(pattern, '', clean_rule)
+        # 处理可能是唯一修饰符的情况
+        if clean_rule.endswith('$' + modifier):
+            clean_rule = clean_rule[:-len('$' + modifier)]
+        elif clean_rule.endswith(',' + modifier):
+            clean_rule = clean_rule[:-len(',' + modifier)]
 
-def process_file():
-    """处理输入文件并生成AdBlock Plus规则"""
-    rules = set()
-    allows = set()
+    # 清理可能因移除修饰符而残留的尾随 $ 或 ,
+    clean_rule = re.sub(r'[,&]?$', '', clean_rule) # 移除尾随的逗号或$
+    if clean_rule.endswith('$'):
+        clean_rule = clean_rule[:-1]
 
-    if not INPUT_FILE.exists():
-        print(f"错误: 输入文件不存在 {INPUT_FILE}")
-        return rules, allows
+    # 对于白名单规则，加回 @@ 前缀
+    if is_exception or is_allow:
+        final_rule = exception_prefix + clean_rule
+    else:
+        final_rule = clean_rule
 
-    with open(INPUT_FILE, 'r', encoding='utf-8', errors='ignore') as f:
-        for line in f:
-            line = line.strip()
+    return final_rule
 
-            # 跳过空行和注释
-            if not line or EMPTY_LINE.match(line) or COMMENT.match(line):
-                continue
+def process_rules_for_abp(input_file, is_allow=False):
+    """处理规则并转换为 AdBlock Plus 格式"""
+    processed_rules = []
+    seen_hashes = set()
 
-            # 处理白名单规则
-            if line.startswith('@@'):
-                # 检查是否是元素隐藏例外规则
-                if ELEMENT_HIDING_EXCEPTION.match(line):
-                    allows.add(line)
+    if not input_file.exists():
+        print(f"警告：输入文件 {input_file} 不存在，跳过处理。")
+        return processed_rules
+
+    try:
+        with open(input_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith(('!', '#')):
+                    # 保留注释和空行
+                    processed_rules.append(line)
                     continue
-                
-                # 处理标准白名单规则
-                if ADBLOCK_WHITELIST.match(line):
-                    # 简化白名单规则，移除不支持的修饰符
-                    simplified = simplify_rule(line)
-                    if simplified and is_valid_rule(simplified):
-                        allows.add(simplified)
-                    continue
-                
-                # 处理其他白名单规则
-                simplified = simplify_rule(line[2:])  # 移除@@前缀
-                if simplified and is_valid_rule(simplified):
-                    allows.add('@@' + simplified)
-                continue
 
-            # 处理元素隐藏规则
-            if ELEMENT_HIDING.match(line):
-                rules.add(line)
-                continue
+                converted_rule = convert_to_abp_format(line, is_allow)
+                # 简单的去重基于哈希
+                rule_hash = hashlib.md5(converted_rule.encode('utf-8')).hexdigest()
+                if rule_hash not in seen_hashes:
+                    processed_rules.append(converted_rule)
+                    seen_hashes.add(rule_hash)
+    except Exception as e:
+        print(f"处理文件 {input_file} 时出错: {e}")
+    return processed_rules
 
-            # 处理标准Adblock规则
-            if ADBLOCK_DOMAIN.match(line) or GENERIC_RULE.match(line):
-                # 简化规则，移除AdBlock Plus不支持的修饰符
-                simplified = simplify_rule(line)
-                if simplified and is_valid_rule(simplified):
-                    rules.add(simplified)
-                continue
+def main():
+    """主函数"""
+    # 处理拦截规则
+    block_rules = process_rules_for_abp(BLOCK_INPUT_FILE, is_allow=False)
+    # 处理白名单规则
+    allow_rules = process_rules_for_abp(ALLOW_INPUT_FILE, is_allow=True)
 
-            # 处理Hosts规则
-            hosts_match = HOSTS_RULE.match(line)
-            if hosts_match:
-                domain = hosts_match.group(2)
-                if is_valid_domain(domain):
-                    rules.add(f"||{domain}^")
-                continue
+    # 写入输出文件
+    try:
+        with open(ABP_BLOCK_OUTPUT, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(block_rules) + '\n')
+        with open(ABP_ALLOW_OUTPUT, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(allow_rules) + '\n')
+        print(f"AdBlock Plus 规则转换完成。拦截规则: {len(block_rules)} 条, 白名单规则: {len(allow_rules)} 条")
+    except Exception as e:
+        print(f"写入输出文件时出错: {e}")
+        return 1
 
-            # 处理URL规则
-            if URL_RULE.match(line):
-                # 提取域名部分
-                domain_match = re.search(r'://([^/]+)', line)
-                if domain_match:
-                    domain = domain_match.group(1)
-                    if is_valid_domain(domain):
-                        rules.add(f"||{domain}^")
-                continue
-
-            # 处理纯域名
-            if DOMAIN_ONLY.match(line) and is_valid_domain(line):
-                rules.add(f"||{line}^")
-                continue
-
-            # 处理通配符规则
-            if WILDCARD_RULE.match(line):
-                # 转换为AdBlock Plus兼容的通配符格式
-                converted = convert_wildcard_rule(line)
-                if converted and is_valid_rule(converted):
-                    rules.add(converted)
-                continue
-
-            # 处理其他规则（如果包含支持的修饰符）
-            if any(mod in line for mod in SUPPORTED_MODIFIERS):
-                simplified = simplify_rule(line)
-                if simplified and is_valid_rule(simplified):
-                    rules.add(simplified)
-                continue
-
-    return rules, allows
-
-
-def simplify_rule(rule):
-    """简化规则以适应AdBlock Plus"""
-    # 移除不支持的修饰符
-    if '$' in rule:
-        parts = rule.split('$')
-        base_rule = parts[0]
-        modifiers = parts[1:]
-
-        # 过滤支持的修饰符
-        supported_mods = []
-        for mod in modifiers:
-            mod_name = mod.split('=')[0] if '=' in mod else mod
-            if mod_name in SUPPORTED_MODIFIERS:
-                supported_mods.append(mod)
-
-        # 重新构建规则
-        if supported_mods:
-            return base_rule + '$' + '$'.join(supported_mods)
-        else:
-            return base_rule + '^'  # 如果没有修饰符，添加默认的^
-
-    return rule
-
-
-def is_valid_domain(domain):
-    """验证域名有效性"""
-    if not domain or domain in DOMAIN_BLACKLIST:
-        return False
-    
-    # 检查是否是IP地址
-    if IP_ADDRESS.match(domain):
-        return False
-    
-    # 基本长度检查
-    if len(domain) < 4 or len(domain) > 253:
-        return False
-    
-    # 检查域名格式
-    if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$', domain):
-        return False
-    
-    # 检查TLD部分
-    parts = domain.split('.')
-    if len(parts) < 2:
-        return False
-    
-    tld = parts[-1]
-    if len(tld) < 2 or len(tld) > 10:
-        return False
-    
-    return True
-
-
-def is_valid_rule(rule):
-    """验证规则有效性"""
-    # 基本长度检查
-    if not rule or len(rule) > 200:
-        return False
-    
-    # 检查是否包含无效字符
-    if re.search(r'[^\w\.\-\*\^\|\@\$\,\=\~\/]', rule):
-        return False
-    
-    return True
-
-
-def convert_wildcard_rule(wildcard_rule):
-    """转换通配符规则为AdBlock Plus兼容格式"""
-    # 移除开头的*
-    if wildcard_rule.startswith('*'):
-        wildcard_rule = wildcard_rule[1:]
-    
-    # 移除结尾的*
-    if wildcard_rule.endswith('*'):
-        wildcard_rule = wildcard_rule[:-1]
-    
-    # 如果中间有*，转换为域名规则
-    if '*' in wildcard_rule:
-        # 将*替换为通配符
-        return wildcard_rule.replace('*', '^')
-    
-    # 否则转换为域名规则
-    return f"||{wildcard_rule}^"
-
-
-def write_output(rules, allows):
-    """写入输出文件，不包含头信息"""
-    # 写入拦截规则文件
-    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(sorted(rules)) + '\n')
-    
-    # 写入白名单规则文件
-    with open(ALLOW_FILE, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(sorted(allows)) + '\n')
-
-    print(f"生成AdBlock Plus拦截规则: {len(rules)} 条")
-    print(f"生成AdBlock Plus白名单规则: {len(allows)} 条")
-
-
-def github_actions_output():
-    """GitHub Actions输出"""
-    if github_output := os.getenv('GITHUB_OUTPUT'):
-        with open(github_output, 'a') as f:
-            f.write(f"adblock_plus_file={OUTPUT_FILE}\n")
-            f.write(f"adblock_plus_allow_file={ALLOW_FILE}\n")
-
+    return 0
 
 if __name__ == '__main__':
-    # 确保输入目录存在
-    INPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    # 处理文件
-    rules, allows = process_file()
-
-    # 写入输出
-    write_output(rules, allows)
-    
-    # GitHub Actions输出
-    github_actions_output()
+    sys.exit(main())
