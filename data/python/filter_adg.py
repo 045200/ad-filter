@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
 DATA_DIR = Path(GITHUB_WORKSPACE) / "data" / "filter"
 OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "adblock_adg.txt"
-ALLOW_FILE = Path(GITHUB_WORKSPACE) / "allow_allow.txt"
+ALLOW_FILE = Path(GITHUB_WORKSPACE) / "allow_adg.txt"
 
 # 输入文件模式
 ADBLOCK_PATTERNS = ["adblock.txt"]
