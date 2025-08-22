@@ -4,15 +4,14 @@
 import os
 import sys
 import re
-import hashlib
 from pathlib import Path
 
 # 配置参数
 GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
 BLOCK_INPUT_FILE = Path(GITHUB_WORKSPACE) / "adblock_adg.txt"
-ALLOW_INPUT_FILE = Path(GITHUB_WORKSPACE) / "allow_allow.txt"
-BLOCK_OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "adguard_home.txt"
-ALLOW_OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "adguard_home_allow.txt"
+ALLOW_INPUT_FILE = Path(GITHUB_WORKSPACE) / "allow_adg.txt"
+BLOCK_OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "adblock_adh.txt"
+ALLOW_OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "allow_adh.txt"
 
 # 正则表达式
 DOMAIN_RULE = re.compile(r'^\|\|([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\^$', re.IGNORECASE)
@@ -76,7 +75,6 @@ def is_adguard_home_compatible(rule: str) -> bool:
 def extract_adguard_home_rules(rules, is_allow=False):
     """从AdGuard规则中提取AdGuardHome兼容的规则"""
     adguard_home_rules = []
-    seen_rules = set()
     
     for rule in rules:
         try:
@@ -86,10 +84,7 @@ def extract_adguard_home_rules(rules, is_allow=False):
             
             # 处理正则表达式规则
             if REGEX_RULE.match(rule):
-                rule_hash = hashlib.md5(rule.encode()).hexdigest()
-                if rule_hash not in seen_rules:
-                    adguard_home_rules.append(rule)
-                    seen_rules.add(rule_hash)
+                adguard_home_rules.append(rule)
                 continue
             
             # 处理白名单规则
@@ -98,12 +93,7 @@ def extract_adguard_home_rules(rules, is_allow=False):
                     # 提取域名部分
                     domain = rule[4:-1]  # 移除 @@|| 和 ^
                     processed_rule = f"@@{domain}"
-                    
-                    # 去重
-                    rule_hash = hashlib.md5(processed_rule.encode()).hexdigest()
-                    if rule_hash not in seen_rules:
-                        adguard_home_rules.append(processed_rule)
-                        seen_rules.add(rule_hash)
+                    adguard_home_rules.append(processed_rule)
                     continue
                 elif rule.startswith('@@'):
                     # 其他类型的白名单规则，尝试提取域名
@@ -111,18 +101,10 @@ def extract_adguard_home_rules(rules, is_allow=False):
                     if DOMAIN_RULE.match(f"||{domain_part}^"):
                         domain = domain_part[2:-1] if domain_part.startswith('||') and domain_part.endswith('^') else domain_part
                         processed_rule = f"@@{domain}"
-                        
-                        # 去重
-                        rule_hash = hashlib.md5(processed_rule.encode()).hexdigest()
-                        if rule_hash not in seen_rules:
-                            adguard_home_rules.append(processed_rule)
-                            seen_rules.add(rule_hash)
+                        adguard_home_rules.append(processed_rule)
                     else:
                         # 保留其他类型的白名单规则（如带有修饰符的）
-                        rule_hash = hashlib.md5(rule.encode()).hexdigest()
-                        if rule_hash not in seen_rules:
-                            adguard_home_rules.append(rule)
-                            seen_rules.add(rule_hash)
+                        adguard_home_rules.append(rule)
                     continue
             
             # 处理拦截规则
@@ -131,30 +113,17 @@ def extract_adguard_home_rules(rules, is_allow=False):
                     # 提取域名部分
                     domain = rule[2:-1]  # 移除 || 和 ^
                     processed_rule = domain
-                    
-                    # 去重
-                    rule_hash = hashlib.md5(processed_rule.encode()).hexdigest()
-                    if rule_hash not in seen_rules:
-                        adguard_home_rules.append(processed_rule)
-                        seen_rules.add(rule_hash)
+                    adguard_home_rules.append(processed_rule)
                     continue
                 elif rule.startswith('||') and rule.endswith('^'):
                     # 其他格式的域名规则
                     domain = rule[2:-1]
                     processed_rule = domain
-                    
-                    # 去重
-                    rule_hash = hashlib.md5(processed_rule.encode()).hexdigest()
-                    if rule_hash not in seen_rules:
-                        adguard_home_rules.append(processed_rule)
-                        seen_rules.add(rule_hash)
+                    adguard_home_rules.append(processed_rule)
                     continue
                 else:
                     # 保留其他类型的拦截规则（如带有修饰符的）
-                    rule_hash = hashlib.md5(rule.encode()).hexdigest()
-                    if rule_hash not in seen_rules:
-                        adguard_home_rules.append(rule)
-                        seen_rules.add(rule_hash)
+                    adguard_home_rules.append(rule)
                     continue
         except Exception as e:
             print(f"处理规则时出错: {rule} - {e}")
