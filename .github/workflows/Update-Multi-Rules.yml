@@ -31,12 +31,12 @@ jobs:
           fetch-depth: 0
           ref: ${{ env.MAIN_BRANCH }}
 
-      # 2. 设置Python环境
+      # 2. 设置Python环境（移除缓存配置）
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: 'pip'  # 启用pip缓存
+          # 移除了 cache: 'pip' 配置
 
       # 3. 安装系统依赖
       - name: Install system dependencies
@@ -44,7 +44,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq moreutils
 
-      # 4. 安装Python依赖
+      # 4. 安装Python依赖（直接使用pip安装）
       - name: Install Python dependencies
         run: |
           pip install --upgrade pip
