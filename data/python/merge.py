@@ -10,7 +10,7 @@ import glob
 import logging
 from typing import Set, List, Tuple, Optional
 from pathlib import Path
-from pybloom_live import BloomFilter
+from pybloom_live import BloomFilter  # 更高效的布隆过滤器实现
 from adblockparser import AdblockRule
 from IPy import IP
 
