@@ -2,253 +2,72 @@
 # -*- coding: utf-8 -*-
 
 import os
-import sys
 import re
+import hashlib
 from pathlib import Path
 
-
-# 基础配置
 GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
-INPUT_DIR = Path(GITHUB_WORKSPACE) / "tmp"
-OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "adblock_ubo.txt"
-INPUT_FILE = INPUT_DIR / "adblock_merged.txt"
+INPUT_BLOCK = Path(GITHUB_WORKSPACE) / "adblock_adg.txt"
+INPUT_ALLOW = Path(GITHUB_WORKSPACE) / "allow_adg.txt"
+OUTPUT_BLOCK = Path(GITHUB_WORKSPACE) / "adblock_ubo.txt"
+OUTPUT_ALLOW = Path(GITHUB_WORKSPACE) / "allow_ubo.txt"
 
-# 预编译正则表达式
-ADBLOCK_DOMAIN = re.compile(r'^\|\|([\w.-]+)(\^|\$.*)?$')
-ADBLOCK_WHITELIST = re.compile(r'^@@\|\|([\w.-]+)(\^|\$.*)?$')
-HOSTS_RULE = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')
-COMMENT = re.compile(r'^[!#]')
-EMPTY_LINE = re.compile(r'^\s*$')
-IP_ADDRESS = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
-DOMAIN_ONLY = re.compile(r'^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$')
-WILDCARD_RULE = re.compile(r'^\*[^*]+\*$')
-ELEMENT_HIDING = re.compile(r'^.*##[^#]+$')
-ELEMENT_HIDING_EXCEPTION = re.compile(r'^.*#@#[^#]+$')
-URL_RULE = re.compile(r'^https?://[^\s]+$')
-GENERIC_RULE = re.compile(r'^\|\|.*\^$')
-REGEX_RULE = re.compile(r'^/.*/$')
+# uBlock Origin 不支持的修饰符 (相比AdGuard)
+UBO_UNSUPPORTED_MODIFIERS = {'$dnsrewrite', '$cname', '$client', '$dnstype', '$denyallow', '$ctag', '$badfilter', '$redirect', '$removeheader', '$removeparam', '$app'}
 
-# uBlock Origin 支持的修饰符
-UBO_MODIFIERS = {
-    '$script', '$image', '$stylesheet', '$object', 
-    '$xmlhttprequest', '$object-subrequest', '$subdocument', 
-    '$document', '$elemhide', '$generichide', '$genericblock', 
-    '$popup', '$third-party', '~third-party', '$match-case', 
-    '$collapse', '$badfilter', '$important', '$domain', '$denyallow'
-}
+def convert_to_ubo_format(rule, is_allow=False):
+    """将AdGuard规则转换为uBlock Origin格式[citation:2]"""
+    if rule.strip().startswith(('!', '#')) or not rule.strip():
+        return rule
 
-# uBlock Origin 不支持的修饰符
-UBO_UNSUPPORTED_MODIFIERS = {
-    '$csp', '$redirect', '$removeparam', '$removeheader',
-    '$hiden', '$jsonprune', '$replace', '$cookie', '$all',
-    '$app', '$network', '$ping', '$websocket', '$webrtc'
-}
-
-# 域名黑名单
-DOMAIN_BLACKLIST = {
-    'localhost', 'localdomain', 'example.com', 'example.org', 
-    'example.net', 'test.com', 'invalid.com', '0.0.0.0', '127.0.0.1',
-    '::1', '255.255.255.255', 'localhost.localdomain'
-}
-
-
-def process_file():
-    """处理输入文件并生成uBlock Origin规则"""
-    rules = set()
-    allows = set()
-
-    if not INPUT_FILE.exists():
-        print(f"错误: 输入文件不存在 {INPUT_FILE}")
-        return rules, allows
-
-    with open(INPUT_FILE, 'r', encoding='utf-8', errors='ignore') as f:
-        for line in f:
-            line = line.strip()
-
-            # 跳过空行和注释
-            if not line or EMPTY_LINE.match(line) or COMMENT.match(line):
-                continue
-
-            # 处理白名单规则
-            if line.startswith('@@'):
-                # 检查是否是元素隐藏例外规则
-                if ELEMENT_HIDING_EXCEPTION.match(line):
-                    allows.add(line)
-                    continue
-                
-                # 处理标准白名单规则
-                if ADBLOCK_WHITELIST.match(line):
-                    # 简化白名单规则，移除不支持的修饰符
-                    simplified = simplify_rule(line)
-                    if simplified and is_valid_rule(simplified):
-                        allows.add(simplified)
-                    continue
-                
-                # 处理其他白名单规则
-                simplified = simplify_rule(line[2:])  # 移除@@前缀
-                if simplified and is_valid_rule(simplified):
-                    allows.add('@@' + simplified)
-                continue
-
-            # 处理元素隐藏规则
-            if ELEMENT_HIDING.match(line):
-                rules.add(line)
-                continue
-
-            # 处理标准Adblock规则
-            if ADBLOCK_DOMAIN.match(line) or GENERIC_RULE.match(line):
-                # 简化规则，移除uBlock Origin不支持的修饰符
-                simplified = simplify_rule(line)
-                if simplified and is_valid_rule(simplified):
-                    rules.add(simplified)
-                continue
-
-            # 处理Hosts规则
-            hosts_match = HOSTS_RULE.match(line)
-            if hosts_match:
-                domain = hosts_match.group(2)
-                if is_valid_domain(domain):
-                    rules.add(f"||{domain}^")
-                continue
-
-            # 处理URL规则
-            if URL_RULE.match(line):
-                # 提取域名部分
-                domain_match = re.search(r'://([^/]+)', line)
-                if domain_match:
-                    domain = domain_match.group(1)
-                    # 移除端口号
-                    domain = domain.split(':')[0]
-                    if is_valid_domain(domain):
-                        rules.add(f"||{domain}^")
-                continue
-
-            # 处理纯域名
-            if DOMAIN_ONLY.match(line) and is_valid_domain(line):
-                rules.add(f"||{line}^")
-                continue
-
-            # 处理通配符规则
-            if WILDCARD_RULE.match(line):
-                # 转换为uBlock Origin兼容的通配符格式
-                converted = convert_wildcard_rule(line)
-                if converted and is_valid_rule(converted):
-                    rules.add(converted)
-                continue
-
-            # 处理其他规则（如果包含支持的修饰符）
-            if any(mod in line for mod in UBO_MODIFIERS):
-                simplified = simplify_rule(line)
-                if simplified and is_valid_rule(simplified):
-                    rules.add(simplified)
-                continue
-
-    return rules, allows
-
-
-def is_valid_domain(domain):
-    """验证域名有效性"""
-    if not domain or domain in DOMAIN_BLACKLIST:
-        return False
-    
-    # 检查是否是IP地址
-    if IP_ADDRESS.match(domain):
-        return False
-    
-    # 基本长度检查
-    if len(domain) < 4 or len(domain) > 253:
-        return False
-    
-    # 检查域名格式
-    if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$', domain):
-        return False
-    
-    # 检查TLD部分
-    parts = domain.split('.')
-    if len(parts) < 2:
-        return False
-    
-    tld = parts[-1]
-    if len(tld) < 2 or len(tld) > 10:
-        return False
-    
-    return True
-
-
-def is_valid_rule(rule):
-    """验证规则有效性"""
-    # 基本长度检查
-    if not rule or len(rule) > 200:
-        return False
-    
-    # 检查是否包含无效字符
-    if re.search(r'[^\w\.\-\*\^\|\@\$\,\=\~\/]', rule):
-        return False
-    
-    return True
-
-
-def convert_wildcard_rule(wildcard_rule):
-    """转换通配符规则为uBlock Origin兼容格式"""
-    # 移除开头的*
-    if wildcard_rule.startswith('*'):
-        wildcard_rule = wildcard_rule[1:]
-    
-    # 移除结尾的*
-    if wildcard_rule.endswith('*'):
-        wildcard_rule = wildcard_rule[:-1]
-    
-    # 如果中间有*，转换为正则表达式
-    if '*' in wildcard_rule:
-        regex_pattern = wildcard_rule.replace('*', '.*')
-        return f"/{regex_pattern}/"
-    
-    # 否则转换为域名规则
-    return f"||{wildcard_rule}^"
-
-
-def simplify_rule(rule):
-    """简化规则以适应uBlock Origin"""
-    # 移除不支持的修饰符
-    if '$' in rule:
-        parts = rule.split('$')
-        base_rule = parts[0]
-        modifiers = parts[1:]
-
-        # 过滤支持的修饰符
-        supported_mods = []
-        for mod in modifiers:
-            mod_name = mod.split('=')[0] if '=' in mod else mod
-            if mod_name in UBO_MODIFIERS:
-                supported_mods.append(mod)
-
-        # 重新构建规则
-        if supported_mods:
-            return base_rule + '$' + '$'.join(supported_mods)
-        else:
-            return base_rule + '^'  # 如果没有修饰符，添加默认的^
+    for modifier in UBO_UNSUPPORTED_MODIFIERS:
+        if modifier in rule:
+            return None
 
     return rule
 
+def process_file(input_path, is_allow=False):
+    """处理输入文件，生成uBlock Origin规则[citation:2]"""
+    output_rules = []
+    seen_hashes = set()
+    if not input_path.exists():
+        print(f"警告：输入文件 {input_path} 不存在，跳过处理。")
+        return output_rules
 
-def write_output(rules, allows):
-    """写入输出文件，不包含头信息"""
-    # 合并所有规则
-    all_rules = sorted(allows) + sorted(rules)
-    
-    # 写入文件
-    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(all_rules) + '\n')
+    try:
+        with open(input_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith(('!', '#')):
+                    output_rules.append(line)
+                    continue
 
-    print(f"生成uBlock Origin规则: {len(rules)} 条拦截, {len(allows)} 条白名单")
+                converted_rule = convert_to_ubo_format(line, is_allow)
+                if converted_rule is None:
+                    continue
 
+                rule_hash = hashlib.md5(converted_rule.encode('utf-8')).hexdigest()
+                if rule_hash not in seen_hashes:
+                    output_rules.append(converted_rule)
+                    seen_hashes.add(rule_hash)
+    except Exception as e:
+        print(f"处理文件 {input_path} 时出错: {e}")
+    return output_rules
+
+def main():
+    block_rules = process_file(INPUT_BLOCK, is_allow=False)
+    allow_rules = process_file(INPUT_ALLOW, is_allow=True)
+
+    try:
+        with open(OUTPUT_BLOCK, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(block_rules) + '\n')
+        with open(OUTPUT_ALLOW, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(allow_rules) + '\n')
+        print(f"uBlock Origin 规则转换完成。拦截: {len(block_rules)} 条, 允许: {len(allow_rules)} 条")
+    except Exception as e:
+        print(f"写入输出文件时出错: {e}")
+        return 1
+    return 0
 
 if __name__ == '__main__':
-    # 确保输入目录存在
-    INPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    # 处理文件
-    rules, allows = process_file()
-
-    # 写入输出
-    write_output(rules, allows)
+    sys.exit(main())
