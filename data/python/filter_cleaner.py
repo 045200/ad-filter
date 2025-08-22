@@ -5,6 +5,7 @@
 Adblock规则清理与优化脚本 (GitHub Actions 优化版)
 支持 AdBlock / AdGuard 语法，包含DNS验证、规则合并与去重
 模块化设计，支持国内外域名智能分流解析
+集成缓存优化功能
 """
 
 import os
@@ -20,6 +21,7 @@ import aiodns
 import ipaddress
 import maxminddb
 import psutil
+import xxhash
 from pathlib import Path
 from typing import Set, List, Dict, Optional, Tuple
 from datetime import datetime
@@ -46,7 +48,11 @@ class Config:
     # 备份与白名单
     BACKUP_DIR = BASE_DIR / "data" / "mod" / "backups"
     INVALID_DOMAINS_FILE = BASE_DIR / "data" / "mod" / "invalid_domains.json"
-    WHITELIST_FILE = BASE_DIR / "data" / "mod" / "domians.txt"
+    WHITELIST_FILE = BASE_DIR / "data" / "mod" / "whitelist.txt"
+    
+    # 缓存配置
+    CACHE_DIR = BASE_DIR / "data" / "cache"
+    CACHE_TTL = 86400  # 24小时缓存有效期
     
     # 性能与资源配置
     MAX_WORKERS = int(os.getenv('MAX_WORKERS', 4))
@@ -63,7 +69,6 @@ class Config:
     }
     
     # 缓存配置
-    CACHE_TTL = 3600
     MAX_CACHE_SIZE = 10000
     INVALID_DOMAIN_EXPIRY_DAYS = 30
 
@@ -241,11 +246,75 @@ class DNSCache:
             'size': len(self.cache)
         }
 
+# GitHub环境专用的缓存管理器
+class GitHubCacheManager:
+    """GitHub环境专用的缓存管理器"""
+    
+    def __init__(self, cache_dir: Path = Config.CACHE_DIR):
+        self.cache_dir = cache_dir
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        
+    def _get_cache_key(self, domain: str) -> str:
+        """生成缓存键名"""
+        return xxhash.xxh64(domain.encode()).hexdigest()
+    
+    def _get_cache_path(self, domain: str) -> Path:
+        """获取缓存文件路径"""
+        cache_key = self._get_cache_key(domain)
+        return self.cache_dir / f"{cache_key}.json"
+    
+    def get_cache(self, domain: str) -> Optional[Dict]:
+        """获取缓存数据"""
+        cache_path = self._get_cache_path(domain)
+        if cache_path.exists():
+            try:
+                with open(cache_path, 'r') as f:
+                    cache_data = json.load(f)
+                
+                # 检查缓存是否过期
+                if time.time() - cache_data.get('timestamp', 0) < Config.CACHE_TTL:
+                    return cache_data
+            except Exception as e:
+                logger.debug(f"读取缓存失败 {domain}: {e}")
+        return None
+    
+    def set_cache(self, domain: str, result: bool, strategy: str) -> None:
+        """设置缓存数据"""
+        cache_path = self._get_cache_path(domain)
+        try:
+            cache_data = {
+                'result': result,
+                'timestamp': time.time(),
+                'strategy': strategy,
+                'domain': domain
+            }
+            
+            with open(cache_path, 'w') as f:
+                json.dump(cache_data, f)
+                
+        except Exception as e:
+            logger.debug(f"保存缓存失败 {domain}: {e}")
+    
+    def cleanup_old_cache(self, max_age_days: int = 7) -> None:
+        """清理过期缓存"""
+        current_time = time.time()
+        cache_files = list(self.cache_dir.glob("*.json"))
+        
+        cleaned_count = 0
+        for cache_file in cache_files:
+            file_age = current_time - cache_file.stat().st_mtime
+            if file_age > max_age_days * 86400:
+                cache_file.unlink()
+                cleaned_count += 1
+        
+        logger.info(f"已清理 {cleaned_count} 个过期缓存文件")
+
 # 智能DNS验证器
 class DNSValidator:
     def __init__(self, geoip_service: GeoIPService):
         self.geoip = geoip_service
         self.cache = DNSCache(maxsize=Config.MAX_CACHE_SIZE)
+        self.cache_manager = GitHubCacheManager()
         self.resolver = aiodns.DNSResolver()
         self.resolver.timeout = Config.DNS_TIMEOUT
         
@@ -263,7 +332,8 @@ class DNSValidator:
             'failed_queries': 0,
             'china_domains': 0,
             'global_domains': 0,
-            'cache_hits': 0
+            'cache_hits': 0,
+            'persistent_cache_hits': 0
         }
     
     async def init_session(self) -> None:
@@ -339,11 +409,19 @@ class DNSValidator:
     
     async def is_domain_valid(self, domain: str) -> bool:
         """检查域名是否有效"""
-        # 检查缓存
+        # 首先检查持久化缓存
+        cache_data = self.cache_manager.get_cache(domain)
+        if cache_data:
+            self.stats['persistent_cache_hits'] += 1
+            return cache_data['result']
+        
+        # 然后检查内存缓存
         cached_result = self.cache.get(domain)
         if cached_result is not None:
             self.stats['cache_hits'] += 1
             return cached_result
+        
+        self.stats['cache_misses'] += 1
         
         # 确定解析策略
         strategy = await self.determine_domain_strategy(domain)
@@ -351,8 +429,11 @@ class DNSValidator:
         # 解析域名
         result = await self.resolve_domain(domain, strategy)
         
-        # 缓存结果
+        # 保存到内存缓存
         self.cache.set(domain, result)
+        
+        # 保存到持久化缓存
+        self.cache_manager.set_cache(domain, result, strategy)
         
         return result
 
@@ -488,18 +569,22 @@ class AdblockCleaner:
         Config.INPUT_DIR.mkdir(parents=True, exist_ok=True)
         Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         Config.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        Config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
     
     async def process_files(self) -> None:
         """处理所有规则文件"""
         logger.info("开始处理规则文件")
         start_time = time.time()
         
+        # 清理过期缓存
+        self.validator.cache_manager.cleanup_old_cache(7)
+        
         # 初始化DNS验证器
         await self.validator.init_session()
         
         try:
             # 查找所有输入文件
-            input_files = list(Config.INPUT_DIR.glob("adblock_filter.txt"))
+            input_files = list(Config.INPUT_DIR.glob("adblock*.txt"))
             if not input_files:
                 logger.warning(f"未找到输入文件于 {Config.INPUT_DIR}")
                 return
@@ -620,6 +705,12 @@ class AdblockCleaner:
             'resource_usage': self.resource_monitor.get_stats(),
             'dns_stats': self.validator.stats,
             'cache_stats': self.validator.cache.get_stats(),
+            'persistent_cache_stats': {
+                'hits': self.validator.stats['persistent_cache_hits'],
+                'total_queries': self.validator.stats['total_queries'],
+                'hit_rate': self.validator.stats['persistent_cache_hits'] / self.validator.stats['total_queries'] 
+                if self.validator.stats['total_queries'] > 0 else 0
+            },
             'rules_processed': len(self.rule_optimizer.processed_rules)
         }
         
@@ -638,7 +729,8 @@ class AdblockCleaner:
         logger.info(f"峰值内存: {self.resource_monitor.peak_memory:.1f} MB")
         logger.info(f"处理规则: {len(self.rule_optimizer.processed_rules)} 条")
         logger.info(f"DNS查询: {self.validator.stats['total_queries']} 次")
-        logger.info(f"缓存命中率: {self.validator.cache.get_stats()['hit_rate']:.1%}")
+        logger.info(f"内存缓存命中率: {self.validator.cache.get_stats()['hit_rate']:.1%}")
+        logger.info(f"持久化缓存命中率: {stats['persistent_cache_stats']['hit_rate']:.1%}")
 
 # 主函数
 async def main():
