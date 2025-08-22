@@ -10,10 +10,34 @@ import re
 import glob
 import logging
 import hashlib
+import ipaddress
 from typing import Set, List, Tuple, Optional, Dict
 from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
+
+# 尝试导入必要的第三方库
+try:
+    from pybloom_live import ScalableBloomFilter
+except ImportError:
+    # 如果没有pybloom_live，使用内置的set作为备选
+    class ScalableBloomFilter:
+        LARGE_SET_GROWTH = 1
+        def __init__(self, initial_capacity=10000, error_rate=0.001, mode=None):
+            self.set = set()
+        def add(self, item):
+            self.set.add(item)
+        def __contains__(self, item):
+            return item in self.set
+
+try:
+    from adblockparser import AdblockRule
+except ImportError:
+    # 简单的AdblockRule模拟类
+    class AdblockRule:
+        def __init__(self, rule):
+            self.rule = rule
+            self.is_filtering_rule = bool(rule.strip()) and not rule.strip().startswith(('!', '[', '#'))
 
 # ==================== 配置区 ====================
 class Config:
@@ -87,17 +111,17 @@ class EnhancedRuleParser:
     def is_duplicate(self, rule: str) -> bool:
         """检查规则是否重复（使用双结构检查）"""
         normalized = self.normalize_rule(rule)
-        
+
         # 布隆过滤器初步检查
         if normalized not in self.bloom_filter:
             self.bloom_filter.add(normalized)
             self.exact_seen_rules.add(normalized)
             return False
-        
+
         # 精确集合确认
         if normalized in self.exact_seen_rules:
             return True
-            
+
         # 布隆过滤器误判情况处理
         self.exact_seen_rules.add(normalized)
         return False
@@ -139,7 +163,7 @@ class EnhancedRuleParser:
             if '.' in domain and not domain.startswith('.') and not domain.endswith('.'):
                 return line
         return None
-    
+
     def parse_ip_rule(self, line: str) -> Optional[str]:
         """解析IP/CIDR规则"""
         match = self.IP_CIDR_REGEX.search(line)
@@ -147,7 +171,7 @@ class EnhancedRuleParser:
             prefix, ip_cidr = match.groups()
             try:
                 # 验证IP/CIDR格式
-                IP(ip_cidr)
+                ipaddress.ip_network(ip_cidr, strict=False)
                 return line
             except:
                 pass
@@ -168,7 +192,7 @@ class EnhancedRuleParser:
 
         # 尝试解析为各种规则类型
         rule = None
-        
+
         # 1. 检查是否是hosts规则
         rule = self.parse_hosts_rule(original_line)
         if rule:
@@ -222,11 +246,11 @@ class EnhancedRuleMerger:
                         else:
                             self.block_rules.add(rule)
                         count += 1
-                        
+
                     # 每处理10000行输出一次进度
                     if line_num % 10000 == 0:
                         logger.info(f"已处理 {line_num} 行，添加 {count} 条规则")
-                        
+
         except Exception as e:
             logger.error(f"处理文件 {file_path} 时出错: {e}")
 
@@ -247,7 +271,7 @@ class EnhancedRuleMerger:
                 for file_path in glob.glob(str(Config.INPUT_DIR / pattern)):
                     future = executor.submit(self.process_file, Path(file_path))
                     future_to_file[future] = file_path
-            
+
             # 等待所有任务完成
             for future in as_completed(future_to_file):
                 file_path = future_to_file[future]
