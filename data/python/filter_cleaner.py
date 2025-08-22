@@ -34,12 +34,12 @@ class Config:
     # 输入输出目录
     TEMP_DIR = BASE_DIR / "data" / "filter"
     OUTPUT_DIR = TEMP_DIR
-    CLEANED_FILE = TEMP_DIR / "adblock_merged.txt"
+    CLEANED_FILE = TEMP_DIR / "adblock.txt"
 
     # 备份文件
-    INVALID_DOMAINS_BACKUP = BASE_DIR / "data" / "filter" / "adblock_update.txt"
-    BACKUP_HISTORY_DIR = BASE_DIR / "data" / "filter" / "backups"
-    WHITELIST_FILE = BASE_DIR / "data" / "domains.txt"
+    INVALID_DOMAINS_BACKUP = BASE_DIR / "data" / "mod" / "adblock_update.txt"
+    BACKUP_HISTORY_DIR = BASE_DIR / "data" / "mod" / "backups"
+    WHITELIST_FILE = BASE_DIR / "data" / "mod" / "domains.txt"
 
     # GitHub Actions 环境配置
     MAX_WORKERS = 4
@@ -89,9 +89,9 @@ class Config:
     }
 
     # 中国IP范围文件
-    CHINA_IP_RANGES_FILE = BASE_DIR / "data" / "filter" / "china_ip_ranges.txt"
+    CHINA_IP_RANGES_FILE = BASE_DIR / "data" / "china_ip_ranges.txt"
     GEOIP_DB_URL = "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-Country.mmdb"
-    GEOIP_DB_FILE = BASE_DIR / "data" / "filter" / "GeoLite2-Country.mmdb"
+    GEOIP_DB_FILE = BASE_DIR / "data" / "GeoLite2-Country.mmdb"
 
     # 性能优化设置
     CACHE_TTL = 3600
