@@ -1,0 +1,41 @@
+name: Cache Cleanup
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # 每周日UTC时间0点运行
+  workflow_dispatch:      # 支持手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: multi  # 指定multi分支
+
+      - name: Cleanup old cache files
+        run: |
+          # 创建缓存目录（如果不存在）
+          mkdir -p ./data/cache
+          
+          # 清理7天前的缓存文件
+          find ./data/cache -name "*.json" -mtime +15 -exec rm -f {} \;
+          
+          # 清理过期的统计文件（保留30天）
+          find ./data/filter -name "*stats*.json" -mtime +30 -exec rm -f {} \;
+          
+          # 提交清理结果
+          git add data/cache/ data/filter/
+          if git diff --staged --quiet; then
+            echo "No files to cleanup"
+          else
+            git config user.email "actions@github.com"
+            git config user.name "GitHub Actions"
+            git commit -m "chore: cleanup old cache files [automated]"
+            git push origin multi
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
