@@ -74,6 +74,11 @@ jobs:
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py
+        env:
+          MAX_WORKERS: 6
+          DNS_WORKERS: 50
+          BATCH_SIZE: 1000
+          MAX_MEMORY_PERCENT: 85
 
       # 9. 生成多格式规则
       - name: Generate multi-format rules
