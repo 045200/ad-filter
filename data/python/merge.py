@@ -33,12 +33,12 @@ class Config:
     OUTPUT_DIR = Path(os.getenv('OUTPUT_DIR', './data/filter'))
     
     # 输入文件模式
-    ADBLOCK_PATTERNS = ['adblock*.txt', 'adguard*.txt', 'filter*.txt']
-    ALLOW_PATTERNS = ['allow*.txt', 'whitelist*.txt']
+    ADBLOCK_PATTERNS = ['adblock*.txt']
+    ALLOW_PATTERNS = ['allow*.txt']
     
     # 输出文件名
-    OUTPUT_BLOCK = 'filter_adblock.txt'
-    OUTPUT_ALLOW = 'filter_allow.txt'
+    OUTPUT_BLOCK = 'adblock.txt'
+    OUTPUT_ALLOW = 'allow.txt'
     
     # 布隆过滤器配置
     BLOOM_CAPACITY = 300000
