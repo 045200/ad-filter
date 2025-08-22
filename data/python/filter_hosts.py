@@ -2,164 +2,91 @@
 # -*- coding: utf-8 -*-
 
 import os
-import sys
 import re
 from pathlib import Path
 
-
-# 基础配置
+# 路径配置（可根据实际需求修改）
 GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
-INPUT_DIR = Path(GITHUB_WORKSPACE) / "tmp"
-OUTPUT_FILE = Path(GITHUB_WORKSPACE) / "hosts.txt"
-INPUT_FILE = INPUT_DIR / "adblock_merged.txt"
+INPUT_AGH = Path(GITHUB_WORKSPACE) / "adblock_adh.txt"  # 输入AdGuard Home规则文件
+OUTPUT_HOSTS = Path(GITHUB_WORKSPACE) / "hosts.txt"  # 输出hosts文件
 
-# 预编译正则表达式
-ADBLOCK_DOMAIN = re.compile(r'^\|\|([\w.-]+)(\^|\$.*)?$')
-ADBLOCK_WHITELIST = re.compile(r'^@@\|\|([\w.-]+)(\^|\$.*)?$')
-HOSTS_RULE = re.compile(r'^(0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$')
-COMMENT = re.compile(r'^[!#]')
-EMPTY_LINE = re.compile(r'^\s*$')
-IP_ADDRESS = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
-DOMAIN_ONLY = re.compile(r'^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$')
-WILDCARD_RULE = re.compile(r'^\*[^*]+\*$')
-ELEMENT_HIDING = re.compile(r'^.*##[^#]+$')
-ELEMENT_HIDING_EXCEPTION = re.compile(r'^.*#@#[^#]+$')
-URL_RULE = re.compile(r'^https?://[^\s]+$')
-GENERIC_RULE = re.compile(r'^\|\|.*\^$')
-REGEX_RULE = re.compile(r'^/.*/$')
-
-# 域名黑名单
-DOMAIN_BLACKLIST = {
-    'localhost', 'localdomain', 'example.com', 'example.org', 
-    'example.net', 'test.com', 'invalid.com', '0.0.0.0', '127.0.0.1',
-    '::1', '255.255.255.255', 'localhost.localdomain'
-}
+# 匹配AdGuard Home规则的正则表达式（覆盖主流语法）
+# 1. 标准域名拦截规则（如 ||example.com^、||sub.example.com^）
+# 2. IP形式拦截规则（如 0.0.0.0 example.com）
+# 3. 排除例外规则（如 @@||example.com^ 会被过滤掉）
+DOMAIN_RULE_PATTERN = re.compile(r'^\|\|([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\^?$')
+IP_RULE_PATTERN = re.compile(r'^0\.0\.0\.0\s+([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})$')
+EXCEPTION_RULE_PATTERN = re.compile(r'^@@\|\|.*$')  # 例外规则（允许访问）
 
 
-def process_file():
-    """处理输入文件并生成Hosts规则"""
-    domains = set()
-
-    if not INPUT_FILE.exists():
-        print(f"错误: 输入文件不存在 {INPUT_FILE}")
-        return domains
-
-    with open(INPUT_FILE, 'r', encoding='utf-8', errors='ignore') as f:
-        for line in f:
-            line = line.strip()
-
-            # 跳过空行和注释
-            if not line or EMPTY_LINE.match(line) or COMMENT.match(line):
-                continue
-
-            # 跳过白名单规则(Hosts文件不支持白名单)
-            if line.startswith('@@'):
-                continue
-
-            # 跳过元素隐藏规则（Hosts文件不支持）
-            if ELEMENT_HIDING.match(line) or ELEMENT_HIDING_EXCEPTION.match(line):
-                continue
-
-            # 处理标准Adblock规则
-            if ADBLOCK_DOMAIN.match(line) or GENERIC_RULE.match(line):
-                domain_match = ADBLOCK_DOMAIN.match(line) or re.search(r'\|\|([\w.-]+)', line)
-                if domain_match:
-                    domain = domain_match.group(1)
-                    if is_valid_domain(domain):
-                        domains.add(domain)
-                continue
-
-            # 处理Hosts规则
-            hosts_match = HOSTS_RULE.match(line)
-            if hosts_match:
-                domain = hosts_match.group(2)
-                if is_valid_domain(domain):
-                    domains.add(domain)
-                continue
-
-            # 处理URL规则
-            if URL_RULE.match(line):
-                # 提取域名部分
-                domain_match = re.search(r'://([^/]+)', line)
-                if domain_match:
-                    domain = domain_match.group(1)
-                    # 移除端口号
-                    domain = domain.split(':')[0]
-                    if is_valid_domain(domain):
-                        domains.add(domain)
-                continue
-
-            # 处理纯域名
-            if DOMAIN_ONLY.match(line) and is_valid_domain(line):
-                domains.add(line)
-                continue
-
-            # 处理通配符规则
-            if WILDCARD_RULE.match(line):
-                # 提取可能的域名部分
-                domain_match = re.search(r'[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+', line)
-                if domain_match:
-                    domain = domain_match.group(0)
-                    if is_valid_domain(domain):
-                        domains.add(domain)
-                continue
-
-            # 处理其他规则（如果包含域名）
-            domain_match = re.search(r'[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+', line)
-            if domain_match:
-                domain = domain_match.group(0)
-                if is_valid_domain(domain):
-                    domains.add(domain)
-                continue
-
-    return domains
-
-
-def is_valid_domain(domain):
-    """验证域名有效性"""
-    if not domain or domain in DOMAIN_BLACKLIST:
-        return False
+def convert_to_hosts(rule):
+    """将AdGuard Home规则转换为hosts格式"""
+    # 跳过例外规则（hosts仅处理拦截，允许规则无需写入）
+    if EXCEPTION_RULE_PATTERN.match(rule):
+        return None
     
-    # 检查是否是IP地址
-    if IP_ADDRESS.match(domain):
-        return False
+    # 处理域名拦截规则（如 ||example.com^ → 0.0.0.0 example.com）
+    domain_match = DOMAIN_RULE_PATTERN.match(rule)
+    if domain_match:
+        domain = domain_match.group(1).strip()
+        return f"0.0.0.0 {domain}"
     
-    # 基本长度检查
-    if len(domain) < 4 or len(domain) > 253:
-        return False
+    # 处理IP形式规则（如 0.0.0.0 example.com → 直接保留有效格式）
+    ip_match = IP_RULE_PATTERN.match(rule)
+    if ip_match:
+        domain = ip_match.group(1).strip()
+        return f"0.0.0.0 {domain}"
     
-    # 检查域名格式
-    if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$', domain):
-        return False
-    
-    # 检查TLD部分
-    parts = domain.split('.')
-    if len(parts) < 2:
-        return False
-    
-    tld = parts[-1]
-    if len(tld) < 2 or len(tld) > 10:
-        return False
-    
-    return True
+    # 不支持的规则类型（如正则、路径规则等）返回None
+    return None
 
 
-def write_output(domains):
-    """写入输出文件，不包含头信息"""
-    # 写入文件
-    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        for domain in sorted(domains):
-            f.write(f"0.0.0.0 {domain}\n")
+def process_agh_rules(input_path):
+    """处理AdGuard Home规则文件，生成去重后的hosts规则"""
+    hosts_rules = []
+    seen_domains = set()  # 用于去重（避免同一域名重复拦截）
+    
+    if not input_path.exists():
+        print(f"警告：输入文件 {input_path} 不存在，已跳过处理。")
+        return hosts_rules
+    
+    try:
+        with open(input_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                # 跳过空行和注释行（AdGuard注释以!或#开头）
+                if not line or line.startswith(('!', '#')):
+                    continue
+                
+                # 转换规则
+                converted = convert_to_hosts(line)
+                if converted:
+                    # 提取域名部分用于去重（避免0.0.0.0重复绑定同一域名）
+                    domain = converted.split()[1]
+                    if domain not in seen_domains:
+                        hosts_rules.append(converted)
+                        seen_domains.add(domain)
+    except Exception as e:
+        print(f"处理文件时出错：{e}")
+    
+    return hosts_rules
 
-    print(f"生成Hosts规则: {len(domains)} 条域名")
+
+def main():
+    # 处理规则并生成hosts内容
+    hosts_rules = process_agh_rules(INPUT_AGH)
+    
+    # 写入输出文件（纯净规则，无任何多余信息）
+    try:
+        with open(OUTPUT_HOSTS, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(hosts_rules) + '\n')
+        print(f"转换完成：共生成 {len(hosts_rules)} 条hosts规则，已写入 {OUTPUT_HOSTS}")
+    except Exception as e:
+        print(f"写入文件失败：{e}")
+        return 1
+    return 0
 
 
 if __name__ == '__main__':
-    # 确保输入目录存在
-    INPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    # 处理文件
-    domains = process_file()
-
-    # 写入输出
-    write_output(domains)
+    import sys
+    sys.exit(main())
