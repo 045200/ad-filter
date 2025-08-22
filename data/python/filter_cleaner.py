@@ -29,7 +29,7 @@ class Config:
     BASE_DIR = Path(os.getenv('GITHUB_WORKSPACE', os.getcwd()))
     DATA_DIR = BASE_DIR / "data" / "filter"  # 修改为data/filter目录
     OUTPUT_DIR = DATA_DIR  # 输出到data/filter目录
-    CLEANED_FILE = DATA_DIR / "filter_adblock.txt"  # 修改输出文件名
+    CLEANED_FILE = DATA_DIR / "adblock.txt"  # 修改输出文件名
     
     # 白名单文件路径
     ALLOW_FILE = BASE_DIR / "data" / "mod" / "allow.txt"  # 新增白名单文件
@@ -335,7 +335,7 @@ class AdblockCleaner:
 
         # 查找输入文件 - 支持多种命名模式
         input_files = []
-        patterns = ["adblock.txt"]
+        patterns = ["filter_adblock.txt"]
         for pattern in patterns:
             input_files.extend([Path(p) for p in glob.glob(str(Config.DATA_DIR / pattern))])
         
