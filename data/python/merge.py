@@ -15,16 +15,6 @@ from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-# 第三方库导入
-try:
-    from adblockparser import AdblockRule
-    from IPy import IP
-    from pybloom_live import ScalableBloomFilter
-except ImportError as e:
-    print(f"缺少必要的依赖库: {e}")
-    print("请使用 pip install pybloom-live adblockparser IPy 安装")
-    exit(1)
-
 # ==================== 配置区 ====================
 class Config:
     # 输入输出路径
@@ -36,7 +26,7 @@ class Config:
     ALLOW_PATTERNS = ['allow*.txt']
 
     # 输出文件名
-    OUTPUT_BLOCK = 'adblock_filter.txt'
+    OUTPUT_BLOCK = 'adblock.txt'
     OUTPUT_ALLOW = 'allow.txt'
 
     # 布隆过滤器配置
