@@ -44,7 +44,7 @@ class Config:
     # GitHub Actions 环境配置
     MAX_WORKERS = 4
     DNS_WORKERS = 100
-    BATCH_SIZE = 500
+    BATCH_SIZE = 1000
     MAX_MEMORY_PERCENT = 70
 
     # DNS解析设置
