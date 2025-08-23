@@ -48,7 +48,7 @@ class Config:
     # 备份与白名单
     BACKUP_DIR = BASE_DIR / "data" / "mod" / "backups"
     INVALID_DOMAINS_FILE = BASE_DIR / "data" / "mod" / "invalid_domains.json"
-    WHITELIST_FILE = BASE_DIR / "data" / "mod" / "whitelist.txt"
+    WHITELIST_FILE = BASE_DIR / "data" / "mod" / "domians.txt"
 
     # 缓存配置
     CACHE_DIR = BASE_DIR / "data" / "cache"
@@ -682,7 +682,7 @@ class AdblockCleaner:
 
         try:
             # 查找所有输入文件
-            input_files = list(Config.INPUT_DIR.glob("*.txt"))
+            input_files = list(Config.INPUT_DIR.glob("adblock_filter.txt"))
             if not input_files:
                 logger.warning(f"未找到输入文件于 {Config.INPUT_DIR}")
                 return
