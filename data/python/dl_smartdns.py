@@ -29,9 +29,9 @@ class Config:
 # SmartDNS规则源列表
 DEFAULT_SMARTDNS_SOURCES = [
     "https://raw.githubusercontent.com/privacy-protection-tools/anti-AD/master/anti-ad-smartdns.conf",
-    "https://raw.githubusercontent.com/neodevpro/neodevhost/master/smartdns",
+    "https://raw.githubusercontent.com/Olixn/china_list_for_smartdns/refs/heads/main/chinalist.domain.smartdns.conf",
     "https://raw.githubusercontent.com/jdlingyu/ad-wars/master/hosts",
-    "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt",
+    "https://raw.githubusercontent.com/8680/GOODBYEADS/master/data/rules/smartdns.conf",
     "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
 ]
 
