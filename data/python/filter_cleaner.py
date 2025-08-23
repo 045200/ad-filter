@@ -53,6 +53,7 @@ class Config:
     # 缓存配置
     CACHE_DIR = BASE_DIR / "data" / "cache"
     CACHE_TTL = 86400  # 24小时缓存有效期
+    MAX_CACHE_SIZE = 10000  # 添加缺失的配置项
 
     # 性能与资源配置
     MAX_WORKERS = int(os.getenv('MAX_WORKERS', 4))
@@ -306,9 +307,11 @@ class GitHubCacheManager:
 
             with open(cache_path, 'w') as f:
                 json.dump(cache_data, f)
+            
+            logger.debug(f"缓存已保存: {domain} -> {result}")
 
         except Exception as e:
-            logger.debug(f"保存缓存失败 {domain}: {e}")
+            logger.error(f"保存缓存失败 {domain}: {e}")
 
     def cleanup_old_cache(self, max_age_days: int = 7) -> None:
         """清理过期缓存"""
@@ -350,7 +353,8 @@ class DNSValidator:
             'cache_hits': 0,
             'persistent_cache_hits': 0,
             'doh_queries': 0,
-            'ping_checks': 0
+            'ping_checks': 0,
+            'cache_misses': 0
         }
 
     async def init_session(self) -> None:
@@ -703,6 +707,10 @@ class AdblockCleaner:
             elapsed = time.time() - start_time
             self._save_stats(elapsed)
 
+        except Exception as e:
+            logger.error(f"处理文件时发生错误: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
         finally:
             # 清理资源
             await self.validator.close_session()
