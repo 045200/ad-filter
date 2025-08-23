@@ -1,24 +1,19 @@
-# 1. 文件名需为：.github/workflows/dns-test.yml（路径和后缀必须符合此规范）
 name: Test DNS Resolution
 on:
   workflow_dispatch:  # 手动触发
   schedule:
-    - cron: '0 2 * * *'  # 每天凌晨2点运行（UTC时间，若需北京时间需改为 0 10 * * *）
+    - cron: '0 2 * * *'  # 每天凌晨2点运行一次
 
-# 2. 补充清理工作流所需的权限
 permissions:
   contents: read
-  actions: write  # 给清理旧工作流的权限
 
 jobs:
   test-dns:
     runs-on: ubuntu-latest
     env:
       DATA_DIR: ${{ github.workspace }}/data
-      PYTHON_SCRIPT: ${{ github.workspace }}/data/python/dns_speed_test.py
+      PYTHON_SCRIPT: ${{ github.workspace }}/data/python/test.py
       RESULTS_FILE: ${{ github.workspace }}/data/dns_test_results.txt
-      # 统一JSON输出路径，避免分散
-      JSON_RESULTS_FILE: ${{ github.workspace }}/data/dns_test_results.json
 
     steps:
       # 1. 拉取代码
@@ -31,11 +26,7 @@ jobs:
         with:
           python-version: '3.9'
 
-      # 3. 安装依赖工具（新增：安装jq，解决解析JSON报错）
-      - name: Install required tools (jq)
-        run: sudo apt update && sudo apt install -y jq
-
-      # 4. 安装SmartDNS（依赖jq已提前安装）
+      # 3. 安装SmartDNS
       - name: Install SmartDNS directly
         run: |
           # 获取最新发布版本信息
@@ -45,14 +36,14 @@ jobs:
           
           # 检查获取的JSON是否有效
           if echo "$LATEST_RELEASE" | jq -e '.message' | grep -q "Not Found"; then
-            echo "错误：未找到仓库或发布版本，请确认项目地址"
-            exit 1
+              echo "错误：未找到仓库或发布版本，请确认项目地址"
+              exit 1
           fi
 
           RELEASE_TAG=$(echo "$LATEST_RELEASE" | jq -r '.tag_name // empty')
           if [ -z "$RELEASE_TAG" ]; then
-            echo "错误：无法获取发布标签"
-            exit 1
+              echo "错误：无法获取发布标签"
+              exit 1
           fi
           echo "最新版本: $RELEASE_TAG"
 
@@ -61,15 +52,15 @@ jobs:
           
           # 如果找不到直接匹配，尝试查找包含x86_64的文件
           if [ -z "$DOWNLOAD_URL" ]; then
-            echo "未找到直接匹配的x86_64二进制文件，尝试查找包含x86_64的文件..."
-            DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name | contains("x86_64")) | .browser_download_url' | head -n 1)
+              echo "未找到直接匹配的x86_64二进制文件，尝试查找包含x86_64的文件..."
+              DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name | contains("x86_64")) | .browser_download_url' | head -n 1)
           fi
           
           if [ -z "$DOWNLOAD_URL" ]; then
-            echo "错误：未找到x86_64架构的二进制文件"
-            echo "可用资源："
-            echo "$LATEST_RELEASE" | jq -r '.assets[].name'
-            exit 1
+              echo "错误：未找到x86_64架构的二进制文件"
+              echo "可用资源："
+              echo "$LATEST_RELEASE" | jq -r '.assets[].name'
+              exit 1
           fi
           
           FILENAME=$(basename "$DOWNLOAD_URL")
@@ -79,8 +70,8 @@ jobs:
           # 下载二进制文件 (使用curl替代wget)
           echo "正在下载SmartDNS二进制文件..."
           if ! curl -L -o "/usr/local/bin/smartdns" --progress-bar "$DOWNLOAD_URL"; then
-            echo "下载失败"
-            exit 1
+              echo "下载失败"
+              exit 1
           fi
 
           sudo chmod +x /usr/local/bin/smartdns
@@ -88,257 +79,51 @@ jobs:
           # 验证安装
           echo "SmartDNS安装完成，版本信息:"
           if /usr/local/bin/smartdns -v; then
-            echo "安装成功"
+              echo "安装成功"
           else
-            echo "验证版本失败，但文件已复制"
-            # 即使-v失败也不一定代表安装完全失败，可能只是显示方式不同
-            echo "尝试直接执行smartdns --version"
-            /usr/local/bin/smartdns --version || echo "继续执行流程"
+              echo "验证版本失败，但文件已复制"
+              # 即使-v失败也不一定代表安装完全失败，可能只是显示方式不同
+              echo "尝试直接执行smartdns --version"
+              /usr/local/bin/smartdns --version || echo "继续执行流程"
           fi
         timeout-minutes: 5  # 设置步骤超时
 
-      # 5. 安装Python依赖
+      # 4. 安装Python依赖
       - name: Install Python dependencies
         run: |
           pip install dnspython requests
 
-      # 6. 创建DNS测试脚本目录
+      # 5. 创建DNS测试脚本目录
       - name: Create script directory
         run: |
           mkdir -p ${{ env.DATA_DIR }}/python
 
-      # 7. 创建DNS测试脚本（修复JSON输出路径，统一存到data/目录）
+      # 6. 创建DNS测试脚本
       - name: Create DNS test script
         run: |
           cat > ${{ env.PYTHON_SCRIPT }} << 'EOF'
-import dns.resolver
-import time
-import statistics
-import json
-from datetime import datetime
-import os
-
-# 从环境变量获取输出路径（避免硬编码，与工作流配置一致）
-JSON_RESULTS_FILE = os.getenv("JSON_RESULTS_FILE", "dns_test_results.json")
-
-# 扩展的测试域名列表 - 国内和国外
-DOMAINS = [
-    # 国内主流网站
-    "www.baidu.com",          # 百度
-    "www.taobao.com",         # 淘宝
-    "www.qq.com",             # 腾讯
-    "www.jd.com",             # 京东
-    "www.sina.com.cn",        # 新浪
-    "www.163.com",            # 网易
-    "www.weibo.com",          # 微博
-    "www.zhihu.com",          # 知乎
-    "www.bilibili.com",       # B站
-    "www.douyin.com",         # 抖音
-    "www.xiaohongshu.com",    # 小红书
-    "www.meituan.com",        # 美团
-    "www.dianping.com",       # 大众点评
-    "www.ctrip.com",          # 携程
-    "www.12306.cn",           # 铁路官网
-    "www.gov.cn",             # 政府网
-
-    # 国外主流网站
-    "www.google.com",         # Google
-    "www.facebook.com",       # Facebook
-    "www.twitter.com",        # Twitter
-    "www.instagram.com",      # Instagram
-    "www.youtube.com",        # YouTube
-    "www.amazon.com",         # Amazon
-    "www.microsoft.com",      # Microsoft
-    "www.apple.com",          # Apple
-    "www.netflix.com",        # Netflix
-    "www.wikipedia.org",      # Wikipedia
-    "www.reddit.com",         # Reddit
-    "www.linkedin.com",       # LinkedIn
-    "www.spotify.com",        # Spotify
-    "www.tiktok.com",         # TikTok
-    "www.discord.com",        # Discord
-    "www.twitch.tv",          # Twitch
-
-    # CDN和云服务
-    "cloudflare.com",
-    "aws.amazon.com",
-    "azure.microsoft.com",
-    "cloud.google.com",
-
-    # 国际新闻媒体
-    "www.bbc.com",
-    "www.cnn.com",
-    "www.nytimes.com",
-    "www.theguardian.com"
-]
-
-# 扩展的DNS服务器列表 - 国内和国外
-DNS_SERVERS = {
-    # 国内DNS服务器
-    "国内DNS-114": "114.114.114.114",
-    "国内DNS-114备": "114.114.115.115",
-    "国内DNS-阿里": "223.5.5.5",
-    "国内DNS-阿里备": "223.6.6.6",
-    "国内DNS-腾讯": "119.29.29.29",
-    "国内DNS-百度": "180.76.76.76",
-    "国内DNS-清华": "101.6.6.6",
-    "国内DNS-清华备": "101.7.7.7",
-    "国内DNS-南京信风": "114.114.114.119",  # 纯净无劫持
-    "国内DNS-南京信风备": "114.114.115.119",
-    "国内DNS-360": "101.226.4.6",         # 360安全DNS
-    "国内DNS-360备": "123.125.81.6",
-
-    # 国外DNS服务器
-    "国外DNS-Google": "8.8.8.8",
-    "国外DNS-Google备": "8.8.4.4",
-    "国外DNS-Cloudflare": "1.1.1.1",
-    "国外DNS-Cloudflare备": "1.0.0.1",
-    "国外DNS-OpenDNS": "208.67.222.222",
-    "国外DNS-OpenDNS备": "208.67.220.220",
-    "国外DNS-Quad9": "9.9.9.9",           # 安全DNS
-    "国外DNS-Quad9备": "149.112.112.112",
-    "国外DNS-AdGuard": "94.140.14.14",    # AdGuard DNS
-    "国外DNS-AdGuard备": "94.140.15.15",
-    "国外DNS-Comodo": "8.26.56.26",       # Comodo安全DNS
-    "国外DNS-Comodo备": "8.20.247.20",
-    "国外DNS-Norton": "199.85.126.10",    # Norton ConnectSafe
-    "国外DNS-Norton备": "199.85.127.10",
-    "国外DNS-Yandex": "77.88.8.8",        # 俄罗斯Yandex DNS
-    "国外DNS-Yandex备": "77.88.8.1",
-    "国外DNS-Level3": "209.244.0.3",      # Level3通信
-    "国外DNS-Level3备": "209.244.0.4",
-    "国外DNS-Verisign": "64.6.64.6",      # Verisign公共DNS
-    "国外DNS-Verisign备": "64.6.65.6"
-}
-
-def test_dns_server(server_name, server_ip, domains):
-    """测试单个DNS服务器的解析速度"""
-    resolver = dns.resolver.Resolver()
-    resolver.nameservers = [server_ip]
-    resolver.timeout = 5  # 设置超时时间为5秒
-    resolver.lifetime = 5  # 设置总超时时间为5秒
-
-    results = []
-
-    for domain in domains:
-        try:
-            start_time = time.time()
-            answers = resolver.resolve(domain)
-            end_time = time.time()
-
-            response_time = (end_time - start_time) * 1000  # 转换为毫秒
-            results.append({
-                "domain": domain,
-                "time": round(response_time, 2),
-                "success": True,
-                "ip": answers[0].to_text() if answers else "N/A"
-            })
-        except Exception as e:
-            results.append({
-                "domain": domain,
-                "time": 0,
-                "success": False,
-                "error": str(e),
-                "ip": "N/A"
-            })
-
-    # 计算平均响应时间（仅成功请求）
-    success_times = [r["time"] for r in results if r["success"]]
-    avg_time = statistics.mean(success_times) if success_times else 0
-    success_rate = len(success_times) / len(results) * 100
-
-    return {
-        "server": server_name,
-        "ip": server_ip,
-        "results": results,
-        "avg_time": round(avg_time, 2),
-        "success_rate": round(success_rate, 2)
-    }
-
-def categorize_domains(domains):
-    """将域名分类为国内和国外"""
-    china_domains = []
-    overseas_domains = []
-
-    # 国内域名关键词
-    china_keywords = ['.cn', '.com.cn', 'baidu', 'taobao', 'qq', 'jd', 'sina', '163', 
-                     'weibo', 'zhihu', 'bilibili', 'douyin', 'xiaohongshu', 'meituan',
-                     'dianping', 'ctrip', '12306', 'gov']
-
-    for domain in domains:
-        if any(keyword in domain for keyword in china_keywords):
-            china_domains.append(domain)
-        else:
-            overseas_domains.append(domain)
-
-    return china_domains, overseas_domains
-
-def main():
-    print("开始DNS解析速度测试...")
-    print(f"测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"测试域名总数: {len(DOMAINS)}")
-
-    # 分类域名
-    china_domains, overseas_domains = categorize_domains(DOMAINS)
-    print(f"国内域名: {len(china_domains)} 个")
-    print(f"国外域名: {len(overseas_domains)} 个")
-    print("-" * 80)
-
-    all_results = []
-
-    # 测试所有DNS服务器
-    for server_name, server_ip in DNS_SERVERS.items():
-        print(f"正在测试 {server_name} ({server_ip})...")
-        result = test_dns_server(server_name, server_ip, DOMAINS)
-        all_results.append(result)
-
-        print(f"  平均响应时间: {result['avg_time']} ms")
-        print(f"  成功率: {result['success_rate']}%")
-        print()
-
-    # 按平均响应时间排序
-    all_results.sort(key=lambda x: x["avg_time"])
-
-    # 输出结果
-    print("=" * 80)
-    print("DNS服务器响应时间排名:")
-    for i, result in enumerate(all_results, 1):
-        print(f"{i}. {result['server']} ({result['ip']}): {result['avg_time']} ms (成功率: {result['success_rate']}%)")
-
-    # 保存结果到文件（使用环境变量的路径，与工作流一致）
-    with open(JSON_RESULTS_FILE, "w", encoding="utf-8") as f:
-        json.dump({
-            "timestamp": datetime.now().isoformat(),
-            "domains": DOMAINS,
-            "china_domains": china_domains,
-            "overseas_domains": overseas_domains,
-            "results": all_results
-        }, f, ensure_ascii=False, indent=2)
-
-    print(f"测试完成，结果已保存到 {JSON_RESULTS_FILE}")
-
-if __name__ == "__main__":
-    main()
-EOF
+          # 将上面的Python脚本内容粘贴到这里
+          EOF
+          
           # 使脚本可执行
           chmod +x ${{ env.PYTHON_SCRIPT }}
 
-      # 8. 运行DNS测试脚本
+      # 7. 运行DNS测试脚本
       - name: Run DNS test
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPT }} | tee ${{ env.RESULTS_FILE }}
 
-      # 9. 上传测试结果（路径与环境变量一致）
+      # 8. 上传测试结果
       - name: Upload test results
         uses: actions/upload-artifact@v4
         with:
           name: dns-test-results
           path: |
             ${{ env.RESULTS_FILE }}
-            ${{ env.JSON_RESULTS_FILE }}
+            dns_test_results.json
 
-      # 10. 清理旧工作流记录（权限已补充）
+      # 9. 清理旧工作流记录
       - name: Cleanup old workflows
         uses: Mattraks/delete-workflow-runs@v2
         with:
