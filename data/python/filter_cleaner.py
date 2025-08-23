@@ -4,7 +4,8 @@
 """
 基于SmartDNS的Adblock规则清理器
 专为GitHub Actions环境优化
-支持SmartDNS规则源引入
+支持完整的Adblock/AdGuard/AdGuard Home语法
+使用SmartDNS过滤过期无效域名
 """
 
 import os
@@ -19,7 +20,7 @@ import aiodns
 import subprocess
 import socket
 from pathlib import Path
-from typing import Set, List, Dict, Optional
+from typing import Set, List, Dict, Optional, Tuple
 from datetime import datetime
 from collections import OrderedDict
 import ssl
@@ -31,10 +32,12 @@ class Config:
     GITHUB_WORKSPACE = Path(os.getenv('GITHUB_WORKSPACE', os.getcwd()))
     BASE_DIR = GITHUB_WORKSPACE
     
-    # 输入输出路径
-    INPUT_DIR = BASE_DIR / "data" / "filter"
-    OUTPUT_DIR = BASE_DIR / "data" / "filter"
-    CLEANED_FILE = OUTPUT_DIR / "adblock.txt"
+    # 输入输出路径 - 统一为/data/filter/
+    FILTER_DIR = BASE_DIR / "data" / "filter"
+    INPUT_BLOCKLIST = FILTER_DIR / "adblock_filter.txt"
+    INPUT_ALLOWLIST = FILTER_DIR / "filter_allow.txt"
+    OUTPUT_BLOCKLIST = FILTER_DIR / "adblock.txt"
+    OUTPUT_ALLOWLIST = FILTER_DIR / "allow.txt"
     
     # SmartDNS配置
     SMARTDNS_BIN = "/usr/local/bin/smartdns"
@@ -45,9 +48,8 @@ class Config:
     # 规则源路径
     SMARTDNS_SOURCES_DIR = BASE_DIR / "data" / "sources"
     
-    # 备份与白名单
-    BACKUP_DIR = BASE_DIR / "data" / "mod" / "backups"
-    WHITELIST_FILE = BASE_DIR / "data" / "filter" / "allow.txt"
+    # 备份路径
+    BACKUP_DIR = FILTER_DIR / "backups"
     
     # 缓存配置
     CACHE_DIR = BASE_DIR / "data" / "cache"
@@ -78,6 +80,148 @@ def setup_logger():
     return logger
 
 logger = setup_logger()
+
+# 增强的规则处理器
+class EnhancedRuleProcessor:
+    def __init__(self):
+        # 正则模式定义
+        self.regex_patterns = {
+            # 基础Adblock语法
+            'domain': re.compile(r'^(?:@@)?\|{1,2}([\w.-]+)[\^\$\|\/]'),
+            'hosts': re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$'),
+            'comment': re.compile(r'^[!#]'),
+            'empty': re.compile(r'^\s*$'),
+            
+            # AdGuard扩展语法
+            'adguard_domain': re.compile(r'^@@?\|\|?([\w.-]+)[\^\$\|\/]'),
+            'adguard_modifiers': re.compile(r'\$([^,\s]+)'),
+            'adguard_css': re.compile(r'.*#\$?#.*'),
+            'adguard_js': re.compile(r'.*#@?#.*'),
+            'adguard_csp': re.compile(r'.*\$csp='),
+            'adguard_redirect': re.compile(r'.*\$redirect(?:-rule)?='),
+            
+            # 元素隐藏规则
+            'element_hiding': re.compile(r'.*##.*'),
+            'element_exception': re.compile(r'.*#@#.*'),
+            
+            # 复杂模式
+            'regex_pattern': re.compile(r'^/.*/$'),
+            'wildcard_pattern': re.compile(r'.*[*^].*'),
+        }
+        
+        # 支持的AdGuard修饰符
+        self.supported_modifiers = {
+            'domain', 'third-party', 'script', 'stylesheet', 'image', 'object',
+            'xmlhttprequest', 'websocket', 'webrtc', 'popup', 'subdocument',
+            'document', 'elemhide', 'content', 'genericblock', 'generichide'
+        }
+
+    def parse_rule(self, rule: str) -> Tuple[Optional[str], Optional[dict]]:
+        """
+        解析单条规则，返回域名和修饰符信息
+        返回值: (domain, modifiers)
+        """
+        rule = rule.strip()
+        
+        # 跳过注释和空行
+        if not rule or self.regex_patterns['comment'].match(rule):
+            return None, None
+        
+        # 检查是否为元素隐藏规则（不支持）
+        if (self.regex_patterns['element_hiding'].match(rule) or 
+            self.regex_patterns['element_exception'].match(rule)):
+            logger.debug(f"跳过元素隐藏规则: {rule}")
+            return None, None
+        
+        # 检查是否为CSS/JS规则（不支持）
+        if (self.regex_patterns['adguard_css'].match(rule) or 
+            self.regex_patterns['adguard_js'].match(rule)):
+            logger.debug(f"跳过CSS/JS规则: {rule}")
+            return None, None
+        
+        # 检查是否为CSP规则（不支持）
+        if self.regex_patterns['adguard_csp'].match(rule):
+            logger.debug(f"跳过CSP规则: {rule}")
+            return None, None
+        
+        # 检查是否为重定向规则（不支持）
+        if self.regex_patterns['adguard_redirect'].match(rule):
+            logger.debug(f"跳过重定向规则: {rule}")
+            return None, None
+        
+        # 检查是否为正则表达式规则（不支持）
+        if self.regex_patterns['regex_pattern'].match(rule):
+            logger.debug(f"跳过正则表达式规则: {rule}")
+            return None, None
+        
+        # 提取域名
+        domain = None
+        for pattern_name in ['domain', 'hosts', 'adguard_domain']:
+            match = self.regex_patterns[pattern_name].match(rule)
+            if match:
+                domain = match.group(1)
+                break
+        
+        if not domain:
+            # 尝试处理通配符模式
+            if self.regex_patterns['wildcard_pattern'].match(rule):
+                logger.debug(f"跳过通配符规则: {rule}")
+            return None, None
+        
+        # 提取修饰符
+        modifiers = {}
+        modifier_matches = self.regex_patterns['adguard_modifiers'].findall(rule)
+        for modifier in modifier_matches:
+            if '=' in modifier:
+                key, value = modifier.split('=', 1)
+                modifiers[key] = value
+            else:
+                modifiers[modifier] = True
+        
+        # 过滤不支持的修饰符
+        supported_modifiers = {}
+        for mod, value in modifiers.items():
+            if mod in self.supported_modifiers:
+                supported_modifiers[mod] = value
+            else:
+                logger.debug(f"跳过不支持的修饰符: {mod}")
+        
+        return domain, supported_modifiers
+
+    def _matches_wildcard(self, domain: str, pattern: str) -> bool:
+        """
+        检查域名是否匹配通配符模式
+        """
+        # 处理基础通配符
+        if pattern.startswith('*.'):
+            base_domain = pattern[2:]
+            return domain.endswith('.' + base_domain) or domain == base_domain
+        
+        # 处理Adblock通配符
+        if '^' in pattern:
+            # 将 ^ 转换为适当的正则表达式
+            regex_pattern = pattern.replace('.', '\\.').replace('*', '.*').replace('^', '[^.*]')
+            try:
+                return re.match(regex_pattern, domain) is not None
+            except re.error:
+                logger.warning(f"无效的正则表达式模式: {pattern}")
+                return False
+        
+        return domain == pattern
+
+    def extract_domains_from_rules(self, rules: List[str]) -> Set[str]:
+        """
+        从规则列表中提取所有域名
+        """
+        domains = set()
+        
+        for rule in rules:
+            domain, modifiers = self.parse_rule(rule)
+            if domain:
+                domains.add(domain)
+                logger.debug(f"从规则提取域名: {rule} -> {domain}")
+        
+        return domains
 
 # SmartDNS管理器
 class SmartDNSManager:
@@ -269,58 +413,66 @@ class DNSValidator:
         """获取统计信息"""
         return self.stats
 
-# 规则处理器
-class RuleProcessor:
+# 主处理器
+class RuleCleaner:
     def __init__(self):
-        self.whitelist = self.load_whitelist()
-        self.regex_patterns = {
-            'domain': re.compile(r'^(?:@@)?\|{1,2}([\w.-]+)[\^\$\|\/]'),
-            'hosts': re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$'),
-            'comment': re.compile(r'^[!#]'),
-            'empty': re.compile(r'^\s*$'),
-            'adguard_modifiers': re.compile(r'\$[^,\s]+')  # 匹配AdGuard修饰符
-        }
+        self.smartdns = SmartDNSManager()
+        self.validator = DNSValidator(self.smartdns)
+        self.processor = EnhancedRuleProcessor()
+        
+        # 确保目录存在
+        Config.FILTER_DIR.mkdir(parents=True, exist_ok=True)
+        Config.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        Config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
     
-    def load_whitelist(self):
-        """加载白名单"""
-        whitelist = set()
-        if Config.WHITELIST_FILE.exists():
+    async def process(self):
+        """处理规则文件"""
+        logger.info("开始处理规则文件")
+        start_time = time.time()
+        
+        # 启动SmartDNS
+        smartdns_started = False
+        if Config.USE_SMARTDNS:
+            smartdns_started = self.smartdns.start()
+            if not smartdns_started:
+                logger.warning("SmartDNS启动失败，将使用备用验证方法")
+        
+        try:
+            # 处理黑名单文件
+            logger.info("处理黑名单文件...")
+            blocklist_rules = self.read_rules(Config.INPUT_BLOCKLIST)
+            valid_blocklist_rules = await self.validate_rules(blocklist_rules)
+            self.save_rules(valid_blocklist_rules, Config.OUTPUT_BLOCKLIST, Config.INPUT_BLOCKLIST)
+            
+            # 处理白名单文件
+            logger.info("处理白名单文件...")
+            allowlist_rules = self.read_rules(Config.INPUT_ALLOWLIST)
+            valid_allowlist_rules = await self.validate_rules(allowlist_rules)
+            self.save_rules(valid_allowlist_rules, Config.OUTPUT_ALLOWLIST, Config.INPUT_ALLOWLIST)
+            
+            # 输出统计信息
+            elapsed = time.time() - start_time
+            self.print_stats(elapsed)
+            
+        finally:
+            # 停止SmartDNS
+            if smartdns_started:
+                self.smartdns.stop()
+    
+    def read_rules(self, file_path):
+        """读取规则文件"""
+        rules = []
+        if file_path.exists():
             try:
-                with open(Config.WHITELIST_FILE, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line and not line.startswith('#'):
-                            whitelist.add(line)
-                logger.info(f"已加载 {len(whitelist)} 个白名单域名")
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    rules = f.readlines()
+                logger.info(f"从 {file_path.name} 读取 {len(rules)} 条规则")
             except Exception as e:
-                logger.error(f"加载白名单失败: {e}")
-        return whitelist
-    
-    def extract_domain(self, rule):
-        """从规则中提取域名"""
-        rule = rule.strip()
+                logger.error(f"读取文件 {file_path} 失败: {e}")
+        else:
+            logger.warning(f"文件不存在: {file_path}")
         
-        # 跳过注释和空行
-        if self.regex_patterns['comment'].match(rule) or self.regex_patterns['empty'].match(rule):
-            return None
-        
-        # 移除AdGuard修饰符
-        rule = self.regex_patterns['adguard_modifiers'].sub('', rule)
-        
-        # 尝试匹配各种规则格式
-        for pattern_name, pattern in self.regex_patterns.items():
-            if pattern_name in ['domain', 'hosts']:
-                match = pattern.match(rule)
-                if match:
-                    domain = match.group(1)
-                    if '$' in domain:
-                        domain = domain.split('$')[0]
-                    return domain
-        return None
-    
-    def is_whitelisted(self, domain):
-        """检查域名是否在白名单中"""
-        return domain in self.whitelist
+        return rules
     
     def load_smartdns_rules(self):
         """加载SmartDNS规则源中的域名"""
@@ -342,69 +494,8 @@ class RuleProcessor:
                     logger.error(f"加载SmartDNS规则文件 {file_path} 失败: {e}")
         
         return domains
-
-# 主处理器
-class RuleCleaner:
-    def __init__(self):
-        self.smartdns = SmartDNSManager()
-        self.validator = DNSValidator(self.smartdns)
-        self.processor = RuleProcessor()
-        
-        # 确保目录存在
-        Config.INPUT_DIR.mkdir(parents=True, exist_ok=True)
-        Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        Config.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-        Config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
     
-    async def process(self):
-        """处理规则文件"""
-        logger.info("开始处理规则文件")
-        start_time = time.time()
-        
-        # 启动SmartDNS
-        smartdns_started = False
-        if Config.USE_SMARTDNS:
-            smartdns_started = self.smartdns.start()
-            if not smartdns_started:
-                logger.warning("SmartDNS启动失败，将使用备用验证方法")
-        
-        try:
-            # 读取并处理规则文件
-            rules = self.read_rules()
-            logger.info(f"共读取 {len(rules)} 条规则")
-            
-            # 加载SmartDNS规则源中的域名
-            smartdns_domains = self.processor.load_smartdns_rules()
-            logger.info(f"从SmartDNS规则源加载了 {len(smartdns_domains)} 个域名")
-            
-            # 提取并验证域名
-            valid_rules = await self.validate_rules(rules, smartdns_domains)
-            
-            # 保存结果
-            self.save_rules(valid_rules)
-            
-            # 输出统计信息
-            elapsed = time.time() - start_time
-            self.print_stats(elapsed)
-            
-        finally:
-            # 停止SmartDNS
-            if smartdns_started:
-                self.smartdns.stop()
-    
-    def read_rules(self):
-        """读取规则文件"""
-        rules = []
-        for file_path in Config.INPUT_DIR.glob("adblock_filter.txt"):
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    rules.extend(f.readlines())
-                logger.info(f"从 {file_path.name} 读取规则")
-            except Exception as e:
-                logger.error(f"读取文件 {file_path} 失败: {e}")
-        return rules
-    
-    async def validate_rules(self, rules, smartdns_domains):
+    async def validate_rules(self, rules):
         """验证规则有效性"""
         valid_rules = []
         domains_to_validate = set()
@@ -412,27 +503,15 @@ class RuleCleaner:
         
         # 提取域名并分组
         for rule in rules:
-            domain = self.processor.extract_domain(rule)
+            domain, modifiers = self.processor.parse_rule(rule)
             if domain:
-                # 检查白名单
-                if self.processor.is_whitelisted(domain):
-                    valid_rules.append(rule)
-                    continue
-                
                 domains_to_validate.add(domain)
                 if domain not in domain_to_rules:
                     domain_to_rules[domain] = []
                 domain_to_rules[domain].append(rule)
             else:
-                # 保留无法提取域名的规则
+                # 保留无法提取域名的规则（注释、特殊规则等）
                 valid_rules.append(rule)
-        
-        # 添加SmartDNS规则源中的域名
-        for domain in smartdns_domains:
-            if domain not in domains_to_validate and not self.processor.is_whitelisted(domain):
-                domains_to_validate.add(domain)
-                if domain not in domain_to_rules:
-                    domain_to_rules[domain] = [f"||{domain}^"]
         
         logger.info(f"需要验证 {len(domains_to_validate)} 个域名")
         
@@ -449,6 +528,9 @@ class RuleCleaner:
         """批量验证域名"""
         valid_domains = set()
         total = len(domains)
+        
+        if total == 0:
+            return valid_domains
         
         # 分批处理
         for i in range(0, total, Config.BATCH_SIZE):
@@ -467,20 +549,20 @@ class RuleCleaner:
         logger.info(f"验证完成: 有效 {len(valid_domains)}/{total} 域名")
         return valid_domains
     
-    def save_rules(self, rules):
+    def save_rules(self, rules, output_path, input_path):
         """保存规则到文件"""
         try:
             # 创建备份
-            if Config.CLEANED_FILE.exists():
+            if input_path.exists():
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                backup_file = Config.BACKUP_DIR / f"adblock_backup_{timestamp}.txt"
-                backup_file.write_text(Config.CLEANED_FILE.read_text())
+                backup_file = Config.BACKUP_DIR / f"{input_path.stem}_backup_{timestamp}.txt"
+                backup_file.write_text(input_path.read_text())
             
             # 保存新规则
-            with open(Config.CLEANED_FILE, 'w', encoding='utf-8') as f:
+            with open(output_path, 'w', encoding='utf-8') as f:
                 f.writelines(rules)
             
-            logger.info(f"已保存 {len(rules)} 条规则到 {Config.CLEANED_FILE}")
+            logger.info(f"已保存 {len(rules)} 条规则到 {output_path}")
         except Exception as e:
             logger.error(f"保存规则失败: {e}")
     
