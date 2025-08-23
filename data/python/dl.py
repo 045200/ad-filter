@@ -16,6 +16,7 @@ BASE_DIR = Path(GITHUB_WORKSPACE)
 DATA_DIR = BASE_DIR / os.getenv('DATA_DIR', 'data')
 FILTER_DIR = DATA_DIR / 'filter'
 MOD_PATH = DATA_DIR / 'mod'
+RULES_CONFIG = BASE_DIR / 'data' / 'rules.txt'
 
 # 下载配置
 MAX_WORKERS = 6
@@ -23,16 +24,6 @@ TIMEOUT = 25
 MAX_RETRIES = 4
 RETRY_DELAY = 2
 HTTP_POOL_SIZE = 15
-
-# 额外下载文件配置
-EXTRA_DOWNLOADS = {
-    "china_ip_ranges.txt": {
-        "url": "https://raw.githubusercontent.com/17mon/china_ip_list/master/china_ip_list.txt"
-    },
-    "GeoLite2-Country.mmdb": {
-        "url": "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-Country.mmdb"
-    }
-}
 
 # HTTP请求头
 HEADERS = {
@@ -50,61 +41,6 @@ HEADERS = {
     'DNT': '1',
     'Pragma': 'no-cache'
 }
-
-# 规则URL列表（输出文件名：adblockXX.txt/allowXX.txt）
-ADBLOCK_URLS = [
-    # 大萌主-接口广告规则（官方CDN）
-    "https://raw.githubusercontent.com/damengzhu/banad/main/jiekouAD.txt",
-    # DD-AD去广告规则（官方CDN）
-    "https://raw.githubusercontent.com/afwfv/DD-AD/main/rule/DD-AD.txt",
-    # GitHub加速hosts（官方CDN）
-    "https://raw.hellogithub.com/hosts",
-    # Anti-AD通用规则（注释保留）
-    # "https://anti-ad.net/easylist.txt",
-    # Cats-Team广告规则（注释保留）
-    # "https://raw.githubusercontent.com/Cats-Team/AdRules/main/adblock.txt",
-    # 那个谁520广告hosts规则（注释保留）
-    # "https://raw.githubusercontent.com/qq5460168/EasyAds/refs/heads/main/adblock.txt",
-    # 10007自动规则（注释保留）
-    # "https://raw.githubusercontent.com/lingeringsound/10007_auto/master/adb.txt",
-    # 晴雅去广告规则（官方CDN）
-    "https://raw.githubusercontent.com/790953214/qy-Ads-Rule/main/black.txt",
-    # 海哥广告规则（官方CDN）
-    "https://raw.githubusercontent.com/2771936993/HG/main/hg1.txt",
-    # FCM hosts规则（官方CDN）
-    "https://raw.githubusercontent.com/entr0pia/fcm-hosts/fcm/fcm-hosts",
-    # 秋风广告规则（官方CDN）
-    "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt",
-    # SMAdHosts规则（注释保留）
-    "https://raw.githubusercontent.com/2Gardon/SM-Ad-FuckU-hosts/master/SMAdHosts",
-    # 茯苓拦截规则（官方CDN）
-    "https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingBlockList.txt"
-]
-
-ALLOW_URLS = [
-    # 那个谁520广告白名单（官方CDN）
-    "https://raw.githubusercontent.com/qq5460168/EasyAds/main/allow.txt",
-    # AdGuardHome通用白名单（官方CDN）
-    "https://raw.githubusercontent.com/mphin/AdGuardHomeRules/main/Allowlist.txt",
-    # 冷漠域名白名单（原地址）
-    "https://file-git.trli.club/file-hosts/allow/Domains",
-    # jhsvip白名单（官方CDN）
-    "https://raw.githubusercontent.com/jhsvip/ADRuls/main/white.txt",
-    # liwenjie119白名单（注释保留）
-    "https://raw.githubusercontent.com/liwenjie119/adg-rules/master/white.txt",
-    # 喵二白名单（注释保留）
-    "https://raw.githubusercontent.com/miaoermua/AdguardFilter/main/whitelist.txt",
-    # 茯苓白名单（官方CDN）
-    "https://raw.githubusercontent.com/Kuroba-Sayuki/FuLing-AdRules/main/FuLingRules/FuLingAllowList.txt",
-    # Cats-Team白名单（注释保留）
-    # "https://raw.githubusercontent.com/Cats-Team/AdRules/script/script/allowlist.txt",
-    # 浅笑白名单（注释保留）
-    "https://raw.githubusercontent.com/user001235/112/main/white.txt",
-    # 酷安cocieto白名单（注释保留）
-    "https://raw.githubusercontent.com/urkbio/adguardhomefilter/main/whitelist.txt",
-    # anti-ad混合名单（官方CDN）
-    # "https://anti-ad.net/easylist.txt"
-]
 
 # 本地规则映射
 LOCAL_RULES = {
@@ -136,11 +72,11 @@ class RuleDownloader:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         self.session = self._init_session()
         self._clean_filter_dir()
+        self.adblock_urls, self.allow_urls = self._load_rules_config()
         self.stats = {
             'adblock': {'success': 0, 'fail': 0},
             'allow': {'success': 0, 'fail': 0},
-            'local': {'copied': 0, 'missing': 0},
-            'extra': {'success': 0, 'fail': 0}
+            'local': {'copied': 0, 'missing': 0}
         }
 
     def _init_session(self):
@@ -163,6 +99,44 @@ class RuleDownloader:
                         item.unlink()
                     except Exception:
                         pass
+
+    def _load_rules_config(self):
+        """从配置文件加载规则URL"""
+        adblock_urls = []
+        allow_urls = []
+        
+        if not RULES_CONFIG.exists():
+            logger.error(f"配置文件不存在: {RULES_CONFIG}")
+            return adblock_urls, allow_urls
+            
+        try:
+            with open(RULES_CONFIG, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            current_section = None
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                    
+                if line.lower() == '[adblock]':
+                    current_section = 'adblock'
+                    continue
+                elif line.lower() == '[allow]':
+                    current_section = 'allow'
+                    continue
+                    
+                if current_section == 'adblock':
+                    adblock_urls.append(line)
+                elif current_section == 'allow':
+                    allow_urls.append(line)
+                    
+            logger.info(f"从配置加载: {len(adblock_urls)}个拦截规则, {len(allow_urls)}个放行规则")
+            
+        except Exception as e:
+            logger.error(f"读取配置文件失败: {e}")
+            
+        return adblock_urls, allow_urls
 
     def _convert_to_utf8(self, content):
         detected = chardet.detect(content)
@@ -189,26 +163,24 @@ class RuleDownloader:
         except Exception:
             return content.decode('latin-1', errors='replace'), 'latin-1'
 
-    def download_with_retry(self, url, save_path, is_binary=False):
+    def download_with_retry(self, url, save_path):
         for attempt in range(MAX_RETRIES + 1):
             try:
                 response = self.session.get(url, timeout=TIMEOUT, verify=True)
                 response.raise_for_status()
 
-                if is_binary:
-                    with open(save_path, 'wb') as f:
-                        f.write(response.content)
-                else:
-                    content = response.content
-                    text, _ = self._convert_to_utf8(content)
-                    with open(save_path, 'w', encoding='utf-8') as f:
-                        f.write(text)
+                content = response.content
+                text, _ = self._convert_to_utf8(content)
+                with open(save_path, 'w', encoding='utf-8') as f:
+                    f.write(text)
 
                 return True
 
-            except Exception:
+            except Exception as e:
                 if attempt < MAX_RETRIES:
                     time.sleep(RETRY_DELAY * (attempt + 1))
+                else:
+                    logger.error(f"下载失败 {url}: {e}")
         return False
 
     def copy_local_rules(self):
@@ -223,63 +195,55 @@ class RuleDownloader:
                     self.stats['local']['copied'] += 1
                 else:
                     self.stats['local']['missing'] += 1
-            except Exception:
+            except Exception as e:
+                logger.error(f"复制本地规则失败 {src}: {e}")
                 self.stats['local']['missing'] += 1
 
     def download_remote_rules(self):
         # 下载广告拦截规则
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = []
-            for i, url in enumerate(ADBLOCK_URLS, 1):
-                save_path = FILTER_DIR / f"adblock{i:02d}.txt"
-                futures.append(executor.submit(self.download_with_retry, url, save_path))
+        if self.adblock_urls:
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                futures = []
+                for i, url in enumerate(self.adblock_urls, 1):
+                    save_path = FILTER_DIR / f"adblock{i:02d}.txt"
+                    futures.append(executor.submit(self.download_with_retry, url, save_path))
 
-            for future in as_completed(futures):
-                if future.result():
-                    self.stats['adblock']['success'] += 1
-                else:
-                    self.stats['adblock']['fail'] += 1
+                for future in as_completed(futures):
+                    if future.result():
+                        self.stats['adblock']['success'] += 1
+                    else:
+                        self.stats['adblock']['fail'] += 1
+        else:
+            logger.warning("未配置广告拦截规则URL")
 
         # 下载白名单规则
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = []
-            for i, url in enumerate(ALLOW_URLS, 1):
-                save_path = FILTER_DIR / f"allow{i:02d}.txt"
-                futures.append(executor.submit(self.download_with_retry, url, save_path))
+        if self.allow_urls:
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                futures = []
+                for i, url in enumerate(self.allow_urls, 1):
+                    save_path = FILTER_DIR / f"allow{i:02d}.txt"
+                    futures.append(executor.submit(self.download_with_retry, url, save_path))
 
-            for future in as_completed(futures):
-                if future.result():
-                    self.stats['allow']['success'] += 1
-                else:
-                    self.stats['allow']['fail'] += 1
-
-    def download_extra_files(self):
-        for filename, file_info in EXTRA_DOWNLOADS.items():
-            url = file_info["url"]
-            save_path = DATA_DIR / filename
-            is_binary = filename.endswith('.mmdb')
-
-            try:
-                if self.download_with_retry(url, save_path, is_binary=is_binary):
-                    self.stats['extra']['success'] += 1
-                else:
-                    self.stats['extra']['fail'] += 1
-            except Exception:
-                self.stats['extra']['fail'] += 1
+                for future in as_completed(futures):
+                    if future.result():
+                        self.stats['allow']['success'] += 1
+                    else:
+                        self.stats['allow']['fail'] += 1
+        else:
+            logger.warning("未配置白名单规则URL")
 
     def run(self):
         start_time = time.time()
 
         self.copy_local_rules()
         self.download_remote_rules()
-        self.download_extra_files()
 
         elapsed = time.time() - start_time
-        
-        # 单行输出结果
-        logger.info(f"耗时:{elapsed:.1f}s 拦截:{self.stats['adblock']['success']}/{len(ADBLOCK_URLS)} "
-                   f"放行:{self.stats['allow']['success']}/{len(ALLOW_URLS)} "
-                   f"额外:{self.stats['extra']['success']}/{len(EXTRA_DOWNLOADS)}")
+
+        # 输出结果
+        logger.info(f"耗时:{elapsed:.1f}s 拦截:{self.stats['adblock']['success']}/{len(self.adblock_urls)} "
+                   f"放行:{self.stats['allow']['success']}/{len(self.allow_urls)} "
+                   f"本地:{self.stats['local']['copied']}/{len(LOCAL_RULES)}")
 
 
 if __name__ == "__main__":
