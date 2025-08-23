@@ -1,4 +1,4 @@
-name: Update Multi Rules
+name: Update Multi Rules with SmartDNS
 on:
   workflow_dispatch:  # 手动触发
   schedule:
@@ -19,9 +19,10 @@ jobs:
       DATA_DIR: ${{ github.workspace }}/data
       PYTHON_SCRIPTS: ${{ github.workspace }}/data/python
       MIHOMO_BIN: ${{ github.workspace }}/data/mihomo-tool
-      MAIN_BRANCH: multi  # 关联multi分支
+      MAIN_BRANCH: multi
       CACHE_DIR: ${{ github.workspace }}/data/cache
       TEMP_DIR: ${{ github.workspace }}/tmp
+      SMARTDNS_PORT: 5353
 
     steps:
       # 1. 拉取代码（multi分支）
@@ -31,40 +32,51 @@ jobs:
           fetch-depth: 0
           ref: ${{ env.MAIN_BRANCH }}
 
-      # 2. 设置Python环境（移除缓存配置）
+      # 2. 设置Python环境
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          # 移除了 cache: 'pip' 配置
 
       # 3. 安装系统依赖
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq moreutils
+          sudo apt-get install -y jq moreutils dnsutils
 
       # 4. 安装SmartDNS
       - name: Install SmartDNS
         run: |
           # 下载最新版本的SmartDNS
-          SMARTDNS_VERSION="Release46.1"
+          SMARTDNS_VERSION="Release43"
           wget "https://github.com/pymumu/smartdns/releases/download/${SMARTDNS_VERSION}/smartdns-${SMARTDNS_VERSION}.x86_64-linux-all.tar.gz"
           tar -xzf smartdns-${SMARTDNS_VERSION}.x86_64-linux-all.tar.gz
           cd smartdns
-          sudo cp src/smartdns /usr/bin/
-          sudo chmod +x /usr/bin/smartdns
+          sudo cp src/smartdns /usr/local/bin/
+          sudo chmod +x /usr/local/bin/smartdns
           cd ..
           rm -rf smartdns-${SMARTDNS_VERSION}.x86_64-linux-all.tar.gz smartdns
+          
+          # 验证安装
+          smartdns -v
           echo "SmartDNS installed successfully"
 
-      # 5. 安装Python依赖（直接使用pip安装）
+      # 5. 安装Python依赖
       - name: Install Python dependencies
         run: |
           pip install --upgrade pip
-          pip install requests chardet adblockparser IPy pyyaml pytz aiohttp psutil maxminddb xxhash aiodns pybloom-live aiofiles
+          pip install aiohttp aiodns psutil xxhash maxminddb pyyaml requests chardet adblockparser IPy pytz pybloom-live aiofiles
 
-      # 6. 设置DNS缓存
+      # 6. 创建必要的目录
+      - name: Create directories
+        run: |
+          mkdir -p ${{ env.DATA_DIR }}/filter
+          mkdir -p ${{ env.DATA_DIR }}/mod/backups
+          mkdir -p ${{ env.DATA_DIR }}/smartdns
+          mkdir -p ${{ env.CACHE_DIR }}
+          mkdir -p ${{ env.TEMP_DIR }}
+
+      # 7. 设置DNS缓存
       - name: Cache DNS results
         uses: actions/cache@v4
         with:
@@ -74,7 +86,7 @@ jobs:
             dns-cache-${{ runner.os }}-
             dns-cache-
 
-      # 7. 检测文件变更
+      # 8. 检测文件变更
       - name: Detect changed files
         id: changes
         uses: tj-actions/changed-files@v42
@@ -82,42 +94,38 @@ jobs:
           files: |
             data/mod/**
 
-      # 8. 运行dl.py（独立步骤）
+      # 9. 运行dl.py（下载规则）
       - name: Run dl.py
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/dl.py
 
-      # 9. 运行merge.py（独立步骤）
-      - name: Run merge.py (广告规则合并去重)
+      # 10. 运行merge.py（广告规则合并去重）
+      - name: Run merge.py
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/merge.py
           echo "广告规则合并完成"
 
-      # 10. 运行filter_cleaner.py（独立步骤）
-      - name: Run filter_cleaner.py
+      # 11. 运行SmartDNS规则清理器
+      - name: Run SmartDNS Rule Cleaner
         run: |
           cd ${{ github.workspace }}
-          python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py
+          python ${{ env.PYTHON_SCRIPTS }}/smartdns_rule_cleaner.py
         env:
-          MAX_WORKERS: 6
-          DNS_WORKERS: 50
-          BATCH_SIZE: 1000
-          MAX_MEMORY_PERCENT: 85
-          DNS_TIMEOUT: 5
+          MAX_WORKERS: 8
+          DNS_WORKERS: 30
+          BATCH_SIZE: 500
+          MAX_MEMORY_PERCENT: 80
+          DNS_TIMEOUT: 8
           DNS_RETRIES: 2
-          USE_SMARTDNS: "true"  # 启用SmartDNS
+          USE_SMARTDNS: "true"
 
-      - name: Generate adguard rules
-        run: |
-          cd ${{ github.workspace }}
-          python ${{ env.PYTHON_SCRIPTS }}/filter_adg.py
-
-      # 11. 生成多格式规则
+      # 12. 生成多格式规则
       - name: Generate multi-format rules
         run: |
           cd ${{ github.workspace }}
+          python ${{ env.PYTHON_SCRIPTS }}/filter_adg.py
           python ${{ env.PYTHON_SCRIPTS }}/filter_adh.py
           python ${{ env.PYTHON_SCRIPTS }}/filter_adp.py
           python ${{ env.PYTHON_SCRIPTS }}/filter_pihole.py
@@ -126,14 +134,14 @@ jobs:
           python ${{ env.PYTHON_SCRIPTS }}/filter_clash.py
           python ${{ env.PYTHON_SCRIPTS }}/filter_mihomo.py
 
-      # 12. 更新文档
+      # 13. 更新文档
       - name: Update documentation
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/title.py
           python ${{ env.PYTHON_SCRIPTS }}/readme.py
 
-      # 13. 提交变更
+      # 14. 提交变更
       - name: Commit changes
         id: commit
         run: |
@@ -147,10 +155,10 @@ jobs:
             echo "has_changes=false" >> $GITHUB_OUTPUT
           else
             echo "has_changes=true" >> $GITHUB_OUTPUT
-            git commit -m "Multi-format update: Rules [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
+            git commit -m "SmartDNS规则更新: [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
           fi
 
-      # 14. 推送变更
+      # 15. 推送变更
       - name: Push changes
         if: steps.commit.outputs.has_changes == 'true'
         run: |
@@ -160,7 +168,7 @@ jobs:
             git push origin ${{ env.MAIN_BRANCH }} && break || sleep 5
           done
 
-      # 15. 清理旧工作流
+      # 16. 清理旧工作流
       - name: Cleanup old workflows
         uses: Mattraks/delete-workflow-runs@v2
         with:
@@ -169,13 +177,13 @@ jobs:
           retain_days: 0
           keep_minimum_runs: 3
 
-      # 16. 清理旧工件
+      # 17. 清理旧工件
       - name: Cleanup old artifacts
         uses: c-hive/gha-remove-artifacts@v1.4.0
         with:
           age: '7 days'
 
-      # 17. 清理临时目录
+      # 18. 清理临时目录
       - name: Cleanup temporary files
         run: |
           rm -rf ${{ env.TEMP_DIR }}
