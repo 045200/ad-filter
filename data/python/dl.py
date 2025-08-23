@@ -9,6 +9,8 @@ import logging
 import chardet
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse
+from typing import Dict, List, Tuple, Optional
 
 # 配置参数
 GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
@@ -18,12 +20,15 @@ FILTER_DIR = DATA_DIR / 'filter'
 MOD_PATH = DATA_DIR / 'mod'
 RULES_CONFIG = BASE_DIR / 'data' / 'rules.txt'
 
-# 下载配置
-MAX_WORKERS = 6
-TIMEOUT = 25
-MAX_RETRIES = 4
-RETRY_DELAY = 2
-HTTP_POOL_SIZE = 15
+# 从环境变量获取配置，提供默认值
+config = {
+    'MAX_WORKERS': int(os.getenv('MAX_WORKERS', 6)),
+    'TIMEOUT': int(os.getenv('TIMEOUT', 25)),
+    'MAX_RETRIES': int(os.getenv('MAX_RETRIES', 4)),
+    'RETRY_DELAY': int(os.getenv('RETRY_DELAY', 2)),
+    'HTTP_POOL_SIZE': int(os.getenv('HTTP_POOL_SIZE', 15)),
+    'CACHE_TTL': int(os.getenv('CACHE_TTL', 86400))  # 24小时缓存
+}
 
 # HTTP请求头
 HEADERS = {
@@ -57,9 +62,24 @@ logging.basicConfig(
 logger = logging.getLogger('RuleDownloader')
 
 
+def validate_url(url: str) -> bool:
+    """验证URL的合法性"""
+    try:
+        result = urlparse(url)
+        return all([result.scheme in ('http', 'https'), result.netloc])
+    except:
+        return False
+
+
+def secure_path_join(base_path: Path, filename: str) -> Path:
+    """安全地拼接文件路径"""
+    return base_path / filename.strip('/')
+
+
 def gh_group(name):
     if os.getenv('GITHUB_ACTIONS') == 'true':
         logger.info(f"::group::{name}")
+
 
 def gh_endgroup():
     if os.getenv('GITHUB_ACTIONS') == 'true':
@@ -79,11 +99,12 @@ class RuleDownloader:
             'local': {'copied': 0, 'missing': 0}
         }
 
-    def _init_session(self):
+    def _init_session(self) -> requests.Session:
+        """初始化HTTP会话"""
         session = requests.Session()
         adapter = requests.adapters.HTTPAdapter(
-            pool_connections=HTTP_POOL_SIZE,
-            pool_maxsize=HTTP_POOL_SIZE,
+            pool_connections=config['HTTP_POOL_SIZE'],
+            pool_maxsize=config['HTTP_POOL_SIZE'],
             max_retries=0
         )
         session.mount('http://', adapter)
@@ -92,15 +113,16 @@ class RuleDownloader:
         return session
 
     def _clean_filter_dir(self):
+        """清理过滤器目录"""
         if FILTER_DIR.exists():
             for item in FILTER_DIR.iterdir():
                 if item.is_file() and (item.name.startswith('adblock') or item.name.startswith('allow')):
                     try:
                         item.unlink()
-                    except Exception:
-                        pass
+                    except IOError as e:
+                        logger.warning(f"删除文件失败 {item}: {e}")
 
-    def _load_rules_config(self):
+    def _load_rules_config(self) -> Tuple[List[str], List[str]]:
         """从配置文件加载规则URL"""
         adblock_urls = []
         allow_urls = []
@@ -126,19 +148,20 @@ class RuleDownloader:
                     current_section = 'allow'
                     continue
                     
-                if current_section == 'adblock':
+                if current_section == 'adblock' and validate_url(line):
                     adblock_urls.append(line)
-                elif current_section == 'allow':
+                elif current_section == 'allow' and validate_url(line):
                     allow_urls.append(line)
                     
             logger.info(f"从配置加载: {len(adblock_urls)}个拦截规则, {len(allow_urls)}个放行规则")
             
-        except Exception as e:
+        except IOError as e:
             logger.error(f"读取配置文件失败: {e}")
             
         return adblock_urls, allow_urls
 
-    def _convert_to_utf8(self, content):
+    def _convert_to_utf8(self, content: bytes) -> Tuple[str, str]:
+        """将内容转换为UTF-8编码"""
         detected = chardet.detect(content)
         encoding = detected.get('encoding', 'utf-8')
         confidence = detected.get('confidence', 0)
@@ -163,27 +186,51 @@ class RuleDownloader:
         except Exception:
             return content.decode('latin-1', errors='replace'), 'latin-1'
 
-    def download_with_retry(self, url, save_path):
-        for attempt in range(MAX_RETRIES + 1):
+    def download_with_cache(self, url: str, save_path: Path) -> bool:
+        """带缓存机制的文件下载"""
+        if save_path.exists():
+            mtime = save_path.stat().st_mtime
+            if time.time() - mtime < config['CACHE_TTL']:
+                return True
+        return self.download_with_retry(url, save_path)
+
+    def download_with_retry(self, url: str, save_path: Path) -> bool:
+        """带重试机制的文件下载"""
+        for attempt in range(config['MAX_RETRIES'] + 1):
             try:
-                response = self.session.get(url, timeout=TIMEOUT, verify=True)
+                response = self.session.get(url, timeout=config['TIMEOUT'], verify=True)
                 response.raise_for_status()
 
-                content = response.content
+                # 使用流式处理大文件
+                with open(save_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+
+                # 转换编码
+                with open(save_path, 'rb') as f:
+                    content = f.read()
                 text, _ = self._convert_to_utf8(content)
                 with open(save_path, 'w', encoding='utf-8') as f:
                     f.write(text)
 
                 return True
 
-            except Exception as e:
-                if attempt < MAX_RETRIES:
-                    time.sleep(RETRY_DELAY * (attempt + 1))
+            except requests.exceptions.RequestException as e:
+                if attempt < config['MAX_RETRIES']:
+                    time.sleep(config['RETRY_DELAY'] * (attempt + 1))
                 else:
-                    logger.error(f"下载失败 {url}: {e}")
+                    logger.error(f"网络请求失败 {url}: {e}")
+            except UnicodeDecodeError as e:
+                logger.error(f"编码转换失败 {url}: {e}")
+                return False
+            except IOError as e:
+                logger.error(f"文件操作失败 {save_path}: {e}")
+                return False
         return False
 
     def copy_local_rules(self):
+        """复制本地规则文件"""
         for src, dest in LOCAL_RULES.items():
             try:
                 if src.exists():
@@ -195,18 +242,19 @@ class RuleDownloader:
                     self.stats['local']['copied'] += 1
                 else:
                     self.stats['local']['missing'] += 1
-            except Exception as e:
+            except IOError as e:
                 logger.error(f"复制本地规则失败 {src}: {e}")
                 self.stats['local']['missing'] += 1
 
     def download_remote_rules(self):
+        """下载远程规则"""
         # 下载广告拦截规则
         if self.adblock_urls:
-            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            with ThreadPoolExecutor(max_workers=config['MAX_WORKERS']) as executor:
                 futures = []
                 for i, url in enumerate(self.adblock_urls, 1):
-                    save_path = FILTER_DIR / f"adblock{i:02d}.txt"
-                    futures.append(executor.submit(self.download_with_retry, url, save_path))
+                    save_path = secure_path_join(FILTER_DIR, f"adblock{i:02d}.txt")
+                    futures.append(executor.submit(self.download_with_cache, url, save_path))
 
                 for future in as_completed(futures):
                     if future.result():
@@ -218,11 +266,11 @@ class RuleDownloader:
 
         # 下载白名单规则
         if self.allow_urls:
-            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            with ThreadPoolExecutor(max_workers=config['MAX_WORKERS']) as executor:
                 futures = []
                 for i, url in enumerate(self.allow_urls, 1):
-                    save_path = FILTER_DIR / f"allow{i:02d}.txt"
-                    futures.append(executor.submit(self.download_with_retry, url, save_path))
+                    save_path = secure_path_join(FILTER_DIR, f"allow{i:02d}.txt")
+                    futures.append(executor.submit(self.download_with_cache, url, save_path))
 
                 for future in as_completed(futures):
                     if future.result():
@@ -233,6 +281,7 @@ class RuleDownloader:
             logger.warning("未配置白名单规则URL")
 
     def run(self):
+        """运行下载器"""
         start_time = time.time()
 
         self.copy_local_rules()

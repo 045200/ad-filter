@@ -106,6 +106,11 @@ def is_valid_domain(domain: str) -> bool:
         return False
     if MALWARE_RULE.search(domain):
         return False  # 过滤掉明显是恶意软件相关的域名
+    # 检查域名格式是否符合标准
+    try:
+        domain.encode('idna').decode('utf-8')
+    except UnicodeError:
+        return False
     return True
 
 
@@ -248,10 +253,9 @@ def process_rules(input_rules, is_allow=False):
             if is_allow:
                 # 检查是否是元素隐藏例外规则
                 if ELEMENT_HIDING_EXCEPTION.match(line):
-                    rule_hash = hashlib.md5(line.encode()).hexdigest()
-                    if rule_hash not in seen_rules:
+                    if line not in seen_rules:
                         processed_rules.append(line)
-                        seen_rules.add(rule_hash)
+                        seen_rules.add(line)
                     continue
 
                 # 处理标准白名单规则
@@ -262,27 +266,24 @@ def process_rules(input_rules, is_allow=False):
                 
                 # 转换为AdGuard格式
                 adguard_rule = convert_adblock_to_adguard(normalized)
-                rule_hash = hashlib.md5(adguard_rule.encode()).hexdigest()
-                if rule_hash not in seen_rules:
+                if adguard_rule not in seen_rules:
                     processed_rules.append(adguard_rule)
-                    seen_rules.add(rule_hash)
+                    seen_rules.add(adguard_rule)
                 continue
 
             # 处理拦截规则
             # 检查是否是元素隐藏规则
             if ELEMENT_HIDING.match(line) and not line.startswith('#'):
-                rule_hash = hashlib.md5(line.encode()).hexdigest()
-                if rule_hash not in seen_rules:
+                if line not in seen_rules:
                     processed_rules.append(line)
-                    seen_rules.add(rule_hash)
+                    seen_rules.add(line)
                 continue
 
             # 转换为AdGuard格式
             adguard_rule = convert_adblock_to_adguard(line)
-            rule_hash = hashlib.md5(adguard_rule.encode()).hexdigest()
-            if rule_hash not in seen_rules:
+            if adguard_rule not in seen_rules:
                 processed_rules.append(adguard_rule)
-                seen_rules.add(rule_hash)
+                seen_rules.add(adguard_rule)
 
         except Exception as e:
             print(f"处理规则时出错: {line} - {e}")
@@ -306,18 +307,17 @@ def merge_and_deduplicate(rules, allows):
     # 应用白名单规则
     for allow_rule in allows:
         domain_key = extract_domain(allow_rule)
-        if domain_key and domain_key in rule_dict:
+        if domain_key:
             # 移除匹配的拦截规则
-            del rule_dict[domain_key]
+            if domain_key in rule_dict:
+                del rule_dict[domain_key]
+            # 确保白名单规则被保留
+            merged_rules = [allow_rule] + [rule for rules in rule_dict.values() for rule in rules]
+            return merged_rules
     
-    # 重新构建规则列表
-    merged_rules = []
-    for domain_rules in rule_dict.values():
-        merged_rules.extend(domain_rules)
-    
-    # 添加白名单规则
+    # 默认情况下返回合并后的规则
+    merged_rules = [rule for rules in rule_dict.values() for rule in rules]
     merged_rules.extend(allows)
-    
     return merged_rules
 
 
