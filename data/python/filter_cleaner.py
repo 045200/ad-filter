@@ -941,7 +941,7 @@ class AdblockCleaner:
 
         try:
             # 查找所有输入文件
-            input_files = list(Config.INPUT_DIR.glob("*.txt"))
+            input_files = list(Config.INPUT_DIR.glob("adblock_filter.txt"))
             if not input_files:
                 logger.warning(f"未找到输入文件于 {Config.INPUT_DIR}")
                 return
