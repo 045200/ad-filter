@@ -23,6 +23,7 @@ jobs:
       CACHE_DIR: ${{ github.workspace }}/data/cache
       TEMP_DIR: ${{ github.workspace }}/tmp
       SMARTDNS_PORT: 5353
+      SMARTDNS_RULE_SOURCES: ${{ github.workspace }}/data/smartdns_sources.txt
 
     steps:
       # 1. 拉取代码（multi分支）
@@ -75,6 +76,7 @@ jobs:
           mkdir -p ${{ env.DATA_DIR }}/smartdns
           mkdir -p ${{ env.CACHE_DIR }}
           mkdir -p ${{ env.TEMP_DIR }}
+          mkdir -p ${{ env.DATA_DIR }}/sources
 
       # 7. 设置DNS缓存
       - name: Cache DNS results
@@ -100,18 +102,24 @@ jobs:
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/dl.py
 
-      # 10. 运行merge.py（广告规则合并去重）
+      # 10. 运行SmartDNS规则下载器
+      - name: Download SmartDNS rules
+        run: |
+          cd ${{ github.workspace }}
+          python ${{ env.PYTHON_SCRIPTS }}/dl_smartdns.py
+
+      # 11. 运行merge.py（广告规则合并去重）
       - name: Run merge.py
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/merge.py
           echo "广告规则合并完成"
 
-      # 11. 运行SmartDNS规则清理器
+      # 12. 运行SmartDNS规则清理器
       - name: Run SmartDNS Rule Cleaner
         run: |
           cd ${{ github.workspace }}
-          python ${{ env.PYTHON_SCRIPTS }}/smartdns.py
+          python ${{ env.PYTHON_SCRIPTS }}/smartdns_rule_cleaner.py
         env:
           MAX_WORKERS: 8
           DNS_WORKERS: 30
@@ -120,8 +128,9 @@ jobs:
           DNS_TIMEOUT: 8
           DNS_RETRIES: 2
           USE_SMARTDNS: "true"
+          PROCESS_SMARTDNS_RULES: "true"
 
-      # 12. 生成多格式规则
+      # 13. 生成多格式规则
       - name: Generate multi-format rules
         run: |
           cd ${{ github.workspace }}
@@ -133,15 +142,16 @@ jobs:
           python ${{ env.PYTHON_SCRIPTS }}/filter_ubo.py
           python ${{ env.PYTHON_SCRIPTS }}/filter_clash.py
           python ${{ env.PYTHON_SCRIPTS }}/filter_mihomo.py
+          python ${{ env.PYTHON_SCRIPTS }}/generate_smartdns_conf.py
 
-      # 13. 更新文档
+      # 14. 更新文档
       - name: Update documentation
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/title.py
           python ${{ env.PYTHON_SCRIPTS }}/readme.py
 
-      # 14. 提交变更
+      # 15. 提交变更
       - name: Commit changes
         id: commit
         run: |
@@ -158,7 +168,7 @@ jobs:
             git commit -m "SmartDNS规则更新: [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
           fi
 
-      # 15. 推送变更
+      # 16. 推送变更
       - name: Push changes
         if: steps.commit.outputs.has_changes == 'true'
         run: |
@@ -168,7 +178,7 @@ jobs:
             git push origin ${{ env.MAIN_BRANCH }} && break || sleep 5
           done
 
-      # 16. 清理旧工作流
+      # 17. 清理旧工作流
       - name: Cleanup old workflows
         uses: Mattraks/delete-workflow-runs@v2
         with:
@@ -177,13 +187,13 @@ jobs:
           retain_days: 0
           keep_minimum_runs: 3
 
-      # 17. 清理旧工件
+      # 18. 清理旧工件
       - name: Cleanup old artifacts
         uses: c-hive/gha-remove-artifacts@v1.4.0
         with:
           age: '7 days'
 
-      # 18. 清理临时目录
+      # 19. 清理临时目录
       - name: Cleanup temporary files
         run: |
           rm -rf ${{ env.TEMP_DIR }}
