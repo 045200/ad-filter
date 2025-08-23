@@ -1,0 +1,125 @@
+name: Update Basic Rules & Mihomo
+on: 
+  workflow_dispatch:  # 手动触发
+  schedule:
+    - cron: '0 */12 * * *'  # 每12小时自动运行
+  push:
+    branches: [ "basic" ]  # 仅在 basic 分支推送时触发
+    paths:
+      - 'data/python/**'   # 监测python脚本变更
+      - 'data/mod/**'      # 监测mod配置变更
+
+permissions:
+  contents: write        # 保留代码写入权限
+  actions: write         # 允许管理工作流（包括删除记录）
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      DATA_DIR: ${{ github.workspace }}/data
+      PYTHON_SCRIPTS: ${{ github.workspace }}/data/python
+      MIHOMO_BIN: ${{ github.workspace }}/data/mihomo-tool  # 统一Mihomo路径
+      MAIN_BRANCH: basic  # 核心分支为basic
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.MAIN_BRANCH }}  # 拉取basic分支代码
+
+      - name: Detect changed files
+        id: changes
+        uses: tj-actions/changed-files@v42
+        with:
+          files: |
+            ${{ env.PYTHON_SCRIPTS }}/**
+            ${{ env.DATA_DIR }}/mod/**
+
+      - name: Set up Python & dependencies
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+      # 直接在工作流中声明依赖安装，不依赖外部文件
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests aiodns pyyaml beautifulsoup4  # 固定版本号增强稳定性
+
+      - name: Update Mihomo (if version mismatch)
+        id: mihomo
+        run: |
+          # 获取最新版本
+          LATEST_VERSION=$(curl -sL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name' | sed 's/v//')
+          echo "Latest version: $LATEST_VERSION"
+          
+          # 获取本地版本（无则默认0.0.0）
+          if [ -f "${{ env.MIHOMO_BIN }}" ]; then
+            CURRENT_VERSION=$("${{ env.MIHOMO_BIN }}" -v 2>/dev/null | awk '{print $2}' | sed 's/v//' || echo "0.0.0")
+          else
+            CURRENT_VERSION="0.0.0"
+          fi
+          echo "Current version: $CURRENT_VERSION"
+          
+          # 版本不同则更新
+          if [ "$CURRENT_VERSION" != "$LATEST_VERSION" ]; then
+            echo "Updating Mihomo from v$CURRENT_VERSION to v$LATEST_VERSION"
+            curl -sL "https://github.com/MetaCubeX/mihomo/releases/latest/download/mihomo-linux-amd64-v${LATEST_VERSION}.gz" | gzip -d > "${{ env.MIHOMO_BIN }}"
+            chmod +x "${{ env.MIHOMO_BIN }}"
+            echo "mihomo_updated=true" >> $GITHUB_OUTPUT
+          else
+            echo "Mihomo is up-to-date (v$LATEST_VERSION)"
+            echo "mihomo_updated=false" >> $GITHUB_OUTPUT
+          fi
+          # 记录版本（无论是否更新）
+          echo "$LATEST_VERSION" > "${{ env.DATA_DIR }}/.mihomo_version"
+
+      - name: Process basic rules
+        # 触发条件：文件变更、手动触发、定时任务
+        if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        run: |
+          python ${{ env.PYTHON_SCRIPTS }}/dl.py        # 下载原始规则
+          python ${{ env.PYTHON_SCRIPTS }}/merge.py     # 合并规则
+          python ${{ env.PYTHON_SCRIPTS }}/filter-dns.py # 生成DNS规则
+        continue-on-error: true  # 允许单步失败，不中断工作流
+
+      - name: Generate Mihomo native rules
+        if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        run: python ${{ env.PYTHON_SCRIPTS }}/mihomo.py
+
+      - name: Update docs (Title & README)
+        if: steps.changes.outputs.any_changed == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        run: |
+          python ${{ env.PYTHON_SCRIPTS }}/title.py
+          python ${{ env.PYTHON_SCRIPTS }}/clean-readme.py
+
+      - name: Commit changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Actions"
+          git add --all
+          
+          # 提交信息包含Mihomo状态和时间（北京时间）
+          if [ "${{ steps.mihomo.outputs.mihomo_updated }}" = "true" ]; then
+            git commit -m "Basic rules updated + Mihomo v${LATEST_VERSION} at $(TZ=UTC-8 date +'%Y-%m-%d %H:%M:%S')（北京时间）"
+          else
+            git commit -m "Basic rules updated at $(TZ=UTC-8 date +'%Y-%m-%d %H:%M:%S')（北京时间）"
+          fi || echo "No changes to commit"
+
+      - name: Push changes to basic branch
+        run: |
+          # 重试机制避免推送冲突
+          for i in 1 2 3; do
+            git pull --rebase origin ${{ env.MAIN_BRANCH }}
+            git push origin ${{ env.MAIN_BRANCH }} && break || sleep 5
+          done
+
+      - name: Cleanup old workflow runs
+        uses: Mattraks/delete-workflow-runs@v2  # 固定版本，避免兼容性问题
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          retain_days: 0
+          keep_minimum_runs: 0
