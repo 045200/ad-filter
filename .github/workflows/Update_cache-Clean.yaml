@@ -22,7 +22,7 @@ jobs:
           mkdir -p ./data/cache
           
           # 清理7天前的缓存文件
-          find ./data/cache -name "*.json" -mtime +0 -exec rm -f {} \;
+          find ./data/cache -name "*.json" -mtime +7 -exec rm -f {} \;
           
           # 清理过期的统计文件（保留30天）
           find ./data/filter -name "*stats*.json" -mtime +30 -exec rm -f {} \;
