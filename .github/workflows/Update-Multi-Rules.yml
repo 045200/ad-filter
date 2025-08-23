@@ -45,7 +45,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq moreutils dnsutils
 
-      # 4. 动态安装SmartDNS
+      # 4. 动态安装SmartDNS (使用curl替代wget)
       - name: Install SmartDNS dynamically
         run: |
           # 获取最新发布版本信息
@@ -78,9 +78,9 @@ jobs:
           echo "下载链接: $DOWNLOAD_URL"
           echo "文件名: $FILENAME"
 
-          # 下载并安装
+          # 下载并安装 (使用curl替代wget)
           echo "正在下载SmartDNS..."
-          if ! wget -q --progress=bar:force "$DOWNLOAD_URL" -O "$FILENAME"; then
+          if ! curl -L -o "$FILENAME" --progress-bar "$DOWNLOAD_URL"; then
               echo "下载失败"
               exit 1
           fi
@@ -123,9 +123,6 @@ jobs:
           else
               echo "验证版本失败，但文件已复制"
           exit 0  # 即使-v失败也不一定代表安装完全失败，可能只是显示方式不同
-        env:
-          # 设置一个相对宽松的超时，大文件下载可能需要
-          WGETRC: "/dev/null"  # 避免wgetrc文件影响
         timeout-minutes: 10  # 设置步骤超时
 
       # 5. 安装Python依赖
@@ -144,7 +141,7 @@ jobs:
           mkdir -p ${{ env.TEMP_DIR }}
           mkdir -p ${{ env.DATA_DIR }}/sources
 
-      # 8. 检测文件变更
+      # 7. 检测文件变更
       - name: Detect changed files
         id: changes
         uses: tj-actions/changed-files@v42
@@ -153,26 +150,26 @@ jobs:
             data/mod/**
             data/rules.txt
 
-      # 9. 运行dl.py（下载规则）
+      # 8. 运行dl.py（下载规则）
       - name: Run dl.py
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/dl.py
 
-      # 10. 运行SmartDNS规则下载器
+      # 9. 运行SmartDNS规则下载器
       - name: Download SmartDNS rules
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/dl_smartdns.py
 
-      # 11. 运行merge.py（广告规则合并去重）
+      # 10. 运行merge.py（广告规则合并去重）
       - name: Run merge.py
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/merge.py
           echo "广告规则合并完成"
 
-      # 12. 运行SmartDNS规则清理器
+      # 11. 运行SmartDNS规则清理器
       - name: Run SmartDNS Rule Cleaner
         run: |
           cd ${{ github.workspace }}
@@ -187,7 +184,7 @@ jobs:
           USE_SMARTDNS: "true"
           PROCESS_SMARTDNS_RULES: "true"
 
-      # 13. 生成多格式规则
+      # 12. 生成多格式规则
       - name: Generate multi-format rules
         run: |
           cd ${{ github.workspace }}
@@ -201,14 +198,14 @@ jobs:
           python ${{ env.PYTHON_SCRIPTS }}/filter_mihomo.py
           python ${{ env.PYTHON_SCRIPTS }}/filter_smartdns.py
 
-      # 14. 更新文档
+      # 13. 更新文档
       - name: Update documentation
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/title.py
           python ${{ env.PYTHON_SCRIPTS }}/readme.py
 
-      # 15. 提交变更
+      # 14. 提交变更
       - name: Commit changes
         id: commit
         run: |
@@ -225,7 +222,7 @@ jobs:
             git commit -m "SmartDNS规则更新: [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
           fi
 
-      # 16. 推送变更
+      # 15. 推送变更
       - name: Push changes
         if: steps.commit.outputs.has_changes == 'true'
         run: |
@@ -235,7 +232,7 @@ jobs:
             git push origin ${{ env.MAIN_BRANCH }} && break || sleep 5
           done
 
-      # 17. 清理旧工作流
+      # 16. 清理旧工作流
       - name: Cleanup old workflows
         uses: Mattraks/delete-workflow-runs@v2
         with:
@@ -244,13 +241,13 @@ jobs:
           retain_days: 0
           keep_minimum_runs: 3
 
-      # 18. 清理旧工件
+      # 17. 清理旧工件
       - name: Cleanup old artifacts
         uses: c-hive/gha-remove-artifacts@v1.4.0
         with:
           age: '7 days'
 
-      # 19. 清理临时目录
+      # 18. 清理临时目录
       - name: Cleanup temporary files
         run: |
           rm -rf ${{ env.TEMP_DIR }}
