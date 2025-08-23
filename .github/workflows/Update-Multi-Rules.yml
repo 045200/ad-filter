@@ -119,7 +119,7 @@ jobs:
       - name: Run SmartDNS Rule Cleaner
         run: |
           cd ${{ github.workspace }}
-          python ${{ env.PYTHON_SCRIPTS }}/smartdns_rule_cleaner.py
+          python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py
         env:
           MAX_WORKERS: 8
           DNS_WORKERS: 30
@@ -142,7 +142,7 @@ jobs:
           python ${{ env.PYTHON_SCRIPTS }}/filter_ubo.py
           python ${{ env.PYTHON_SCRIPTS }}/filter_clash.py
           python ${{ env.PYTHON_SCRIPTS }}/filter_mihomo.py
-          python ${{ env.PYTHON_SCRIPTS }}/generate_smartdns_conf.py
+          python ${{ env.PYTHON_SCRIPTS }}/filter_smartdns.py
 
       # 14. 更新文档
       - name: Update documentation
