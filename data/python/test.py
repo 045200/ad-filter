@@ -5,9 +5,10 @@ import dns.resolver
 import time
 import statistics
 import json
+import sys
 from datetime import datetime
 
-# 扩展的测试域名列表 - 国内和国外
+# 测试的域名列表 - 国内和国外
 DOMAINS = [
     # 国内主流网站
     "www.baidu.com",          # 百度
@@ -58,7 +59,7 @@ DOMAINS = [
     "www.theguardian.com"
 ]
 
-# 扩展的DNS服务器列表 - 国内和国外
+# DNS服务器列表 - 国内和国外
 DNS_SERVERS = {
     # 国内DNS服务器
     "国内DNS-114": "114.114.114.114",
@@ -202,6 +203,7 @@ def main():
         }, f, ensure_ascii=False, indent=2)
     
     print("测试完成，结果已保存到 dns_test_results.json")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
