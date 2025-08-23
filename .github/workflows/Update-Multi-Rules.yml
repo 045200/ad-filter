@@ -7,7 +7,7 @@ on:
     branches: [ "multi" ]
     paths:
       - 'data/mod/**'
-
+      - 'data/rules.txt'
 permissions:
   contents: write
   actions: write
@@ -103,6 +103,7 @@ jobs:
         with:
           files: |
             data/mod/**
+            data/rules.txt
 
       # 9. 运行dl.py（下载规则）
       - name: Run dl.py
