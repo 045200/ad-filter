@@ -42,7 +42,7 @@ class Config:
     # 布隆过滤器配置
     USE_BLOOM_FILTER = True
     BLOOM_INITIAL_CAPACITY = 200000
-    BLOOM_ERROR_RATE = 0.001
+    BLOOM_ERROR_RATE = 0.0001
 
     # 规则优化配置
     REMOVE_BROAD_RULES = True
