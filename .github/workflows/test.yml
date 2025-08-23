@@ -1,0 +1,244 @@
+name: Test DNS Resolution
+on:
+  workflow_dispatch:  # 手动触发
+  schedule:
+    - cron: '0 2 * * *'  # 每天凌晨2点运行一次
+
+permissions:
+  contents: read
+
+jobs:
+  test-dns:
+    runs-on: ubuntu-latest
+    env:
+      DATA_DIR: ${{ github.workspace }}/data
+      PYTHON_SCRIPT: ${{ github.workspace }}/data/python/dns_speed_test.py
+      RESULTS_FILE: ${{ github.workspace }}/data/dns_test_results.txt
+
+    steps:
+      # 1. 拉取代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. 设置Python环境
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      # 3. 安装SmartDNS
+      - name: Install SmartDNS directly
+        run: |
+          # 获取最新发布版本信息
+          echo "获取SmartDNS最新版本信息..."
+          API_URL="https://api.github.com/repos/pymumu/smartdns/releases/latest"
+          LATEST_RELEASE=$(curl -sL $API_URL)
+          
+          # 检查获取的JSON是否有效
+          if echo "$LATEST_RELEASE" | jq -e '.message' | grep -q "Not Found"; then
+              echo "错误：未找到仓库或发布版本，请确认项目地址"
+              exit 1
+          fi
+
+          RELEASE_TAG=$(echo "$LATEST_RELEASE" | jq -r '.tag_name // empty')
+          if [ -z "$RELEASE_TAG" ]; then
+              echo "错误：无法获取发布标签"
+              exit 1
+          fi
+          echo "最新版本: $RELEASE_TAG"
+
+          # 直接查找x86_64架构的二进制文件
+          DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name | test("smartdns-x86_64$")) | .browser_download_url' | head -n 1)
+          
+          # 如果找不到直接匹配，尝试查找包含x86_64的文件
+          if [ -z "$DOWNLOAD_URL" ]; then
+              echo "未找到直接匹配的x86_64二进制文件，尝试查找包含x86_64的文件..."
+              DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name | contains("x86_64")) | .browser_download_url' | head -n 1)
+          fi
+          
+          if [ -z "$DOWNLOAD_URL" ]; then
+              echo "错误：未找到x86_64架构的二进制文件"
+              echo "可用资源："
+              echo "$LATEST_RELEASE" | jq -r '.assets[].name'
+              exit 1
+          fi
+          
+          FILENAME=$(basename "$DOWNLOAD_URL")
+          echo "下载链接: $DOWNLOAD_URL"
+          echo "文件名: $FILENAME"
+
+          # 下载二进制文件 (使用curl替代wget)
+          echo "正在下载SmartDNS二进制文件..."
+          if ! curl -L -o "/usr/local/bin/smartdns" --progress-bar "$DOWNLOAD_URL"; then
+              echo "下载失败"
+              exit 1
+          fi
+
+          sudo chmod +x /usr/local/bin/smartdns
+          
+          # 验证安装
+          echo "SmartDNS安装完成，版本信息:"
+          if /usr/local/bin/smartdns -v; then
+              echo "安装成功"
+          else
+              echo "验证版本失败，但文件已复制"
+              # 即使-v失败也不一定代表安装完全失败，可能只是显示方式不同
+              echo "尝试直接执行smartdns --version"
+              /usr/local/bin/smartdns --version || echo "继续执行流程"
+          fi
+        timeout-minutes: 5  # 设置步骤超时
+
+      # 4. 安装Python依赖
+      - name: Install Python dependencies
+        run: |
+          pip install dnspython requests
+
+      # 5. 创建DNS测试脚本目录
+      - name: Create script directory
+        run: |
+          mkdir -p ${{ env.DATA_DIR }}/python
+
+      # 6. 创建DNS测试脚本
+      - name: Create DNS test script
+        run: |
+          cat > ${{ env.PYTHON_SCRIPT }} << 'EOF'
+          #!/usr/bin/env python3
+          # -*- coding: utf-8 -*-
+          
+          import dns.resolver
+          import time
+          import statistics
+          import json
+          from datetime import datetime
+          
+          # 测试的域名列表
+          DOMAINS = [
+              "www.baidu.com",      # 国内
+              "www.taobao.com",     # 国内
+              "www.qq.com",         # 国内
+              "www.google.com",     # 国外
+              "www.facebook.com",   # 国外
+              "www.twitter.com",    # 国外
+              "www.github.com",     # 国外/GitHub
+              "www.amazon.com"      # 国外
+          ]
+          
+          # DNS服务器列表
+          DNS_SERVERS = {
+              "国内DNS-114": "114.114.114.114",
+              "国内DNS-阿里": "223.5.5.5",
+              "国内DNS-腾讯": "119.29.29.29",
+              "国外DNS-Google": "8.8.8.8",
+              "国外DNS-Cloudflare": "1.1.1.1",
+              "国外DNS-OpenDNS": "208.67.222.222"
+          }
+          
+          def test_dns_server(server_name, server_ip, domains):
+              """测试单个DNS服务器的解析速度"""
+              resolver = dns.resolver.Resolver()
+              resolver.nameservers = [server_ip]
+              
+              results = []
+              
+              for domain in domains:
+                  try:
+                      start_time = time.time()
+                      answers = resolver.resolve(domain)
+                      end_time = time.time()
+                      
+                      response_time = (end_time - start_time) * 1000  # 转换为毫秒
+                      results.append({
+                          "domain": domain,
+                          "time": round(response_time, 2),
+                          "success": True,
+                          "ip": answers[0].to_text() if answers else "N/A"
+                      })
+                  except Exception as e:
+                      results.append({
+                          "domain": domain,
+                          "time": 0,
+                          "success": False,
+                          "error": str(e),
+                          "ip": "N/A"
+                      })
+              
+              # 计算平均响应时间（仅成功请求）
+              success_times = [r["time"] for r in results if r["success"]]
+              avg_time = statistics.mean(success_times) if success_times else 0
+              success_rate = len(success_times) / len(results) * 100
+              
+              return {
+                  "server": server_name,
+                  "ip": server_ip,
+                  "results": results,
+                  "avg_time": round(avg_time, 2),
+                  "success_rate": round(success_rate, 2)
+              }
+          
+          def main():
+              print("开始DNS解析速度测试...")
+              print(f"测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+              print(f"测试域名: {', '.join(DOMAINS)}")
+              print("-" * 80)
+              
+              all_results = []
+              
+              # 测试所有DNS服务器
+              for server_name, server_ip in DNS_SERVERS.items():
+                  print(f"正在测试 {server_name} ({server_ip})...")
+                  result = test_dns_server(server_name, server_ip, DOMAINS)
+                  all_results.append(result)
+                  
+                  print(f"  平均响应时间: {result['avg_time']} ms")
+                  print(f"  成功率: {result['success_rate']}%")
+                  print()
+              
+              # 按平均响应时间排序
+              all_results.sort(key=lambda x: x["avg_time"])
+              
+              # 输出结果
+              print("=" * 80)
+              print("DNS服务器响应时间排名:")
+              for i, result in enumerate(all_results, 1):
+                  print(f"{i}. {result['server']} ({result['ip']}): {result['avg_time']} ms (成功率: {result['success_rate']}%)")
+              
+              # 保存结果到文件
+              with open("dns_test_results.json", "w", encoding="utf-8") as f:
+                  json.dump({
+                      "timestamp": datetime.now().isoformat(),
+                      "domains": DOMAINS,
+                      "results": all_results
+                  }, f, ensure_ascii=False, indent=2)
+              
+              print("测试完成，结果已保存到 dns_test_results.json")
+          
+          if __name__ == "__main__":
+              main()
+          EOF
+          
+          # 使脚本可执行
+          chmod +x ${{ env.PYTHON_SCRIPT }}
+
+      # 7. 运行DNS测试脚本
+      - name: Run DNS test
+        run: |
+          cd ${{ github.workspace }}
+          python ${{ env.PYTHON_SCRIPT }} | tee ${{ env.RESULTS_FILE }}
+
+      # 8. 上传测试结果
+      - name: Upload test results
+        uses: actions/upload-artifact@v3
+        with:
+          name: dns-test-results
+          path: |
+            ${{ env.RESULTS_FILE }}
+            dns_test_results.json
+
+      # 9. 清理旧工作流记录
+      - name: Cleanup old workflows
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          retain_days: 7
+          keep_minimum_runs: 5  # 保留最近5条记录
