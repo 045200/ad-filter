@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-Adblock规则清理与优化脚本 (优化版)
-优先使用白名单初筛，增加系统DNS解析验证
+Adblock规则清理与优化脚本 (SmartDNS集成版)
+集成SmartDNS提供更可靠的DNS验证
 """
 
 import os
@@ -23,6 +23,7 @@ import xxhash
 import random
 import subprocess
 import socket
+import yaml
 from pathlib import Path
 from typing import Set, List, Dict, Optional, Tuple
 from datetime import datetime
@@ -49,7 +50,14 @@ class Config:
     # 备份与白名单
     BACKUP_DIR = BASE_DIR / "data" / "mod" / "backups"
     INVALID_DOMAINS_FILE = BASE_DIR / "data" / "mod" / "invalid_domains.json"
-    WHITELIST_FILE = BASE_DIR / "data" / "domains.txt"  # 修改为纯域名格式的白名单文件
+    WHITELIST_FILE = BASE_DIR / "data" / "domains.txt"
+
+    # SmartDNS配置
+    SMARTDNS_CONFIG_DIR = BASE_DIR / "data" / "smartdns"
+    SMARTDNS_CONFIG_FILE = SMARTDNS_CONFIG_DIR / "smartdns.conf"
+    SMARTDNS_SERVER_CONFIG = SMARTDNS_CONFIG_DIR / "server.conf"
+    SMARTDNS_DOMAIN_SET_CONFIG = SMARTDNS_CONFIG_DIR / "domain-set.conf"
+    SMARTDNS_BIN = "/usr/bin/smartdns"  # 假设SmartDNS已安装
 
     # 缓存配置
     CACHE_DIR = BASE_DIR / "data" / "cache"
@@ -85,7 +93,8 @@ class Config:
     # 启用备用验证方法
     USE_DOH = True
     USE_PING = True
-    USE_SYSTEM_DNS = True  # 启用系统DNS解析
+    USE_SYSTEM_DNS = True
+    USE_SMARTDNS = True  # 启用SmartDNS验证
 
 # 正则模式类
 class RegexPatterns:
@@ -126,6 +135,171 @@ def setup_logger(name: str = 'AdblockCleaner') -> logging.Logger:
     return logger
 
 logger = setup_logger()
+
+# SmartDNS 管理器
+class SmartDNSManager:
+    def __init__(self):
+        self.process = None
+        self.config_dir = Config.SMARTDNS_CONFIG_DIR
+        self.config_file = Config.SMARTDNS_CONFIG_FILE
+        self.server_config = Config.SMARTDNS_SERVER_CONFIG
+        self.domain_set_config = Config.SMARTDNS_DOMAIN_SET_CONFIG
+        self.bin_path = Config.SMARTDNS_BIN
+        
+        # 确保配置目录存在
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        
+    def generate_config(self) -> bool:
+        """生成SmartDNS配置文件"""
+        try:
+            # 生成主配置文件
+            main_config = {
+                'bind': '127.0.0.1:5353',
+                'cache-size': 512,
+                'prefetch-domain': 'yes',
+                'serve-expired': 'yes',
+                'serve-expired-ttl': 0,
+                'rr-ttl': 300,
+                'rr-ttl-min': 60,
+                'rr-ttl-max': 86400,
+                'log-level': 'info',
+                'log-file': '/var/log/smartdns.log',
+                'log-size': 128K,
+                'audit-enable': 'yes',
+                'audit-file': '/var/log/smartdns-audit.log',
+                'audit-size': 128K,
+                'conf-file': str(self.server_config),
+                'domain-set': f'domain-set -name china -file {self.domain_set_config}'
+            }
+            
+            with open(self.config_file, 'w') as f:
+                f.write("# SmartDNS 主配置文件 - 由AdblockCleaner生成\n")
+                for key, value in main_config.items():
+                    f.write(f"{key} {value}\n")
+            
+            # 生成服务器配置文件
+            servers = [
+                # 国内DNS服务器
+                ('server-tcp', '223.5.5.5', 'china'),
+                ('server-tls', '223.5.5.5', 'china'),
+                ('server-https', 'https://doh.pub/dns-query', 'china'),
+                ('server-tcp', '119.29.29.29', 'china'),
+                ('server-tls', '119.29.29.29', 'china'),
+                
+                # 国际DNS服务器
+                ('server-tcp', '1.1.1.1', '-group global -exclude-default-group'),
+                ('server-tls', '1.1.1.1', '-group global -exclude-default-group'),
+                ('server-https', 'https://cloudflare-dns.com/dns-query', '-group global -exclude-default-group'),
+                ('server-tcp', '8.8.8.8', '-group global -exclude-default-group'),
+                ('server-tls', '8.8.8.8', '-group global -exclude-default-group'),
+            ]
+            
+            with open(self.server_config, 'w') as f:
+                f.write("# SmartDNS 服务器配置文件 - 由AdblockCleaner生成\n")
+                for server_type, server_addr, options in servers:
+                    f.write(f"{server_type} {server_addr} {options}\n")
+            
+            # 生成域名集合配置文件（中国域名）
+            china_domains = [
+                'cn', 'com.cn', 'net.cn', 'org.cn', 'gov.cn', 'edu.cn',
+                'baidu.com', 'taobao.com', 'qq.com', 'alibaba.com', 'weibo.com',
+                'jd.com', '163.com', '126.com', 'sina.com', 'sohu.com', 'xiaomi.com',
+                'huawei.com', 'tencent.com', 'aliyun.com', 'douyin.com', 'bilibili.com'
+            ]
+            
+            with open(self.domain_set_config, 'w') as f:
+                f.write("# SmartDNS 域名集合配置文件 - 由AdblockCleaner生成\n")
+                for domain in china_domains:
+                    f.write(f"{domain}\n")
+            
+            logger.info("SmartDNS配置文件生成成功")
+            return True
+            
+        except Exception as e:
+            logger.error(f"生成SmartDNS配置文件失败: {e}")
+            return False
+    
+    def start(self) -> bool:
+        """启动SmartDNS服务"""
+        try:
+            # 生成配置文件
+            if not self.generate_config():
+                return False
+            
+            # 检查SmartDNS是否已安装
+            if not os.path.exists(self.bin_path):
+                logger.warning(f"SmartDNS未安装于 {self.bin_path}，跳过启动")
+                return False
+            
+            # 启动SmartDNS
+            cmd = [self.bin_path, "-c", str(self.config_file), "-f"]
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # 等待服务启动
+            time.sleep(2)
+            
+            # 检查是否启动成功
+            if self.process.poll() is not None:
+                logger.error(f"SmartDNS启动失败: {self.process.stderr.read()}")
+                return False
+                
+            logger.info("SmartDNS服务启动成功")
+            return True
+            
+        except Exception as e:
+            logger.error(f"启动SmartDNS服务失败: {e}")
+            return False
+    
+    def stop(self) -> None:
+        """停止SmartDNS服务"""
+        if self.process:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+            self.process = None
+            logger.info("SmartDNS服务已停止")
+    
+    def is_running(self) -> bool:
+        """检查SmartDNS是否在运行"""
+        if self.process is None:
+            return False
+        return self.process.poll() is None
+    
+    def query_domain(self, domain: str, record_type: str = "A") -> Optional[List[str]]:
+        """使用dig查询SmartDNS"""
+        try:
+            cmd = ["dig", f"@{self.get_bind_address()}", "-p", str(self.get_bind_port()), 
+                   domain, record_type, "+short"]
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=Config.DNS_TIMEOUT
+            )
+            
+            if result.returncode == 0 and result.stdout.strip():
+                return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            return None
+            
+        except (subprocess.TimeoutExpired, Exception) as e:
+            logger.debug(f"SmartDNS查询失败 {domain}: {e}")
+            return None
+    
+    def get_bind_address(self) -> str:
+        """获取SmartDNS绑定地址"""
+        return "127.0.0.1"
+    
+    def get_bind_port(self) -> int:
+        """获取SmartDNS绑定端口"""
+        return 5353
 
 # GeoIP 服务
 class GeoIPService:
@@ -332,8 +506,9 @@ class GitHubCacheManager:
 
 # 智能DNS验证器
 class DNSValidator:
-    def __init__(self, geoip_service: GeoIPService):
+    def __init__(self, geoip_service: GeoIPService, smartdns_manager: Optional[SmartDNSManager] = None):
         self.geoip = geoip_service
+        self.smartdns = smartdns_manager
         self.cache = DNSCache(maxsize=Config.MAX_CACHE_SIZE)
         self.cache_manager = GitHubCacheManager()
         self.resolver = aiodns.DNSResolver()
@@ -358,6 +533,7 @@ class DNSValidator:
             'doh_queries': 0,
             'ping_checks': 0,
             'system_dns_queries': 0,
+            'smartdns_queries': 0,
             'cache_misses': 0
         }
 
@@ -464,6 +640,21 @@ class DNSValidator:
             logger.debug(f"系统DNS查询失败 {domain}: {e}")
             return False
 
+    async def resolve_domain_smartdns(self, domain: str) -> bool:
+        """使用SmartDNS解析域名"""
+        self.stats['smartdns_queries'] += 1
+        
+        if not self.smartdns or not self.smartdns.is_running():
+            return False
+            
+        try:
+            # 使用SmartDNS查询
+            result = self.smartdns.query_domain(domain)
+            return result is not None and len(result) > 0
+        except Exception as e:
+            logger.debug(f"SmartDNS查询失败 {domain}: {e}")
+            return False
+
     async def ping_domain(self, domain: str) -> bool:
         """使用ping命令检查域名"""
         self.stats['ping_checks'] += 1
@@ -484,7 +675,18 @@ class DNSValidator:
         """解析域名"""
         self.stats['total_queries'] += 1
 
-        # 首先尝试标准DNS解析
+        # 首先尝试SmartDNS（如果可用）
+        if Config.USE_SMARTDNS and self.smartdns:
+            smartdns_result = await self.resolve_domain_smartdns(domain)
+            if smartdns_result:
+                self.stats['successful_queries'] += 1
+                if strategy == 'china':
+                    self.stats['china_domains'] += 1
+                else:
+                    self.stats['global_domains'] += 1
+                return True
+
+        # 然后尝试标准DNS解析
         try:
             # 选择DNS服务器
             dns_servers = Config.DNS_SERVERS[strategy]
@@ -707,7 +909,8 @@ class RuleOptimizer:
 class AdblockCleaner:
     def __init__(self):
         self.geoip = GeoIPService(Config.GEOIP_DB_FILE)
-        self.validator = DNSValidator(self.geoip)
+        self.smartdns = SmartDNSManager() if Config.USE_SMARTDNS else None
+        self.validator = DNSValidator(self.geoip, self.smartdns)
         self.rule_processor = RuleProcessor()
         self.rule_optimizer = RuleOptimizer()
         self.resource_monitor = ResourceMonitor()
@@ -726,12 +929,19 @@ class AdblockCleaner:
         # 清理过期缓存
         self.validator.cache_manager.cleanup_old_cache(7)
 
+        # 启动SmartDNS（如果启用）
+        smartdns_started = False
+        if self.smartdns and Config.USE_SMARTDNS:
+            smartdns_started = self.smartdns.start()
+            if not smartdns_started:
+                logger.warning("SmartDNS启动失败，将使用备用DNS验证方法")
+
         # 初始化DNS验证器
         await self.validator.init_session()
 
         try:
             # 查找所有输入文件
-            input_files = list(Config.INPUT_DIR.glob("adblock_filter.txt"))
+            input_files = list(Config.INPUT_DIR.glob("*.txt"))
             if not input_files:
                 logger.warning(f"未找到输入文件于 {Config.INPUT_DIR}")
                 return
@@ -764,6 +974,10 @@ class AdblockCleaner:
             # 清理资源
             await self.validator.close_session()
             self.geoip.close()
+            
+            # 停止SmartDNS（如果已启动）
+            if smartdns_started:
+                self.smartdns.stop()
 
     async def _process_single_file(self, file_path: Path) -> List[str]:
         """处理单个文件"""
@@ -920,6 +1134,7 @@ class AdblockCleaner:
         logger.info(f"DNS查询: {self.validator.stats['total_queries']} 次")
         logger.info(f"成功查询: {self.validator.stats['successful_queries']} 次")
         logger.info(f"失败查询: {self.validator.stats['failed_queries']} 次")
+        logger.info(f"SmartDNS查询: {self.validator.stats['smartdns_queries']} 次")
         logger.info(f"系统DNS查询: {self.validator.stats['system_dns_queries']} 次")
         logger.info(f"DoH查询: {self.validator.stats['doh_queries']} 次")
         logger.info(f"Ping检查: {self.validator.stats['ping_checks']} 次")
