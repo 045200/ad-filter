@@ -102,9 +102,6 @@ jobs:
       - name: Create DNS test script
         run: |
           cat > ${{ env.PYTHON_SCRIPT }} << 'EOF'
-          #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import dns.resolver
 import time
 import statistics
@@ -309,7 +306,7 @@ def main():
 
 if __name__ == "__main__":
     main()
-          EOF
+EOF
           
           # 使脚本可执行
           chmod +x ${{ env.PYTHON_SCRIPT }}
