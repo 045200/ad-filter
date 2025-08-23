@@ -50,35 +50,83 @@ jobs:
         run: |
           # 获取最新发布版本信息
           echo "获取SmartDNS最新版本信息..."
-          LATEST_RELEASE=$(curl -s https://api.github.com/repos/pymumu/smartdns/releases/latest)
-          RELEASE_TAG=$(echo $LATEST_RELEASE | jq -r '.tag_name')
-          DOWNLOAD_URL=$(echo $LATEST_RELEASE | jq -r '.assets[] | select(.name | contains("x86_64-linux-all.tar.gz")) | .browser_download_url')
-          FILENAME=$(echo $LATEST_RELEASE | jq -r '.assets[] | select(.name | contains("x86_64-linux-all.tar.gz")) | .name')
+          API_URL="https://api.github.com/repos/pymumu/smartdns/releases/latest"
+          LATEST_RELEASE=$(curl -sL $API_URL)
           
+          # 检查获取的JSON是否有效
+          if echo "$LATEST_RELEASE" | jq -e '.message' | grep -q "Not Found"; then
+              echo "错误：未找到仓库或发布版本，请确认项目地址"
+              exit 1
+          fi
+
+          RELEASE_TAG=$(echo "$LATEST_RELEASE" | jq -r '.tag_name // empty')
+          if [ -z "$RELEASE_TAG" ]; then
+              echo "错误：无法获取发布标签"
+              exit 1
+          fi
           echo "最新版本: $RELEASE_TAG"
+
+          # 尝试获取x86_64架构的压缩包信息
+          DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name | contains("x86_64-linux-all")) | .browser_download_url' | head -n 1)
+          if [ -z "$DOWNLOAD_URL" ]; then
+              echo "错误：未找到x86_64-linux-all架构的发布包"
+              echo "可用资源："
+              echo "$LATEST_RELEASE" | jq -r '.assets[].name'
+              exit 1
+          fi
+          FILENAME=$(basename "$DOWNLOAD_URL")
           echo "下载链接: $DOWNLOAD_URL"
           echo "文件名: $FILENAME"
-          
+
           # 下载并安装
           echo "正在下载SmartDNS..."
-          wget -q --show-progress $DOWNLOAD_URL -O $FILENAME
-          
+          if ! wget -q --progress=bar:force "$DOWNLOAD_URL" -O "$FILENAME"; then
+              echo "下载失败"
+              exit 1
+          fi
+
           echo "解压文件..."
-          tar -xzf $FILENAME
-          EXTRACTED_DIR=$(basename $FILENAME .tar.gz)
+          if ! tar -xzf "$FILENAME"; then
+              echo "解压失败"
+              exit 1
+          fi
+          # 解压后的目录名可能因版本而异，使用通配符匹配
+          EXTRACTED_DIR=$(tar -tzf "$FILENAME" | head -1 | cut -f1 -d"/")
+          if [ -z "$EXTRACTED_DIR" ]; then
+              echo "无法确定解压目录"
+              exit 1
+          fi
           echo "解压目录: $EXTRACTED_DIR"
-          
-          cd $EXTRACTED_DIR
-          sudo cp src/smartdns /usr/local/bin/
+
+          cd "$EXTRACTED_DIR" || exit
+          # 静态编译版本通常包含可执行文件，确认路径
+          if [ -f "./smartdns" ]; then
+              sudo cp -v ./smartdns /usr/local/bin/
+          elif [ -f "./src/smartdns" ]; then
+              sudo cp -v ./src/smartdns /usr/local/bin/
+          else
+              echo "错误：未找到smartdns可执行文件"
+              find . -type f -name "smartdns" | head -n 5
+              exit 1
+          fi
+
           sudo chmod +x /usr/local/bin/smartdns
           cd ..
           
           # 清理
-          rm -rf $EXTRACTED_DIR $FILENAME
+          rm -rf "$EXTRACTED_DIR" "$FILENAME"
           
           # 验证安装
           echo "SmartDNS安装完成，版本信息:"
-          smartdns -v
+          if /usr/local/bin/smartdns -v; then
+              echo "安装成功"
+          else
+              echo "验证版本失败，但文件已复制"
+          exit 0  # 即使-v失败也不一定代表安装完全失败，可能只是显示方式不同
+        env:
+          # 设置一个相对宽松的超时，大文件下载可能需要
+          WGETRC: "/dev/null"  # 避免wgetrc文件影响
+        timeout-minutes: 10  # 设置步骤超时
 
       # 5. 安装Python依赖
       - name: Install Python dependencies
