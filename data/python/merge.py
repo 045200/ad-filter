@@ -54,7 +54,7 @@ class Config:
     BLOOM_ERROR_RATE = 0.0005
     
     # Adblockparser开关
-    USE_ADBLOCKPARSER = False
+    USE_ADBLOCKPARSER = True
     
     # 规则优化配置
     REMOVE_BROAD_RULES = True
