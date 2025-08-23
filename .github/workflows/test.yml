@@ -74,7 +74,7 @@ jobs:
               exit 1
           fi
 
-          sudo chmod +x /usr/local/bin/smartdns
+          sudo chmod +x "/usr/local/bin/smartdns"
           
           # 验证安装
           echo "SmartDNS安装完成，版本信息:"
@@ -93,28 +93,15 @@ jobs:
         run: |
           pip install dnspython requests
 
-      # 5. 创建DNS测试脚本目录
-      - name: Create script directory
-        run: |
-          mkdir -p ${{ env.DATA_DIR }}/python
-
-      # 6. 创建DNS测试脚本
-      - name: Create DNS test script
-        run: |
-          cat > ${{ env.PYTHON_SCRIPT }} << 'EOF'
-          # 将上面的Python脚本内容粘贴到这里
-          EOF
-          
-          # 使脚本可执行
-          chmod +x ${{ env.PYTHON_SCRIPT }}
-
-      # 7. 运行DNS测试脚本
+      # 5. 运行DNS测试脚本
+      # 在您的工作流中，替换运行步骤为：
       - name: Run DNS test
         run: |
-          cd ${{ github.workspace }}
-          python ${{ env.PYTHON_SCRIPT }} | tee ${{ env.RESULTS_FILE }}
+         cd ${{ github.workspace }}
+         python ${{ env.PYTHON_SCRIPT }} | tee ${{ env.RESULTS_FILE }}
+         timeout-minutes: 10  # 添加超时设置
 
-      # 8. 上传测试结果
+      # 6. 上传测试结果
       - name: Upload test results
         uses: actions/upload-artifact@v4
         with:
@@ -123,7 +110,7 @@ jobs:
             ${{ env.RESULTS_FILE }}
             dns_test_results.json
 
-      # 9. 清理旧工作流记录
+      # 7. 清理旧工作流记录
       - name: Cleanup old workflows
         uses: Mattraks/delete-workflow-runs@v2
         with:
