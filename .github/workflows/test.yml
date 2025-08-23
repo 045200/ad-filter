@@ -1,11 +1,14 @@
+# 1. 文件名需为：.github/workflows/dns-test.yml（路径和后缀必须符合此规范）
 name: Test DNS Resolution
 on:
   workflow_dispatch:  # 手动触发
   schedule:
-    - cron: '0 2 * * *'  # 每天凌晨2点运行一次
+    - cron: '0 2 * * *'  # 每天凌晨2点运行（UTC时间，若需北京时间需改为 0 10 * * *）
 
+# 2. 补充清理工作流所需的权限
 permissions:
   contents: read
+  actions: write  # 给清理旧工作流的权限
 
 jobs:
   test-dns:
@@ -14,6 +17,8 @@ jobs:
       DATA_DIR: ${{ github.workspace }}/data
       PYTHON_SCRIPT: ${{ github.workspace }}/data/python/dns_speed_test.py
       RESULTS_FILE: ${{ github.workspace }}/data/dns_test_results.txt
+      # 统一JSON输出路径，避免分散
+      JSON_RESULTS_FILE: ${{ github.workspace }}/data/dns_test_results.json
 
     steps:
       # 1. 拉取代码
@@ -26,7 +31,11 @@ jobs:
         with:
           python-version: '3.9'
 
-      # 3. 安装SmartDNS
+      # 3. 安装依赖工具（新增：安装jq，解决解析JSON报错）
+      - name: Install required tools (jq)
+        run: sudo apt update && sudo apt install -y jq
+
+      # 4. 安装SmartDNS（依赖jq已提前安装）
       - name: Install SmartDNS directly
         run: |
           # 获取最新发布版本信息
@@ -88,17 +97,17 @@ jobs:
           fi
         timeout-minutes: 5  # 设置步骤超时
 
-      # 4. 安装Python依赖
+      # 5. 安装Python依赖
       - name: Install Python dependencies
         run: |
           pip install dnspython requests
 
-      # 5. 创建DNS测试脚本目录
+      # 6. 创建DNS测试脚本目录
       - name: Create script directory
         run: |
           mkdir -p ${{ env.DATA_DIR }}/python
 
-      # 6. 创建DNS测试脚本
+      # 7. 创建DNS测试脚本（修复JSON输出路径，统一存到data/目录）
       - name: Create DNS test script
         run: |
           cat > ${{ env.PYTHON_SCRIPT }} << 'EOF'
@@ -107,6 +116,10 @@ import time
 import statistics
 import json
 from datetime import datetime
+import os
+
+# 从环境变量获取输出路径（避免硬编码，与工作流配置一致）
+JSON_RESULTS_FILE = os.getenv("JSON_RESULTS_FILE", "dns_test_results.json")
 
 # 扩展的测试域名列表 - 国内和国外
 DOMAINS = [
@@ -292,8 +305,8 @@ def main():
     for i, result in enumerate(all_results, 1):
         print(f"{i}. {result['server']} ({result['ip']}): {result['avg_time']} ms (成功率: {result['success_rate']}%)")
 
-    # 保存结果到文件
-    with open("dns_test_results.json", "w", encoding="utf-8") as f:
+    # 保存结果到文件（使用环境变量的路径，与工作流一致）
+    with open(JSON_RESULTS_FILE, "w", encoding="utf-8") as f:
         json.dump({
             "timestamp": datetime.now().isoformat(),
             "domains": DOMAINS,
@@ -302,7 +315,7 @@ def main():
             "results": all_results
         }, f, ensure_ascii=False, indent=2)
 
-    print("测试完成，结果已保存到 dns_test_results.json")
+    print(f"测试完成，结果已保存到 {JSON_RESULTS_FILE}")
 
 if __name__ == "__main__":
     main()
@@ -310,22 +323,22 @@ EOF
           # 使脚本可执行
           chmod +x ${{ env.PYTHON_SCRIPT }}
 
-      # 7. 运行DNS测试脚本
+      # 8. 运行DNS测试脚本
       - name: Run DNS test
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPT }} | tee ${{ env.RESULTS_FILE }}
 
-      # 8. 上传测试结果
+      # 9. 上传测试结果（路径与环境变量一致）
       - name: Upload test results
         uses: actions/upload-artifact@v4
         with:
           name: dns-test-results
           path: |
             ${{ env.RESULTS_FILE }}
-            dns_test_results.json
+            ${{ env.JSON_RESULTS_FILE }}
 
-      # 9. 清理旧工作流记录
+      # 10. 清理旧工作流记录（权限已补充）
       - name: Cleanup old workflows
         uses: Mattraks/delete-workflow-runs@v2
         with:
