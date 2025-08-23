@@ -37,12 +37,11 @@ def convert_to_abp_format(rule, is_allow=False):
     is_exception = rule.startswith(exception_prefix)
     clean_rule = rule[len(exception_prefix):] if is_exception else rule
 
+    # 构建正则表达式模式来匹配不支持的修饰符
     modifiers_pattern = r'[,$](' + '|'.join(re.escape(mod) for mod in ABP_UNSUPPORTED_MODIFIERS) + r')([=,][^,$]+)?'
-        clean_rule = re.sub(modifiers_pattern, '', clean_rule)
-        clean_rule = re.sub(r'[,&]?$', '', clean_rule)
-        if clean_rule.endswith('$'):
-            clean_rule = clean_rule[:-1]
-
+    clean_rule = re.sub(modifiers_pattern, '', clean_rule)
+    
+    # 清理规则末尾可能多余的逗号或&符号
     clean_rule = re.sub(r'[,&]?$', '', clean_rule)
     if clean_rule.endswith('$'):
         clean_rule = clean_rule[:-1]
