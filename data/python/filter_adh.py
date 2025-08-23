@@ -6,6 +6,10 @@ import sys
 import re
 import hashlib
 from pathlib import Path
+import logging
+
+# 配置日志格式
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
 INPUT_BLOCK = Path(GITHUB_WORKSPACE) / "adblock_adg.txt"
@@ -20,7 +24,7 @@ UNSUPPORTED_ELEMENTS = {'##', '#@#', '#%#', '#$#'}
 # 不支持的重定向和移除类修饰符
 UNSUPPORTED_ACTIONS = {'$removeparam', '$removeheader', '$redirect', '$csp', '$replace'}
 
-def is_compatible(rule):
+def is_compatible(rule: str) -> bool:
     """检查规则是否与AdGuard Home兼容[citation:1]"""
     if any(element in rule for element in UNSUPPORTED_ELEMENTS):
         return False
@@ -29,18 +33,18 @@ def is_compatible(rule):
             return False
     return True
 
-def convert_rule(rule, is_allow=False):
+def convert_rule(rule: str, is_allow: bool = False) -> str | None:
     """转换单条规则（此处主要进行过滤，AdGuard Home兼容AdGuard语法[citation:1]）"""
     if not is_compatible(rule):
         return None
     return rule
 
-def process_file(input_path, is_allow=False):
+def process_file(input_path: Path, is_allow: bool = False) -> list[str]:
     """处理输入文件"""
     output_rules = []
     seen_hashes = set()
     if not input_path.exists():
-        print(f"警告：输入文件 {input_path} 不存在，跳过处理。")
+        logging.warning(f"警告：输入文件 {input_path} 不存在，跳过处理。")
         return output_rules
 
     try:
@@ -59,22 +63,25 @@ def process_file(input_path, is_allow=False):
                 if rule_hash not in seen_hashes:
                     output_rules.append(converted_rule)
                     seen_hashes.add(rule_hash)
+    except UnicodeDecodeError as e:
+        logging.error(f"解码错误发生在文件 {input_path}: {e}")
+    except IOError as e:
+        logging.error(f"读写错误发生在文件 {input_path}: {e}")
     except Exception as e:
-        print(f"处理文件 {input_path} 时出错: {e}")
+        logging.exception(f"未预期的错误发生在文件 {input_path}: {e}")
     return output_rules
 
-def main():
+def main() -> int:
     block_rules = process_file(INPUT_BLOCK, is_allow=False)
     allow_rules = process_file(INPUT_ALLOW, is_allow=True)
 
     try:
-        with open(OUTPUT_BLOCK, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(block_rules) + '\n')
-        with open(OUTPUT_ALLOW, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(allow_rules) + '\n')
-        print(f"AdGuard Home 规则转换完成。拦截: {len(block_rules)} 条, 允许: {len(allow_rules)} 条")
-    except Exception as e:
-        print(f"写入输出文件时出错: {e}")
+        with open(OUTPUT_BLOCK, 'w', encoding='utf-8') as f_block, open(OUTPUT_ALLOW, 'w', encoding='utf-8') as f_allow:
+            f_block.write('\n'.join(block_rules) + '\n')
+            f_allow.write('\n'.join(allow_rules) + '\n')
+        logging.info(f"AdGuard Home 规则转换完成。拦截: {len(block_rules)} 条, 允许: {len(allow_rules)} 条")
+    except IOError as e:
+        logging.error(f"写入输出文件时出错: {e}")
         return 1
     return 0
 
