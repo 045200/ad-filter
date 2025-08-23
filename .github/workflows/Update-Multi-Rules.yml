@@ -45,22 +45,40 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq moreutils dnsutils
 
-      # 4. 安装SmartDNS
-      - name: Install SmartDNS
+      # 4. 动态安装SmartDNS
+      - name: Install SmartDNS dynamically
         run: |
-          # 下载最新版本的SmartDNS
-          SMARTDNS_VERSION="Release46.1"
-          wget "https://github.com/pymumu/smartdns/releases/download/${SMARTDNS_VERSION}/smartdns-${SMARTDNS_VERSION}.x86_64-linux-all.tar.gz"
-          tar -xzf smartdns-${SMARTDNS_VERSION}.x86_64-linux-all.tar.gz
-          cd smartdns
+          # 获取最新发布版本信息
+          echo "获取SmartDNS最新版本信息..."
+          LATEST_RELEASE=$(curl -s https://api.github.com/repos/pymumu/smartdns/releases/latest)
+          RELEASE_TAG=$(echo $LATEST_RELEASE | jq -r '.tag_name')
+          DOWNLOAD_URL=$(echo $LATEST_RELEASE | jq -r '.assets[] | select(.name | contains("x86_64-linux-all.tar.gz")) | .browser_download_url')
+          FILENAME=$(echo $LATEST_RELEASE | jq -r '.assets[] | select(.name | contains("x86_64-linux-all.tar.gz")) | .name')
+          
+          echo "最新版本: $RELEASE_TAG"
+          echo "下载链接: $DOWNLOAD_URL"
+          echo "文件名: $FILENAME"
+          
+          # 下载并安装
+          echo "正在下载SmartDNS..."
+          wget -q --show-progress $DOWNLOAD_URL -O $FILENAME
+          
+          echo "解压文件..."
+          tar -xzf $FILENAME
+          EXTRACTED_DIR=$(basename $FILENAME .tar.gz)
+          echo "解压目录: $EXTRACTED_DIR"
+          
+          cd $EXTRACTED_DIR
           sudo cp src/smartdns /usr/local/bin/
           sudo chmod +x /usr/local/bin/smartdns
           cd ..
-          rm -rf smartdns-${SMARTDNS_VERSION}.x86_64-linux-all.tar.gz smartdns
+          
+          # 清理
+          rm -rf $EXTRACTED_DIR $FILENAME
           
           # 验证安装
+          echo "SmartDNS安装完成，版本信息:"
           smartdns -v
-          echo "SmartDNS installed successfully"
 
       # 5. 安装Python依赖
       - name: Install Python dependencies
@@ -77,16 +95,6 @@ jobs:
           mkdir -p ${{ env.CACHE_DIR }}
           mkdir -p ${{ env.TEMP_DIR }}
           mkdir -p ${{ env.DATA_DIR }}/sources
-
-      # 7. 设置DNS缓存
-      - name: Cache DNS results
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CACHE_DIR }}
-          key: dns-cache-${{ runner.os }}-${{ hashFiles('data/filter/adblock*.txt') }}
-          restore-keys: |
-            dns-cache-${{ runner.os }}-
-            dns-cache-
 
       # 8. 检测文件变更
       - name: Detect changed files
