@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-Adblock规则清理与优化脚本 (修复版)
-修复DNS验证问题，添加备用验证方法
+Adblock规则清理与优化脚本 (优化版)
+优先使用白名单初筛，增加系统DNS解析验证
 """
 
 import os
@@ -22,6 +22,7 @@ import psutil
 import xxhash
 import random
 import subprocess
+import socket
 from pathlib import Path
 from typing import Set, List, Dict, Optional, Tuple
 from datetime import datetime
@@ -48,20 +49,20 @@ class Config:
     # 备份与白名单
     BACKUP_DIR = BASE_DIR / "data" / "mod" / "backups"
     INVALID_DOMAINS_FILE = BASE_DIR / "data" / "mod" / "invalid_domains.json"
-    WHITELIST_FILE = BASE_DIR / "data" / "mod" / "domians.txt"
+    WHITELIST_FILE = BASE_DIR / "data" / "domains.txt"  # 修改为纯域名格式的白名单文件
 
     # 缓存配置
     CACHE_DIR = BASE_DIR / "data" / "cache"
     CACHE_TTL = 86400  # 24小时缓存有效期
-    MAX_CACHE_SIZE = 10000  # 添加缺失的配置项
+    MAX_CACHE_SIZE = 10000
 
     # 性能与资源配置
     MAX_WORKERS = int(os.getenv('MAX_WORKERS', 4))
-    DNS_WORKERS = int(os.getenv('DNS_WORKERS', 20))  # 减少并发量
-    BATCH_SIZE = int(os.getenv('BATCH_SIZE', 200))   # 减小批次大小
+    DNS_WORKERS = int(os.getenv('DNS_WORKERS', 20))
+    BATCH_SIZE = int(os.getenv('BATCH_SIZE', 200))
     MAX_MEMORY_PERCENT = int(os.getenv('MAX_MEMORY_PERCENT', 80))
-    DNS_TIMEOUT = int(os.getenv('DNS_TIMEOUT', 10))  # 增加超时时间
-    DNS_RETRIES = int(os.getenv('DNS_RETRIES', 3))   # 增加重试次数
+    DNS_TIMEOUT = int(os.getenv('DNS_TIMEOUT', 10))
+    DNS_RETRIES = int(os.getenv('DNS_RETRIES', 3))
 
     # DNS服务器配置 (国内外分流)
     DNS_SERVERS = {
@@ -83,7 +84,8 @@ class Config:
 
     # 启用备用验证方法
     USE_DOH = True
-    USE_PING = True  # 使用ping作为备用验证
+    USE_PING = True
+    USE_SYSTEM_DNS = True  # 启用系统DNS解析
 
 # 正则模式类
 class RegexPatterns:
@@ -93,6 +95,7 @@ class RegexPatterns:
     EMPTY_LINE = re.compile(r'^\s*$')
     IP_ADDRESS = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
     DOMAIN_PATTERN = re.compile(r'^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$')
+    WILDCARD_DOMAIN = re.compile(r'^\*\.([\w.-]+)$')
 
     # AdGuard 特定模式
     ADGUARD_SCRIPT = re.compile(r'.*\$.*script.*')
@@ -354,6 +357,7 @@ class DNSValidator:
             'persistent_cache_hits': 0,
             'doh_queries': 0,
             'ping_checks': 0,
+            'system_dns_queries': 0,
             'cache_misses': 0
         }
 
@@ -444,6 +448,22 @@ class DNSValidator:
             logger.debug(f"DoH查询失败 {domain}: {e}")
             return False
 
+    async def resolve_domain_system(self, domain: str) -> bool:
+        """使用系统DNS解析域名"""
+        self.stats['system_dns_queries'] += 1
+        
+        try:
+            # 使用系统DNS解析
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None, 
+                lambda: socket.getaddrinfo(domain, None, family=socket.AF_INET)
+            )
+            return bool(result)
+        except Exception as e:
+            logger.debug(f"系统DNS查询失败 {domain}: {e}")
+            return False
+
     async def ping_domain(self, domain: str) -> bool:
         """使用ping命令检查域名"""
         self.stats['ping_checks'] += 1
@@ -486,7 +506,14 @@ class DNSValidator:
         except Exception as e:
             logger.debug(f"DNS查询失败 {domain}: {e}")
 
-        # 如果标准DNS失败，尝试DoH
+        # 如果标准DNS失败，尝试系统DNS
+        if Config.USE_SYSTEM_DNS:
+            system_result = await self.resolve_domain_system(domain)
+            if system_result:
+                self.stats['successful_queries'] += 1
+                return True
+
+        # 如果系统DNS失败，尝试DoH
         if Config.USE_DOH:
             doh_result = await self.resolve_domain_doh(domain, strategy)
             if doh_result:
@@ -541,6 +568,7 @@ class RuleProcessor:
         self.regex = RegexPatterns()
         self.known_invalid_domains = set()
         self.whitelist_domains = set()
+        self.wildcard_domains = set()
         self._load_invalid_domains()
         self._load_whitelist()
 
@@ -563,12 +591,32 @@ class RuleProcessor:
                     for line in f:
                         line = line.strip()
                         if line and not line.startswith('#'):
+                            # 处理通配符域名
                             if line.startswith('*.'):
-                                line = line[2:]
-                            self.whitelist_domains.add(line)
-                logger.info(f"已加载 {len(self.whitelist_domains)} 个白名单域名")
+                                base_domain = line[2:]
+                                self.wildcard_domains.add(base_domain)
+                                logger.debug(f"添加通配符域名: {base_domain}")
+                            else:
+                                self.whitelist_domains.add(line)
+                                logger.debug(f"添加白名单域名: {line}")
+                logger.info(f"已加载 {len(self.whitelist_domains)} 个白名单域名和 {len(self.wildcard_domains)} 个通配符域名")
             except Exception as e:
                 logger.error(f"加载白名单失败: {e}")
+        else:
+            logger.warning(f"白名单文件不存在: {Config.WHITELIST_FILE}")
+
+    def is_domain_in_whitelist(self, domain: str) -> bool:
+        """检查域名是否在白名单中"""
+        # 精确匹配检查
+        if domain in self.whitelist_domains:
+            return True
+            
+        # 通配符匹配检查
+        for wildcard in self.wildcard_domains:
+            if domain.endswith('.' + wildcard) or domain == wildcard:
+                return True
+                
+        return False
 
     def extract_domain_from_rule(self, rule: str) -> Optional[str]:
         """从规则中提取域名"""
@@ -606,14 +654,15 @@ class RuleProcessor:
             return True  # 无法提取域名的规则默认有效
 
         # 检查白名单
-        if domain in self.whitelist_domains:
+        if self.is_domain_in_whitelist(domain):
+            logger.debug(f"域名在白名单中，跳过验证: {domain}")
             return True
 
         # 检查已知无效域名
         if domain in self.known_invalid_domains:
             return False
 
-        return True  # 默认有效
+        return True  # 默认需要验证
 
 # 规则优化器
 class RuleOptimizer:
@@ -734,10 +783,17 @@ class AdblockCleaner:
         for line in lines:
             domain = self.rule_processor.extract_domain_from_rule(line)
             if domain and self.validator.is_valid_domain_format(domain):
-                domains_to_validate.add(domain)
-                if domain not in domain_to_rules:
-                    domain_to_rules[domain] = []
-                domain_to_rules[domain].append(line.strip())
+                # 先检查白名单
+                if self.rule_processor.is_domain_in_whitelist(domain):
+                    # 在白名单中，直接保留规则
+                    domain_to_rules.setdefault(domain, []).append(line.strip())
+                    logger.debug(f"白名单域名跳过验证: {domain}")
+                else:
+                    # 不在白名单中，需要验证
+                    domains_to_validate.add(domain)
+                    if domain not in domain_to_rules:
+                        domain_to_rules[domain] = []
+                    domain_to_rules[domain].append(line.strip())
             else:
                 # 保留无法提取域名的规则（注释、特殊规则等）
                 if line.strip() and not line.strip().startswith(('!', '#')):
@@ -751,7 +807,8 @@ class AdblockCleaner:
         # 构建有效规则列表
         valid_rules = []
         for domain, rules in domain_to_rules.items():
-            if domain in valid_domains:
+            # 如果域名在白名单中或验证有效，则保留规则
+            if self.rule_processor.is_domain_in_whitelist(domain) or domain in valid_domains:
                 valid_rules.extend(rules)
 
         # 添加无法提取域名的规则（注释、特殊规则等）
@@ -863,6 +920,7 @@ class AdblockCleaner:
         logger.info(f"DNS查询: {self.validator.stats['total_queries']} 次")
         logger.info(f"成功查询: {self.validator.stats['successful_queries']} 次")
         logger.info(f"失败查询: {self.validator.stats['failed_queries']} 次")
+        logger.info(f"系统DNS查询: {self.validator.stats['system_dns_queries']} 次")
         logger.info(f"DoH查询: {self.validator.stats['doh_queries']} 次")
         logger.info(f"Ping检查: {self.validator.stats['ping_checks']} 次")
         logger.info(f"内存缓存命中率: {self.validator.cache.get_stats()['hit_rate']:.1%}")
