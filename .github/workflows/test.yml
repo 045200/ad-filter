@@ -225,9 +225,9 @@ jobs:
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPT }} | tee ${{ env.RESULTS_FILE }}
 
-      # 8. 上传测试结果
+      # 8. 上传测试结果 (更新到 v4)
       - name: Upload test results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: dns-test-results
           path: |
