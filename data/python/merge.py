@@ -46,7 +46,7 @@ class Config:
     
     # 输出文件名
     OUTPUT_BLOCK = 'adblock_filter.txt'
-    OUTPUT_ALLOW = 'allow.txt'
+    OUTPUT_ALLOW = 'allow_filter.txt'
     
     # 布隆过滤器配置
     USE_BLOOM_FILTER = True  # 布隆过滤器开关
