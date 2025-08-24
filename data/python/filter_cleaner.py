@@ -108,12 +108,12 @@ class FileDownloader:
     async def download_file(url: str, dest: Path, session: aiohttp.ClientSession = None):
         """下载文件到指定路径"""
         dest.parent.mkdir(parents=True, exist_ok=True)
-        
+
         close_session = False
         if session is None:
             session = aiohttp.ClientSession()
             close_session = True
-        
+
         try:
             async with session.get(url) as response:
                 if response.status == 200:
@@ -141,7 +141,7 @@ class FileDownloader:
                 dest_path = Config.EXTRA_DATA_DIR / filename
                 if not dest_path.exists():
                     tasks.append(FileDownloader.download_file(info["url"], dest_path, session))
-            
+
             if tasks:
                 await asyncio.gather(*tasks)
                 logger.info("所有额外文件下载完成")
@@ -242,12 +242,12 @@ class GeoIPTools:
                         if line and not line.startswith('#'):
                             self.china_ips.add(line)
                 logger.info(f"已加载 {len(self.china_ips)} 个中国IP范围")
-            
+
             # 加载GeoIP数据库
             if Config.USE_GEOIP and Config.GEOIP_DB.exists():
                 self.geoip_reader = maxminddb.open_database(str(Config.GEOIP_DB))
                 logger.info("GeoIP数据库加载成功")
-            
+
             self.loaded = True
         except Exception as e:
             logger.error(f"加载地理位置数据失败: {e}")
@@ -256,7 +256,7 @@ class GeoIPTools:
         """检查IP是否属于中国"""
         if not self.loaded:
             return False
-            
+
         try:
             ip_obj = ipaddress.ip_address(ip)
             for cidr in self.china_ips:
@@ -264,21 +264,21 @@ class GeoIPTools:
                     return True
         except:
             pass
-            
+
         return False
 
     def get_country_code(self, ip: str) -> Optional[str]:
         """获取IP所属国家代码"""
         if not self.geoip_reader:
             return None
-            
+
         try:
             data = self.geoip_reader.get(ip)
             if data and 'country' in data and 'iso_code' in data['country']:
                 return data['country']['iso_code']
         except:
             pass
-            
+
         return None
 
     def close(self):
@@ -488,18 +488,22 @@ class RuleCleaner:
         Config.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         Config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
         Config.EXTRA_DATA_DIR.mkdir(parents=True, exist_ok=True)
-        
-        # 下载额外文件
-        asyncio.run(FileDownloader.download_extra_files())
-        
+
         # 初始化地理位置工具
         self.geo_tools = GeoIPTools()
-        self.geo_tools.load_data()
-        
+
         # 初始化其他组件
         self.smartdns = SmartDNSManager()
         self.validator = DNSValidator(self.smartdns)
         self.processor = EnhancedRuleProcessor()
+
+    async def initialize(self):
+        """异步初始化"""
+        # 下载额外文件
+        await FileDownloader.download_extra_files()
+        
+        # 加载地理位置数据
+        self.geo_tools.load_data()
 
     async def process(self):
         """处理规则文件"""
@@ -638,7 +642,13 @@ class RuleCleaner:
 
 # 主函数
 async def main():
+    # 先下载额外文件
+    await FileDownloader.download_extra_files()
+    
     cleaner = RuleCleaner()
+    # 加载地理位置数据
+    cleaner.geo_tools.load_data()
+    
     await cleaner.process()
 
 if __name__ == '__main__':
