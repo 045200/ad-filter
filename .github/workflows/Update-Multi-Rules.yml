@@ -149,13 +149,13 @@ jobs:
           cd ${{ env.DATA_DIR }}/filter
           echo "清理临时文件..."
           for file in adblock*.txt; do
-            if [ "$file" != "adblock_filter.txt" "adblock.txt" ]; then
+            if [ "$file" != "adblock_filter.txt" ] && [ "$file" != "adblock.txt" ]; then
               echo "删除临时文件: $file"
               rm -f "$file"
             fi
           done
           for file in allow*.txt; do
-            if [ "$file" != "allow_filter.txt" "allow.txt" ]; then
+            if [ "$file" != "allow_filter.txt" ] && [ "$file" != "allow.txt" ]; then
               echo "删除临时文件: $file"
               rm -f "$file"
             fi
@@ -230,7 +230,7 @@ jobs:
           rm -rf ${{ env.TEMP_DIR }}
           echo "统一清理完成"
 
-      # 17. 提交变更
+      # 17. 提交变更（已移除临时文件排除逻辑）
       - name: Commit changes
         id: commit
         run: |
@@ -238,10 +238,6 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Actions"
           git add --all
-          
-          # 确保不添加临时文件
-          git reset -- ${{ env.DATA_DIR }}/filter/adblock[0-9]*.txt
-          git reset -- ${{ env.DATA_DIR }}/filter/allow[0-9]*.txt
           
           if git diff --staged --quiet; then
             echo "没有变更需要提交"
@@ -252,14 +248,35 @@ jobs:
             echo "变更已提交"
           fi
 
-      # 18. 推送变更
+      # 18. 推送变更（修复rebase问题）
       - name: Push changes
         if: steps.commit.outputs.has_changes == 'true'
         run: |
           echo "开始推送变更..."
-          for i in 1 2 3; do
-            git pull --rebase origin ${{ env.MAIN_BRANCH }}
-            git push origin ${{ env.MAIN_BRANCH }} && break || sleep 5
+          # 先拉取最新更改，使用merge而不是rebase
+          git fetch origin ${{ env.MAIN_BRANCH }}
+          git merge origin/${{ env.MAIN_BRANCH }} --no-edit
+          
+          # 如果有冲突，自动接受ours版本
+          if git diff --name-only --diff-filter=U | grep -q .; then
+            echo "检测到冲突，自动解决..."
+            git checkout --ours -- $(git diff --name-only --diff-filter=U)
+            git add -u
+            git commit -m "自动解决合并冲突"
+          fi
+          
+          # 尝试推送
+          for i in {1..3}; do
+            if git push origin ${{ env.MAIN_BRANCH }}; then
+              echo "推送成功"
+              break
+            else
+              echo "推送尝试 $i 失败，等待5秒后重试..."
+              sleep 5
+              # 再次拉取最新更改
+              git fetch origin ${{ env.MAIN_BRANCH }}
+              git merge origin/${{ env.MAIN_BRANCH }} --no-edit
+            fi
           done
           echo "变更已推送"
 
