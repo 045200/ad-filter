@@ -1,120 +1,35 @@
-name: Test DNS Resolution
-on:
-  workflow_dispatch:  # 手动触发
-  schedule:
-    - cron: '0 2 * * *'  # 每天凌晨2点运行一次
+name: DNS Test for Ad Domains
 
-permissions:
-  contents: read
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # 每周日午夜运行一次
+  workflow_dispatch:  # 允许手动触发
 
 jobs:
-  test-dns:
+  dns-test:
     runs-on: ubuntu-latest
-    env:
-      DATA_DIR: ${{ github.workspace }}/data
-      PYTHON_SCRIPT: ${{ github.workspace }}/data/python/test.py
-      RESULTS_FILE: ${{ github.workspace }}/data/dns_test_results.txt
-
+    
     steps:
-      # 1. 拉取代码
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      # 2. 设置Python环境
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
-
-      # 3. 安装SmartDNS
-      - name: Install SmartDNS directly
-        run: |
-          # 获取最新发布版本信息
-          echo "获取SmartDNS最新版本信息..."
-          API_URL="https://api.github.com/repos/pymumu/smartdns/releases/latest"
-          LATEST_RELEASE=$(curl -sL $API_URL)
-          
-          # 检查获取的JSON是否有效
-          if echo "$LATEST_RELEASE" | jq -e '.message' | grep -q "Not Found"; then
-              echo "错误：未找到仓库或发布版本，请确认项目地址"
-              exit 1
-          fi
-
-          RELEASE_TAG=$(echo "$LATEST_RELEASE" | jq -r '.tag_name // empty')
-          if [ -z "$RELEASE_TAG" ]; then
-              echo "错误：无法获取发布标签"
-              exit 1
-          fi
-          echo "最新版本: $RELEASE_TAG"
-
-          # 直接查找x86_64架构的二进制文件
-          DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name | test("smartdns-x86_64$")) | .browser_download_url' | head -n 1)
-          
-          # 如果找不到直接匹配，尝试查找包含x86_64的文件
-          if [ -z "$DOWNLOAD_URL" ]; then
-              echo "未找到直接匹配的x86_64二进制文件，尝试查找包含x86_64的文件..."
-              DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name | contains("x86_64")) | .browser_download_url' | head -n 1)
-          fi
-          
-          if [ -z "$DOWNLOAD_URL" ]; then
-              echo "错误：未找到x86_64架构的二进制文件"
-              echo "可用资源："
-              echo "$LATEST_RELEASE" | jq -r '.assets[].name'
-              exit 1
-          fi
-          
-          FILENAME=$(basename "$DOWNLOAD_URL")
-          echo "下载链接: $DOWNLOAD_URL"
-          echo "文件名: $FILENAME"
-
-          # 下载二进制文件 (使用curl替代wget)
-          echo "正在下载SmartDNS二进制文件..."
-          if ! curl -L -o "/usr/local/bin/smartdns" --progress-bar "$DOWNLOAD_URL"; then
-              echo "下载失败"
-              exit 1
-          fi
-
-          sudo chmod +x "/usr/local/bin/smartdns"
-          
-          # 验证安装
-          echo "SmartDNS安装完成，版本信息:"
-          if /usr/local/bin/smartdns -v; then
-              echo "安装成功"
-          else
-              echo "验证版本失败，但文件已复制"
-              # 即使-v失败也不一定代表安装完全失败，可能只是显示方式不同
-              echo "尝试直接执行smartdns --version"
-              /usr/local/bin/smartdns --version || echo "继续执行流程"
-          fi
-        timeout-minutes: 5  # 设置步骤超时
-
-      # 4. 安装Python依赖
-      - name: Install Python dependencies
-        run: |
-          pip install dnspython requests
-
-      # 5. 运行DNS测试脚本
-      # 在您的工作流中，替换运行步骤为：
-      - name: Run DNS test
-        run: |
-         cd ${{ github.workspace }}
-         python ${{ env.PYTHON_SCRIPT }} | tee ${{ env.RESULTS_FILE }}
-         timeout-minutes: 10  # 添加超时设置
-
-      # 6. 上传测试结果
-      - name: Upload test results
-        uses: actions/upload-artifact@v4
-        with:
-          name: dns-test-results
-          path: |
-            ${{ env.RESULTS_FILE }}
-            dns_test_results.json
-
-      # 7. 清理旧工作流记录
-      - name: Cleanup old workflows
-        uses: Mattraks/delete-workflow-runs@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          repository: ${{ github.repository }}
-          retain_days: 7
-          keep_minimum_runs: 5  # 保留最近5条记录
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install dnspython requests
+        
+    - name: Run DNS test
+      run: python /data/python/test.py
+      
+    - name: Upload results
+      uses: actions/upload-artifact@v3
+      with:
+        name: dns-test-results
+        path: |
+          dns_test_results.json
+          invalid_domains.txt
