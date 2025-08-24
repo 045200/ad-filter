@@ -149,13 +149,13 @@ jobs:
           cd ${{ env.DATA_DIR }}/filter
           echo "清理临时文件..."
           for file in adblock*.txt; do
-            if [ "$file" != "adblock_filter.txt" ]; then
+            if [ "$file" != "adblock_filter.txt" "adblock.txt" ]; then
               echo "删除临时文件: $file"
               rm -f "$file"
             fi
           done
           for file in allow*.txt; do
-            if [ "$file" != "allow_filter.txt" ]; then
+            if [ "$file" != "allow_filter.txt" "allow.txt" ]; then
               echo "删除临时文件: $file"
               rm -f "$file"
             fi
