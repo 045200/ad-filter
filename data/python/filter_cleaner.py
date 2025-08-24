@@ -19,12 +19,12 @@ import aiohttp
 import aiodns
 import subprocess
 import socket
+import ipaddress
 from pathlib import Path
 from typing import Set, List, Dict, Optional, Tuple
 from datetime import datetime
 from collections import OrderedDict
-import ssl
-import certifi
+import maxminddb
 
 # 配置类
 class Config:
@@ -32,7 +32,7 @@ class Config:
     GITHUB_WORKSPACE = Path(os.getenv('GITHUB_WORKSPACE', os.getcwd()))
     BASE_DIR = GITHUB_WORKSPACE
 
-    # 输入输出路径 - 统一为/data/filter/
+    # 输入输出路径
     FILTER_DIR = BASE_DIR / "data" / "filter"
     INPUT_BLOCKLIST = FILTER_DIR / "adblock_filter.txt"
     INPUT_ALLOWLIST = FILTER_DIR / "allow_filter.txt"
@@ -44,6 +44,12 @@ class Config:
     SMARTDNS_CONFIG_DIR = BASE_DIR / "data" / "smartdns"
     SMARTDNS_CONFIG_FILE = SMARTDNS_CONFIG_DIR / "smartdns.conf"
     SMARTDNS_PORT = int(os.getenv('SMARTDNS_PORT', 5353))
+
+    # 额外数据文件
+    EXTRA_DATA_DIR = BASE_DIR / "data" / "extra"
+    CHINA_IP_FILE = EXTRA_DATA_DIR / "china_ip_ranges.txt"
+    GEOIP_DB = EXTRA_DATA_DIR / "GeoLite2-Country.mmdb"
+    GEOSITE_FILE = EXTRA_DATA_DIR / "geosite.dat"
 
     # 规则源路径
     SMARTDNS_SOURCES_DIR = BASE_DIR / "data" / "sources"
@@ -66,6 +72,21 @@ class Config:
     # 功能开关
     USE_SMARTDNS = os.getenv('USE_SMARTDNS', 'true').lower() == 'true'
     PROCESS_SMARTDNS_RULES = os.getenv('PROCESS_SMARTDNS_RULES', 'true').lower() == 'true'
+    USE_GEOIP = os.getenv('USE_GEOIP', 'true').lower() == 'true'
+    USE_GEOSITE = os.getenv('USE_GEOSITE', 'true').lower() == 'true'
+
+# 额外文件下载配置
+EXTRA_DOWNLOADS = {
+    "china_ip_ranges.txt": {
+        "url": "https://raw.githubusercontent.com/17mon/china_ip_list/master/china_ip_list.txt",
+    },
+    "GeoLite2-Country.mmdb": {
+        "url": "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-Country.mmdb",
+    },
+    "geosite.dat": {
+        "url": "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat",
+    }
+}
 
 # 日志配置
 def setup_logger():
@@ -81,6 +102,52 @@ def setup_logger():
 
 logger = setup_logger()
 
+# 文件下载器
+class FileDownloader:
+    @staticmethod
+    async def download_file(url: str, dest: Path, session: aiohttp.ClientSession = None):
+        """下载文件到指定路径"""
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        
+        close_session = False
+        if session is None:
+            session = aiohttp.ClientSession()
+            close_session = True
+        
+        try:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    with open(dest, 'wb') as f:
+                        while True:
+                            chunk = await response.content.read(1024)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                    logger.info(f"下载成功: {dest.name}")
+                else:
+                    logger.error(f"下载失败: {url} - 状态码: {response.status}")
+        except Exception as e:
+            logger.error(f"下载文件时出错 {url}: {e}")
+        finally:
+            if close_session:
+                await session.close()
+
+    @staticmethod
+    async def download_extra_files():
+        """下载额外数据文件"""
+        tasks = []
+        async with aiohttp.ClientSession() as session:
+            for filename, info in EXTRA_DOWNLOADS.items():
+                dest_path = Config.EXTRA_DATA_DIR / filename
+                if not dest_path.exists():
+                    tasks.append(FileDownloader.download_file(info["url"], dest_path, session))
+            
+            if tasks:
+                await asyncio.gather(*tasks)
+                logger.info("所有额外文件下载完成")
+            else:
+                logger.info("所有额外文件已存在，跳过下载")
+
 # 增强的规则处理器
 class EnhancedRuleProcessor:
     def __init__(self):
@@ -95,18 +162,6 @@ class EnhancedRuleProcessor:
             # AdGuard扩展语法
             'adguard_domain': re.compile(r'^@@?\|\|?([\w.-]+)[\^\$\|\/]'),
             'adguard_modifiers': re.compile(r'\$([^,\s]+)'),
-            'adguard_css': re.compile(r'.*#\$?#.*'),
-            'adguard_js': re.compile(r'.*#@?#.*'),
-            'adguard_csp': re.compile(r'.*\$csp='),
-            'adguard_redirect': re.compile(r'.*\$redirect(?:-rule)?='),
-
-            # 元素隐藏规则
-            'element_hiding': re.compile(r'.*##.*'),
-            'element_exception': re.compile(r'.*#@#.*'),
-
-            # 复杂模式
-            'regex_pattern': re.compile(r'^/.*/$'),
-            'wildcard_pattern': re.compile(r'.*[*^].*'),
         }
 
         # 支持的AdGuard修饰符
@@ -127,33 +182,6 @@ class EnhancedRuleProcessor:
         if not rule or self.regex_patterns['comment'].match(rule):
             return None, None
 
-        # 检查是否为元素隐藏规则（不支持）
-        if (self.regex_patterns['element_hiding'].match(rule) or 
-            self.regex_patterns['element_exception'].match(rule)):
-            logger.debug(f"跳过元素隐藏规则: {rule}")
-            return None, None
-
-        # 检查是否为CSS/JS规则（不支持）
-        if (self.regex_patterns['adguard_css'].match(rule) or 
-            self.regex_patterns['adguard_js'].match(rule)):
-            logger.debug(f"跳过CSS/JS规则: {rule}")
-            return None, None
-
-        # 检查是否为CSP规则（不支持）
-        if self.regex_patterns['adguard_csp'].match(rule):
-            logger.debug(f"跳过CSP规则: {rule}")
-            return None, None
-
-        # 检查是否为重定向规则（不支持）
-        if self.regex_patterns['adguard_redirect'].match(rule):
-            logger.debug(f"跳过重定向规则: {rule}")
-            return None, None
-
-        # 检查是否为正则表达式规则（不支持）
-        if self.regex_patterns['regex_pattern'].match(rule):
-            logger.debug(f"跳过正则表达式规则: {rule}")
-            return None, None
-
         # 提取域名
         domain = None
         for pattern_name in ['domain', 'hosts', 'adguard_domain']:
@@ -163,9 +191,6 @@ class EnhancedRuleProcessor:
                 break
 
         if not domain:
-            # 尝试处理通配符模式
-            if self.regex_patterns['wildcard_pattern'].match(rule):
-                logger.debug(f"跳过通配符规则: {rule}")
             return None, None
 
         # 提取修饰符
@@ -183,31 +208,8 @@ class EnhancedRuleProcessor:
         for mod, value in modifiers.items():
             if mod in self.supported_modifiers:
                 supported_modifiers[mod] = value
-            else:
-                logger.debug(f"跳过不支持的修饰符: {mod}")
 
         return domain, supported_modifiers
-
-    def _matches_wildcard(self, domain: str, pattern: str) -> bool:
-        """
-        检查域名是否匹配通配符模式
-        """
-        # 处理基础通配符
-        if pattern.startswith('*.'):
-            base_domain = pattern[2:]
-            return domain.endswith('.' + base_domain) or domain == base_domain
-
-        # 处理Adblock通配符
-        if '^' in pattern:
-            # 将 ^ 转换为适当的正则表达式
-            regex_pattern = pattern.replace('.', '\\.').replace('*', '.*').replace('^', '[^.*]')
-            try:
-                return re.match(regex_pattern, domain) is not None
-            except re.error:
-                logger.warning(f"无效的正则表达式模式: {pattern}")
-                return False
-
-        return domain == pattern
 
     def extract_domains_from_rules(self, rules: List[str]) -> Set[str]:
         """
@@ -219,9 +221,70 @@ class EnhancedRuleProcessor:
             domain, modifiers = self.parse_rule(rule)
             if domain:
                 domains.add(domain)
-                logger.debug(f"从规则提取域名: {rule} -> {domain}")
 
         return domains
+
+# 地理位置工具
+class GeoIPTools:
+    def __init__(self):
+        self.china_ips = set()
+        self.geoip_reader = None
+        self.loaded = False
+
+    def load_data(self):
+        """加载地理位置数据"""
+        try:
+            # 加载中国IP范围
+            if Config.CHINA_IP_FILE.exists():
+                with open(Config.CHINA_IP_FILE, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            self.china_ips.add(line)
+                logger.info(f"已加载 {len(self.china_ips)} 个中国IP范围")
+            
+            # 加载GeoIP数据库
+            if Config.USE_GEOIP and Config.GEOIP_DB.exists():
+                self.geoip_reader = maxminddb.open_database(str(Config.GEOIP_DB))
+                logger.info("GeoIP数据库加载成功")
+            
+            self.loaded = True
+        except Exception as e:
+            logger.error(f"加载地理位置数据失败: {e}")
+
+    def is_china_ip(self, ip: str) -> bool:
+        """检查IP是否属于中国"""
+        if not self.loaded:
+            return False
+            
+        try:
+            ip_obj = ipaddress.ip_address(ip)
+            for cidr in self.china_ips:
+                if ip_obj in ipaddress.ip_network(cidr):
+                    return True
+        except:
+            pass
+            
+        return False
+
+    def get_country_code(self, ip: str) -> Optional[str]:
+        """获取IP所属国家代码"""
+        if not self.geoip_reader:
+            return None
+            
+        try:
+            data = self.geoip_reader.get(ip)
+            if data and 'country' in data and 'iso_code' in data['country']:
+                return data['country']['iso_code']
+        except:
+            pass
+            
+        return None
+
+    def close(self):
+        """关闭资源"""
+        if self.geoip_reader:
+            self.geoip_reader.close()
 
 # SmartDNS管理器
 class SmartDNSManager:
@@ -241,7 +304,8 @@ log-level error
 log-size 128K
 speed-check-mode ping,tcp:80,tcp:443
 
-# 国内DNS服务器 - 基于测试结果选择响应快且支持加密协议的
+# DNS服务器 - 基于测试结果选择响应快且支持加密协议的
+# 国内DNS服务器
 server 114.114.114.114
 server 114.114.115.115
 server-tls 223.5.5.5
@@ -249,26 +313,21 @@ server-tls 223.6.6.6
 server-https https://doh.pub/dns-query
 server-https https://dns.alidns.com/dns-query
 
-# 国际DNS服务器 - 基于测试结果选择响应快且支持加密协议的
-server-tls 1.1.1.1 -group overseas -exclude-default-group
-server-tls 8.8.8.8 -group overseas -exclude-default-group
-server-tls 9.9.9.9 -group overseas -exclude-default-group
-server-https https://cloudflare-dns.com/dns-query -group overseas -exclude-default-group
-server-https https://dns.google/dns-query -group overseas -exclude-default-group
-
-# 域名分流规则
-nameserver /cn/114.114.114.114
-nameserver /taobao.com/223.5.5.5
-nameserver /qq.com/119.29.29.29
-nameserver /google.com/overseas
-nameserver /facebook.com/overseas
-nameserver /twitter.com/overseas
-nameserver /youtube.com/overseas
-nameserver /amazon.com/overseas
-nameserver /microsoft.com/overseas
-nameserver /github.com/overseas
-nameserver /cloudflare.com/overseas
+# 国际DNS服务器
+server-tls 1.1.1.1
+server-tls 8.8.8.8
+server-tls 9.9.9.9
+server-https https://cloudflare-dns.com/dns-query
+server-https https://dns.google/dns-query
 """
+
+        # 如果启用了GeoSite，添加GeoSite配置
+        if Config.USE_GEOSITE and Config.GEOSITE_FILE.exists():
+            config_content += f"\n# GeoSite配置\n"
+            config_content += f"geosite-file {Config.GEOSITE_FILE}\n"
+            config_content += f"nameserver /geosite:cn/114.114.114.114\n"
+            config_content += f"nameserver /geosite:geolocation-cn/114.114.114.114\n"
+            config_content += f"nameserver /geosite:geolocation-!cn/1.1.1.1\n"
 
         Config.SMARTDNS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         with open(Config.SMARTDNS_CONFIG_FILE, 'w') as f:
@@ -424,14 +483,23 @@ class DNSValidator:
 # 主处理器
 class RuleCleaner:
     def __init__(self):
-        self.smartdns = SmartDNSManager()
-        self.validator = DNSValidator(self.smartdns)
-        self.processor = EnhancedRuleProcessor()
-
         # 确保目录存在
         Config.FILTER_DIR.mkdir(parents=True, exist_ok=True)
         Config.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         Config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        Config.EXTRA_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        
+        # 下载额外文件
+        asyncio.run(FileDownloader.download_extra_files())
+        
+        # 初始化地理位置工具
+        self.geo_tools = GeoIPTools()
+        self.geo_tools.load_data()
+        
+        # 初始化其他组件
+        self.smartdns = SmartDNSManager()
+        self.validator = DNSValidator(self.smartdns)
+        self.processor = EnhancedRuleProcessor()
 
     async def process(self):
         """处理规则文件"""
@@ -466,6 +534,8 @@ class RuleCleaner:
             # 停止SmartDNS
             if smartdns_started:
                 self.smartdns.stop()
+            # 关闭地理位置工具
+            self.geo_tools.close()
 
     def read_rules(self, file_path):
         """读取规则文件"""
@@ -481,27 +551,6 @@ class RuleCleaner:
             logger.warning(f"文件不存在: {file_path}")
 
         return rules
-
-    def load_smartdns_rules(self):
-        """加载SmartDNS规则源中的域名"""
-        domains = set()
-
-        if not Config.PROCESS_SMARTDNS_RULES:
-            return domains
-
-        if Config.SMARTDNS_SOURCES_DIR.exists():
-            for file_path in Config.SMARTDNS_SOURCES_DIR.glob("*_processed.txt"):
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        for line in f:
-                            domain = line.strip()
-                            if domain and not domain.startswith('#'):
-                                domains.add(domain)
-                    logger.info(f"从 {file_path.name} 加载了 {len(domains)} 个域名")
-                except Exception as e:
-                    logger.error(f"加载SmartDNS规则文件 {file_path} 失败: {e}")
-
-        return domains
 
     async def validate_rules(self, rules):
         """验证规则有效性"""
