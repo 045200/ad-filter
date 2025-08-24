@@ -264,15 +264,14 @@ jobs:
           echo "变更已推送"
 
       # 19. 创建工作流摘要
-      # 19. 创建工作流摘要
       - name: Create workflow summary
-         if: always()
-         run: |
-           echo "## 工作流运行摘要" >> $GITHUB_STEP_SUMMARY
-           echo "- 运行状态: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
-           echo "- 变更提交: ${{ steps.commit.outputs.has_changes }}" >> $GITHUB_STEP_SUMMARY
-           echo "## 详细日志" >> $GITHUB_STEP_SUMMARY
-           echo "查看完整日志请点击右上角的\"View workflow run\"" >> $GITHUB_STEP_SUMMARY
+        if: always()
+        run: |
+          echo "## 工作流运行摘要" >> $GITHUB_STEP_SUMMARY
+          echo "- 运行状态: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 变更提交: ${{ steps.commit.outputs.has_changes }}" >> $GITHUB_STEP_SUMMARY
+          echo "## 详细日志" >> $GITHUB_STEP_SUMMARY
+          echo "查看完整日志请点击右上角的\"View workflow run\"" >> $GITHUB_STEP_SUMMARY
 
       # 20. 清理旧工作流
       - name: Cleanup old workflows
