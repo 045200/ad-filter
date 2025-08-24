@@ -34,7 +34,7 @@ class AdBlockConfig:
 
     # 性能配置
     MAX_CONCURRENT = 2
-    RULE_LEN_LIMIT = 5000
+    RULE_LEN_LIMIT = 10000  # 增加长度限制
     BATCH_SIZE = 5000
     MAX_RULES_PER_FILE = 300000
 
@@ -96,7 +96,7 @@ class AdBlockRuleParser:
     # 预编译正则表达式 - 完整AdGuard语法支持
     COMMENT_REGEX = re.compile(r'^\s*[!#;]|^\[Adblock|^!\s*')
     HOSTS_REGEX = re.compile(r'^\s*(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|::1)\s+([a-zA-Z0-9.-]+)\s*(?:#.*)?$')
-    DOMAIN_RULE_REGEX = re.compile(r'^(@@?)?\|\|([a-zA-Z0-9.*_-]+)\^?(\$[^#]*)?(?:#.*)?$')
+    DOMAIN_RULE_REGEX = re.compile(r'^(@@?)?(\|\||\|)([a-zA-Z0-9.*_-]+)\^?(\$[^#]*)?(?:#.*)?$')  # 修改：支持单竖线
     ELEMENT_HIDE_REGEX = re.compile(r'^#@?#(.+)$')
     MODIFIER_REGEX = re.compile(r'\$([a-zA-Z-]+(?:=[^,]+)?(?:,[a-zA-Z-]+(?:=[^,]+)?)*)$')
     REGEX_RULE_REGEX = re.compile(r'^/(.*)/\$?[^#]*(?:#.*)?$')
@@ -151,8 +151,9 @@ class AdBlockRuleParser:
         if '#' in rule and not rule.startswith('#'):
             rule = rule.split('#')[0].strip()
 
-        # 转换为小写
-        rule = rule.lower()
+        # 对于非元素隐藏规则，转换为小写
+        if not rule.startswith(('##', '#@#')):
+            rule = rule.lower()
 
         # 处理修饰符标准化
         if '$' in rule:
@@ -189,7 +190,7 @@ class AdBlockRuleParser:
     def validate_modifiers(self, modifiers: str) -> bool:
         """验证修饰符有效性"""
         if not modifiers:
-            return False
+            return True  # 修改：允许没有修饰符的规则
 
         for mod in modifiers.split(','):
             mod = mod.strip()
@@ -292,7 +293,7 @@ class AdBlockRuleParser:
                 return (rule, is_allow)
             return None
 
-        # 域名规则
+        # 域名规则 (支持单竖线和双竖线)
         domain_match = self.DOMAIN_RULE_REGEX.match(rule)
         if domain_match:
             if self.validate_rule(rule) and not self.is_duplicate(rule):
