@@ -59,7 +59,7 @@ class AdBlockConfig:
     ADBLOCK_PATTERNS = ['adblock*.txt', 'aghosts*.txt', 'filter*.txt']  # 含Hosts语法的主文件
     ALLOW_PATTERNS = ['allow*.txt', 'whitelist*.txt']                  # 允许规则文件
     OUTPUT_BLOCK = 'adblock_filter.txt'                                # 输出拦截规则
-    OUTPUT_ALLOW = 'allow_filter.txt'                                  # 输出允许规则
+    OUTPUT_ALLOW = 'allow.txt'                                  # 输出允许规则
 
     # 双重去重配置
     USE_BLOOM_FILTER = True
