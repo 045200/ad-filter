@@ -8,9 +8,10 @@ on:
     paths:
       - 'data/mod/**'
       - 'data/rules.txt'
+
 permissions:
   contents: write
-  actions: write
+  actions:write
 
 jobs:
   update:
@@ -39,73 +40,20 @@ jobs:
         with:
           python-version: '3.10'
 
-      # 3. 安装系统依赖
+      # 3. 缓存Python依赖
+      - name: Cache Python dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # 4. 安装系统依赖
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y jq moreutils dnsutils
-
-      # 4. 直接下载SmartDNS x86_64二进制文件
-      - name: Install SmartDNS directly
-        run: |
-          # 获取最新发布版本信息
-          echo "获取SmartDNS最新版本信息..."
-          API_URL="https://api.github.com/repos/pymumu/smartdns/releases/latest"
-          LATEST_RELEASE=$(curl -sL $API_URL)
-          
-          # 检查获取的JSON是否有效
-          if echo "$LATEST_RELEASE" | jq -e '.message' | grep -q "Not Found"; then
-              echo "错误：未找到仓库或发布版本，请确认项目地址"
-              exit 1
-          fi
-
-          RELEASE_TAG=$(echo "$LATEST_RELEASE" | jq -r '.tag_name // empty')
-          if [ -z "$RELEASE_TAG" ]; then
-              echo "错误：无法获取发布标签"
-              exit 1
-          fi
-          echo "最新版本: $RELEASE_TAG"
-
-          # 直接查找x86_64架构的二进制文件
-          DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name | test("smartdns-x86_64$")) | .browser_download_url' | head -n 1)
-          
-          # 如果找不到直接匹配，尝试查找包含x86_64的文件
-          if [ -z "$DOWNLOAD_URL" ]; then
-              echo "未找到直接匹配的x86_64二进制文件，尝试查找包含x86_64的文件..."
-              DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name | contains("x86_64")) | .browser_download_url' | head -n 1)
-          fi
-          
-          if [ -z "$DOWNLOAD_URL" ]; then
-              echo "错误：未找到x86_64架构的二进制文件"
-              echo "可用资源："
-              echo "$LATEST_RELEASE" | jq -r '.assets[].name'
-              exit 1
-          fi
-          
-          FILENAME=$(basename "$DOWNLOAD_URL")
-          echo "下载链接: $DOWNLOAD_URL"
-          echo "文件名: $FILENAME"
-
-          # 下载二进制文件 (使用curl替代wget)
-          echo "正在下载SmartDNS二进制文件..."
-          if ! curl -L -o "/usr/local/bin/smartdns" --progress-bar "$DOWNLOAD_URL"; then
-              echo "下载失败"
-              exit 1
-          fi
-
-          sudo chmod +x "/usr/local/bin/smartdns"
-          
-          # 验证安装
-          echo "SmartDNS安装完成，版本信息:"
-          if /usr/local/bin/smartdns -v; then
-              echo "安装成功"
-          else
-              echo "验证版本失败，但文件已复制"
-              # 即使-v失败也不一定代表安装完全失败，可能只是显示方式不同
-              echo "尝试直接执行smartdns --version"
-              /usr/local/bin/smartdns --version || echo "继续执行流程"
-          fi
-        timeout-minutes: 5  # 设置步骤超时
 
       # 5. 安装Python依赖
       - name: Install Python dependencies
@@ -132,50 +80,95 @@ jobs:
             data/mod/**
             data/rules.txt
 
-      # 8. 运行dl.py（下载规则）
-      - name: Run dl.py
-        run: |
-          cd ${{ github.workspace }}
-          python ${{ env.PYTHON_SCRIPTS }}/dl.py
+      # 8. 下载SmartDNS（使用缓存）
+      - name: Install SmartDNS with cache
+        id: cache-smartdns
+        uses: actions/cache@v3
+        with:
+          path: /usr/local/bin/smartdns
+          key: ${{ runner.os }}-smartdns-${{ hashFiles('**/smartdns-version.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-smartdns-
 
-      # 9. 运行SmartDNS规则下载器
-      - name: Download SmartDNS rules
+      # 9. 如果没有缓存，下载SmartDNS
+      - name: Download SmartDNS
+        if: steps.cache-smartdns.outputs.cache-hit != 'true'
         run: |
-          cd ${{ github.workspace }}
-          python ${{ env.PYTHON_SCRIPTS }}/dl_smartdns.py
+          echo "获取SmartDNS最新版本信息..."
+          API_URL="https://api.github.com/repos/pymumu/smartdns/releases/latest"
+          LATEST_RELEASE=$(curl -sL $API_URL)
+          
+          if echo "$LATEST_RELEASE" | jq -e '.message' | grep -q "Not Found"; then
+              echo "错误：未找到仓库或发布版本"
+              exit 1
+          fi
 
-      # 10. 运行merge.py（广告规则合并去重）
+          RELEASE_TAG=$(echo "$LATEST_RELEASE" | jq -r '.tag_name // empty')
+          if [ -z "$RELEASE_TAG" ]; then
+              echo "错误：无法获取发布标签"
+              exit 1
+          fi
+          echo "最新版本: $RELEASE_TAG"
+          echo "$RELEASE_TAG" > ${{ github.workspace }}/smartdns-version.txt
+
+          DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name | test("smartdns-x86_64$")) | .browser_download_url' | head -n 1)
+          
+          if [ -z "$DOWNLOAD_URL" ]; then
+              DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name | contains("x86_64")) | .browser_download_url' | head -n 1)
+          fi
+          
+          if [ -z "$DOWNLOAD_URL" ]; then
+              echo "错误：未找到x86_64架构的二进制文件"
+              exit 1
+          fi
+          
+          echo "下载链接: $DOWNLOAD_URL"
+          curl -L -o "/usr/local/bin/smartdns" --progress-bar "$DOWNLOAD_URL"
+          sudo chmod +x "/usr/local/bin/smartdns"
+          echo "SmartDNS安装完成"
+
+      # 10. 并行下载规则
+      - name: Download rules in parallel
+        run: |
+          echo "开始并行下载规则..."
+          python ${{ env.PYTHON_SCRIPTS }}/dl.py &
+          python ${{ env.PYTHON_SCRIPTS }}/dl_smartdns.py &
+          wait
+          echo "规则下载完成"
+
+      # 11. 运行merge.py（广告规则合并去重）
       - name: Run merge.py
         run: |
-          cd ${{ github.workspace }}
+          echo "开始合并广告规则..."
           python ${{ env.PYTHON_SCRIPTS }}/merge.py
           echo "广告规则合并完成"
 
-      # 11. 清理临时生成的adblock和allow文件
+      # 12. 清理临时生成的adblock和allow文件
       - name: Cleanup temporary filter files
         run: |
           cd ${{ env.DATA_DIR }}/filter
-          # 删除所有adblock*.txt文件，但保留adblock_filter.txt
+          echo "清理临时文件..."
           for file in adblock*.txt; do
             if [ "$file" != "adblock_filter.txt" ]; then
               echo "删除临时文件: $file"
               rm -f "$file"
             fi
           done
-          # 删除所有allow*.txt文件，但保留allow_filter.txt
           for file in allow*.txt; do
-            if [ "$file" != "allow_filter.txt" ]; then
+            if [ "$file" != "allow.txt" ]; then
               echo "删除临时文件: $file"
               rm -f "$file"
             fi
           done
           echo "临时文件清理完成"
 
-      # 12. 运行SmartDNS规则清理器
+      # 13. 运行SmartDNS规则清理器（带超时和重试）
       - name: Run SmartDNS Rule Cleaner
         run: |
-          cd ${{ github.workspace }}
-          python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py
+          echo "开始清理SmartDNS规则..."
+          timeout 600s python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py || \
+          (echo "第一次运行超时，重试..." && timeout 1200s python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py)
+          echo "SmartDNS规则清理完成"
         env:
           MAX_WORKERS: 8
           DNS_WORKERS: 30
@@ -186,74 +179,62 @@ jobs:
           USE_SMARTDNS: "true"
           PROCESS_SMARTDNS_RULES: "true"
 
-      # 13. 生成多格式规则
-      - name: Generate multi-format rules
+      # 14. 并行生成多格式规则
+      - name: Generate multi-format rules in parallel
         run: |
-          cd ${{ github.workspace }}
-          python ${{ env.PYTHON_SCRIPTS }}/filter_adg.py
-          python ${{ env.PYTHON_SCRIPTS }}/filter_adh.py
-          python ${{ env.PYTHON_SCRIPTS }}/filter_adp.py
-          python ${{ env.PYTHON_SCRIPTS }}/filter_pihole.py
-          python ${{ env.PYTHON_SCRIPTS }}/filter_hosts.py
-          python ${{ env.PYTHON_SCRIPTS }}/filter_ubo.py
-          python ${{ env.PYTHON_SCRIPTS }}/filter_clash.py
-          python ${{ env.PYTHON_SCRIPTS }}/filter_mihomo.py
-          python ${{ env.PYTHON_SCRIPTS }}/filter_smartdns.py
+          echo "开始生成多格式规则..."
+          python ${{ env.PYTHON_SCRIPTS }}/filter_adg.py &
+          python ${{ env.PYTHON_SCRIPTS }}/filter_adh.py &
+          python ${{ env.PYTHON_SCRIPTS }}/filter_adp.py &
+          python ${{ env.PYTHON_SCRIPTS }}/filter_pihole.py &
+          python ${{ env.PYTHON_SCRIPTS }}/filter_hosts.py &
+          python ${{ env.PYTHON_SCRIPTS }}/filter_ubo.py &
+          python ${{ env.PYTHON_SCRIPTS }}/filter_clash.py &
+          python ${{ env.PYTHON_SCRIPTS }}/filter_mihomo.py &
+          python ${{ env.PYTHON_SCRIPTS }}/filter_smartdns.py &
+          wait
+          echo "多格式规则生成完成"
 
-      # 14. 更新文档
+      # 15. 更新文档
       - name: Update documentation
         run: |
-          cd ${{ github.workspace }}
+          echo "更新文档..."
           python ${{ env.PYTHON_SCRIPTS }}/title.py
           python ${{ env.PYTHON_SCRIPTS }}/readme.py
+          echo "文档更新完成"
 
-      # 15. 统一清理步骤
+      # 16. 统一清理步骤
       - name: Unified cleanup process
         run: |
-          # 清理备份文件（保留每种类型的最新一个）
+          echo "开始统一清理..."
+          # 清理备份文件
           BACKUP_DIR="${{ env.DATA_DIR }}/filter/backups"
           if [ -d "$BACKUP_DIR" ]; then
-            echo "清理备份文件，保留每种类型的最新一个..."
-            
-            # 处理每种类型的备份文件
+            echo "清理备份文件..."
             for type in adblock allow; do
               echo "处理 $type 类型的备份文件..."
-              
-              # 找到该类型的所有备份文件并按时间排序（最新的在前）
               files=$(find "$BACKUP_DIR" -type f -name "${type}_filter_backup_*.txt" -printf '%T@ %p\n' | sort -nr)
-              
               if [ -n "$files" ]; then
-                # 计算文件数量
                 count=$(echo "$files" | wc -l)
                 echo "找到 $count 个 $type 备份文件"
-                
                 if [ $count -gt 1 ]; then
-                  # 保留第一个（最新的），删除其余
                   echo "$files" | tail -n +2 | cut -d' ' -f2- | xargs -r rm -f
                   echo "已删除 $((count-1)) 个旧的 $type 备份文件"
-                else
-                  echo "只有一个 $type 备份文件，无需删除"
                 fi
-              else
-                echo "未找到 $type 类型的备份文件"
               fi
             done
-            
-            echo "备份文件清理完成"
-          else
-            echo "备份目录不存在，跳过清理"
           fi
           
           # 清理临时目录
           echo "清理临时目录..."
           rm -rf ${{ env.TEMP_DIR }}
-          echo "临时目录清理完成"
+          echo "统一清理完成"
 
-      # 16. 提交变更
+      # 17. 提交变更
       - name: Commit changes
         id: commit
         run: |
-          cd ${{ github.workspace }}
+          echo "准备提交变更..."
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Actions"
           git add --all
@@ -263,24 +244,36 @@ jobs:
           git reset -- ${{ env.DATA_DIR }}/filter/allow[0-9]*.txt
           
           if git diff --staged --quiet; then
-            echo "No changes to commit"
+            echo "没有变更需要提交"
             echo "has_changes=false" >> $GITHUB_OUTPUT
           else
             echo "has_changes=true" >> $GITHUB_OUTPUT
             git commit -m "SmartDNS规则更新: [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
+            echo "变更已提交"
           fi
 
-      # 17. 推送变更
+      # 18. 推送变更
       - name: Push changes
         if: steps.commit.outputs.has_changes == 'true'
         run: |
-          cd ${{ github.workspace }}
+          echo "开始推送变更..."
           for i in 1 2 3; do
             git pull --rebase origin ${{ env.MAIN_BRANCH }}
             git push origin ${{ env.MAIN_BRANCH }} && break || sleep 5
           done
+          echo "变更已推送"
 
-      # 18. 清理旧工作流
+      # 19. 创建工作流摘要
+      - name: Create workflow summary
+        if: always()
+        run: |
+          echo "## 工作流运行摘要" >> $GITHUB_STEP_SUMMARY
+          echo "- 运行状态: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 变更提交: ${{ steps.commit.outputs.has_changes }}" >> $GITHUB_STEP_SUMMARY
+          echo "## 详细日志" >> $GITHUB_STEP_SUMMARY
+          echo "查看完整日志请点击右上角的\"View workflow run\"" >> $GITHUB_STEP_SUMMARY
+
+      # 20. 清理旧工作流
       - name: Cleanup old workflows
         uses: Mattraks/delete-workflow-runs@v2
         with:
@@ -289,8 +282,22 @@ jobs:
           retain_days: 0
           keep_minimum_runs: 3
 
-      # 19. 清理旧工件
+      # 21. 清理旧工件
       - name: Cleanup old artifacts
         uses: c-hive/gha-remove-artifacts@v1.4.0
         with:
           age: '7 days'
+
+      # 22. 通知工作流状态
+      - name: Notify workflow status
+        if: always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const jobStatus = context.job.status;
+            if (jobStatus === 'success') {
+              console.log('工作流运行成功');
+            } else {
+              console.log('工作流运行失败');
+              // 这里可以添加失败通知逻辑，如发送邮件或Slack消息
+            }
