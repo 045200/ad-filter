@@ -1,3 +1,4 @@
+```python
 import os
 import re
 import sys
@@ -108,9 +109,13 @@ class AdBlockRuleParser:
     def __init__(self):
         # 初始化双重去重组件
         self.bloom = self._init_bloom_filter()
-        self.hash_table = {
-            "domain": set(), "ip": set(), "adguard": set(), "normal": set()
-        }
+        self.use_buckets = not BLOOM_FILTER_AVAILABLE
+        if self.use_buckets:
+            self.hash_table = {
+                "domain": set(), "ip": set(), "adguard": set(), "normal": set()
+            }
+        else:
+            self.hash_table = set()
 
         # 精简统计项（仅保留有用数据）
         self.stats = {
@@ -163,20 +168,36 @@ class AdBlockRuleParser:
         rule_type = self.get_rule_type(rule)
         rule_norm = self.normalize_rule(rule)
 
-        # 布隆过滤器快速过滤
-        if rule_norm not in self.bloom:
-            self.bloom.add(rule_norm, rule_type)
-            self.hash_table[rule_type].add(rule_norm)
-            return False
+        if self.use_buckets:
+            # 布隆过滤器快速过滤 (自定义分桶)
+            if not self.bloom.__contains__(rule_norm, rule_type):
+                self.bloom.add(rule_norm, rule_type)
+                self.hash_table[rule_type].add(rule_norm)
+                return False
 
-        # 哈希表精确兜底
-        if rule_norm in self.hash_table[rule_type]:
-            self.stats['duplicate'] += 1
-            return True
+            # 哈希表精确兜底
+            if rule_norm in self.hash_table[rule_type]:
+                self.stats['duplicate'] += 1
+                return True
+            else:
+                self.stats['bloom_false_pos'] += 1
+                self.hash_table[rule_type].add(rule_norm)
+                return False
         else:
-            self.stats['bloom_false_pos'] += 1
-            self.hash_table[rule_type].add(rule_norm)
-            return False
+            # 布隆过滤器快速过滤 (pybloom单一)
+            if rule_norm not in self.bloom:
+                self.bloom.add(rule_norm)
+                self.hash_table.add(rule_norm)
+                return False
+
+            # 哈希表精确兜底
+            if rule_norm in self.hash_table:
+                self.stats['duplicate'] += 1
+                return True
+            else:
+                self.stats['bloom_false_pos'] += 1
+                self.hash_table.add(rule_norm)
+                return False
 
     def validate_modifiers(self, rule: str) -> bool:
         """简化AdGuard修饰符验证（仅检查必要项）"""
@@ -468,3 +489,4 @@ if __name__ == '__main__':
     except Exception as e:
         logger.error(f"运行出错：{str(e)}", exc_info=True)
         sys.exit(1)
+```
