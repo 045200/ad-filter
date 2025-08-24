@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+"""
+AdBlock规则合并与优化脚本 - Github Action版本
+精简日志输出，适合在CI/CD环境中运行
+"""
+
 import os
 import re
 import sys
@@ -6,6 +12,7 @@ import logging
 import asyncio
 import aiofiles
 import ipaddress
+import hashlib
 from typing import List, Tuple, Optional, Dict, Any, Set
 from pathlib import Path
 from datetime import datetime
@@ -20,13 +27,17 @@ except ImportError:
     class ScalableBloomFilter:
         def __init__(self, initial_capacity=10000, error_rate=0.001, mode=None):
             self.set = set()
+        
         def add(self, item):
             self.set.add(item)
+        
         def __contains__(self, item):
             return item in self.set
 
 # ==================== 配置区 ====================
 class AdBlockConfig:
+    """AdBlock规则处理配置"""
+    
     # 输入输出路径
     INPUT_DIR = Path(os.getenv('INPUT_DIR', './data/filter'))
     OUTPUT_DIR = Path(os.getenv('OUTPUT_DIR', './data/filter'))
@@ -34,7 +45,6 @@ class AdBlockConfig:
     # 输入文件模式
     ADBLOCK_PATTERNS = ['adblock*.txt']
     ALLOW_PATTERNS = ['allow*.txt']
-    HOSTS_PATTERNS = []  # 不处理hosts文件
 
     # 输出文件名
     OUTPUT_BLOCK = 'adblock_filter.txt'
@@ -47,24 +57,34 @@ class AdBlockConfig:
 
     # 规则优化配置
     REMOVE_BROAD_RULES = True
-    BROAD_RULE_PATTERNS = [
-        r'^[^/*|]+\.[^/*|]+$',
-        r'^[^/*|]+\.[^/*|]+\.[^/*|]+$',
-        r'^\|\|[a-zA-Z0-9.-]+\^$',
-    ]
 
     # 异步I/O配置
     ASYNC_ENABLED = True
-    ASYNC_BUFFER_SIZE = 8192
     MAX_CONCURRENT_FILES = 5
 
-    # 日志配置
-    LOG_LEVEL = logging.INFO
+    # 日志配置 - 精简输出
+    LOG_LEVEL = logging.WARNING
 
     # 域名验证配置
     ALLOW_LOCAL_DOMAINS = True
     ALLOW_IP_RULES = True
 
+# ==================== 初始化日志 ====================
+def setup_logging():
+    """配置精简日志系统"""
+    logging.basicConfig(
+        level=AdBlockConfig.LOG_LEVEL,
+        format='%(levelname)s: %(message)s',
+        handlers=[logging.StreamHandler()]
+    )
+    return logging.getLogger(__name__)
+
+logger = setup_logging()
+
+# ==================== 分析识别区 ====================
+class AdBlockRuleParser:
+    """AdBlock规则解析器"""
+    
     # AdGuard修饰符配置
     SUPPORTED_MODIFIERS = {
         'document', 'script', 'image', 'stylesheet', 'object', 'xmlhttprequest',
@@ -78,22 +98,6 @@ class AdBlockConfig:
     # 正则表达式规则标识
     REGEX_RULE_PATTERN = re.compile(r'^/(.*)/$')
 
-# ==================== 初始化日志 ====================
-def setup_logging():
-    """配置日志系统"""
-    logging.basicConfig(
-        level=AdBlockConfig.LOG_LEVEL,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[logging.StreamHandler()]
-    )
-    return logging.getLogger(__name__)
-
-logger = setup_logging()
-
-# ==================== 分析识别区 ====================
-class AdBlockRuleParser:
-    """AdBlock规则解析器，只处理AdBlock/AdGuard语法"""
-
     # 预编译正则表达式
     COMMENT_REGEX = re.compile(r'^\s*[!#]|\[Adblock')
     DOMAIN_REGEX = re.compile(r'^(?:\|\|)?([a-zA-Z0-9.-]+)[\^\\/*]?')
@@ -105,16 +109,21 @@ class AdBlockRuleParser:
     ADGUARD_DOMAIN_MODIFIER = re.compile(r'\$domain=([^\s]+)')
     ADGUARD_DNSTYPE_MODIFIER = re.compile(r'\$dnstype=([^\s]+)')
 
+    # 宽泛规则模式
+    BROAD_RULE_PATTERNS = [
+        r'^[^/*|]+\.[^/*|]+$',
+        r'^[^/*|]+\.[^/*|]+\.[^/*|]+$',
+        r'^\|\|[a-zA-Z0-9.-]+\^$',
+    ]
+
     def __init__(self):
         if AdBlockConfig.USE_BLOOM_FILTER and BLOOM_FILTER_AVAILABLE:
             self.filter = ScalableBloomFilter(
                 initial_capacity=AdBlockConfig.BLOOM_INITIAL_CAPACITY,
                 error_rate=AdBlockConfig.BLOOM_ERROR_RATE
             )
-            logger.info(f"使用布隆过滤器 (初始容量: {AdBlockConfig.BLOOM_INITIAL_CAPACITY}, 误判率: {AdBlockConfig.BLOOM_ERROR_RATE})")
         else:
             self.filter = set()
-            logger.info("使用简单集合进行去重")
 
         self.rule_stats = {
             'total_processed': 0,
@@ -160,19 +169,16 @@ class AdBlockRuleParser:
 
         # 检查规则长度
         if len(rule) > 5000:
-            logger.debug(f"跳过过长规则: {rule[:50]}...")
             self.rule_stats['invalid_rules'] += 1
             return False
 
         # 检查过于宽泛的规则
         if self.is_broad_rule(rule):
-            logger.debug(f"跳过过于宽泛的规则: {rule}")
             self.rule_stats['invalid_rules'] += 1
             return False
 
         # 检查AdGuard修饰符有效性
         if not self.validate_adguard_modifiers(rule):
-            logger.debug(f"跳过包含无效修饰符的规则: {rule}")
             self.rule_stats['invalid_rules'] += 1
             return False
 
@@ -202,14 +208,14 @@ class AdBlockRuleParser:
             # 处理带值的修饰符 (如 client=127.0.0.1)
             if '=' in modifier:
                 mod_name, mod_value = modifier.split('=', 1)
-                if mod_name not in AdBlockConfig.SUPPORTED_MODIFIERS:
+                if mod_name not in self.SUPPORTED_MODIFIERS:
                     return False
                 # 特殊处理dnsrewrite修饰符
                 if mod_name == 'dnsrewrite':
                     if not self.validate_dnsrewrite_modifier(mod_value):
                         return False
             else:
-                if modifier not in AdBlockConfig.SUPPORTED_MODIFIERS:
+                if modifier not in self.SUPPORTED_MODIFIERS:
                     return False
 
         return True
@@ -220,11 +226,11 @@ class AdBlockRuleParser:
         parts = value.split(';')
         if len(parts) < 2:
             return False
-            
+
         dns_type = parts[0].upper()
         if dns_type not in ['A', 'AAAA', 'CNAME', 'TXT', 'HTTPS', 'MX']:
             return False
-            
+
         return True
 
     def is_broad_rule(self, rule: str) -> bool:
@@ -232,7 +238,7 @@ class AdBlockRuleParser:
         if not AdBlockConfig.REMOVE_BROAD_RULES:
             return False
 
-        for pattern in AdBlockConfig.BROAD_RULE_PATTERNS:
+        for pattern in self.BROAD_RULE_PATTERNS:
             if re.match(pattern, rule):
                 return True
         return False
@@ -352,7 +358,7 @@ class AdBlockRuleParser:
         # 2. 跳过hosts规则（IP地址 + 域名格式）
         if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\s+', original_line):
             return results
-            
+
         # 3. 跳过IPv6 hosts规则
         if re.match(r'^[0-9a-fA-F:]+\s+', original_line):
             return results
@@ -445,12 +451,10 @@ class AdBlockRuleMerger:
         if len(normalized) <= 50:
             return normalized
         else:
-            import hashlib
             return hashlib.md5(normalized.encode()).hexdigest()
 
     async def process_file(self, file_path: Path, is_allow: bool = False, is_async: bool = True):
         """处理单个文件（支持同步和异步）"""
-        logger.info(f"处理文件: {file_path}")
         count = 0
 
         async def process_async():
@@ -510,7 +514,6 @@ class AdBlockRuleMerger:
         else:
             process_sync()
 
-        logger.info(f"从 {file_path} 添加了 {count} 条规则")
         return count
 
     async def process_files_async(self, patterns: List[str], is_allow: bool = False):
@@ -582,7 +585,8 @@ class AdBlockRuleMerger:
         self.block_rules -= rules_to_remove
         after = len(self.block_rules)
 
-        logger.info(f"高级冲突解决: 移除了 {before - after} 条冲突规则")
+        if before - after > 0:
+            logger.info(f"高级冲突解决: 移除了 {before - after} 条冲突规则")
 
     def select_most_specific_rule(self, rules: List[str]) -> str:
         """选择最具体的规则"""
@@ -697,30 +701,32 @@ def write_rules_sync(block_rules: List[str], allow_rules: List[str]):
     logger.info(f"写入 {len(allow_rules)} 条允许规则到 {AdBlockConfig.OUTPUT_ALLOW}")
 
 # ==================== 主程序 ====================
-async def main_async():
-    """异步主函数"""
-    logger.info("开始处理AdBlock规则")
-    start_time = datetime.now()
-
-    ensure_directories()
-
-    merger = AdBlockRuleMerger()
-
-    logger.info("开始处理广告拦截规则")
+async def main_common(merger: AdBlockRuleMerger) -> Tuple[List[str], List[str]]:
+    """通用处理逻辑"""
+    # 处理广告拦截规则
     if AdBlockConfig.ASYNC_ENABLED:
         await merger.process_files_async(AdBlockConfig.ADBLOCK_PATTERNS, is_allow=False)
     else:
         merger.process_files_sync(AdBlockConfig.ADBLOCK_PATTERNS, is_allow=False)
 
-    logger.info("开始处理允许规则")
+    # 处理允许规则
     if AdBlockConfig.ASYNC_ENABLED:
         await merger.process_files_async(AdBlockConfig.ALLOW_PATTERNS, is_allow=True)
     else:
         merger.process_files_sync(AdBlockConfig.ALLOW_PATTERNS, is_allow=True)
 
     merger.remove_conflicts()
+    return merger.get_sorted_rules()
 
-    block_rules, allow_rules = merger.get_sorted_rules()
+async def main_async():
+    """异步主函数"""
+    logger.info("开始处理AdBlock规则")
+    start_time = datetime.now()
+
+    ensure_directories()
+    merger = AdBlockRuleMerger()
+
+    block_rules, allow_rules = await main_common(merger)
 
     if AdBlockConfig.ASYNC_ENABLED:
         await write_rules_async(block_rules, allow_rules)
@@ -743,18 +749,9 @@ def main_sync():
     start_time = datetime.now()
 
     ensure_directories()
-
     merger = AdBlockRuleMerger()
 
-    logger.info("开始处理广告拦截规则")
-    merger.process_files_sync(AdBlockConfig.ADBLOCK_PATTERNS, is_allow=False)
-
-    logger.info("开始处理允许规则")
-    merger.process_files_sync(AdBlockConfig.ALLOW_PATTERNS, is_allow=True)
-
-    merger.remove_conflicts()
-
-    block_rules, allow_rules = merger.get_sorted_rules()
+    block_rules, allow_rules = main_common(merger)
 
     write_rules_sync(block_rules, allow_rules)
 
@@ -766,7 +763,7 @@ def main_sync():
     logger.info(f"总计: {len(block_rules)} 条拦截规则, {len(allow_rules)} 条允许规则")
     logger.info(f"处理统计: {stats['total_processed']} 条规则已处理, {stats['valid_rules']} 条有效, {stats['invalid_rules']} 条无效, {stats['duplicate_rules']} 条重复")
 
-    logger.info(f"规则类型: {stats['domain_rules']} 条域名规则, {stats['ip_rules'] 条IP规则, {stats['element_hiding_rules']} 条元素隐藏规则, {stats['adguard_rules']} 条AdGuard规则, {stats.get('adguard_modifier_rules', 0)} 条带修饰符的AdGuard规则, {stats.get('adguard_dnsrewrite_rules', 0)} 条DNS重写规则, {stats.get('regex_rules', 0)} 条正则表达式规则, {stats.get('client_specific_rules', 0)} 条客户端特定规则, {stats.get('domain_specific_rules', 0)} 条域名特定规则")
+    logger.info(f"规则类型: {stats['domain_rules']} 条域名规则, {stats['ip_rules']} 条IP规则, {stats['element_hiding_rules']} 条元素隐藏规则, {stats['adguard_rules']} 条AdGuard规则, {stats.get('adguard_modifier_rules', 0)} 条带修饰符的AdGuard规则, {stats.get('adguard_dnsrewrite_rules', 0)} 条DNS重写规则, {stats.get('regex_rules', 0)} 条正则表达式规则, {stats.get('client_specific_rules', 0)} 条客户端特定规则, {stats.get('domain_specific_rules', 0)} 条域名特定规则")
 
 if __name__ == '__main__':
     if AdBlockConfig.ASYNC_ENABLED:
