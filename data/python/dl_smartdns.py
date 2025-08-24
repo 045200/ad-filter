@@ -16,8 +16,8 @@ import logging
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 
-# 配置日志
-logging.basicConfig(level=logging.INFO, format='%(name)s - %(levelname)s - %(message)s')
+# 配置日志 - 使用GitHub Actions友好的格式
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger('SmartDNSRuleDownloader')
 
 # 配置
@@ -54,9 +54,9 @@ def load_custom_sources():
                     line = line.strip()
                     if line and not line.startswith('#'):
                         custom_sources.append(line)
-            logger.info(f"从 {Config.SOURCES_FILE} 加载了 {len(custom_sources)} 个自定义规则源")
+            logger.info(f"Loaded {len(custom_sources)} custom sources from {Config.SOURCES_FILE}")
         except Exception as e:
-            logger.error(f"加载自定义规则源失败: {e}")
+            logger.error(f"Failed to load custom sources: {e}")
     return custom_sources
 
 def create_session():
@@ -81,10 +81,9 @@ def download_file(url, output_path, session):
         response.raise_for_status()
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(response.text)
-        logger.info(f"成功下载: {url} -> {output_path}")
         return True
     except requests.exceptions.RequestException as e:
-        logger.error(f"下载失败 {url}: {e}")
+        logger.error(f"Failed to download {url}: {e}")
         return False
 
 def extract_domain_from_smartdns_rule(rule):
@@ -128,11 +127,10 @@ def process_smartdns_rules(input_file, output_file):
             for domain in sorted(domains):
                 fout.write(f"{domain}\n")
 
-        logger.info(f"从 {input_file} 提取了 {len(domains)} 个域名到 {output_file}")
-        return True
+        return len(domains)
     except Exception as e:
-        logger.error(f"处理文件 {input_file} 失败: {e}")
-        return False
+        logger.error(f"Failed to process file {input_file}: {e}")
+        return 0
 
 def sanitize_filename(text):
     """清理文本中的非法文件名字符"""
@@ -141,20 +139,22 @@ def sanitize_filename(text):
 
 def main():
     """主函数"""
-    logger.info("开始下载SmartDNS规则")
+    logger.info("Starting SmartDNS rules download")
 
     # 确保输出目录存在
     Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # 获取所有规则源
     all_sources = DEFAULT_SMARTDNS_SOURCES + load_custom_sources()
-    logger.info(f"总共 {len(all_sources)} 个规则源需要处理")
+    logger.info(f"Total sources to process: {len(all_sources)}")
 
     # 创建带重试机制的会话
     session = create_session()
 
     # 下载并处理每个规则源
     successful_downloads = 0
+    source_stats = {}  # 存储每个源的规则数量
+    
     for i, url in enumerate(all_sources):
         try:
             # 生成安全的文件名
@@ -168,17 +168,34 @@ def main():
             processed_file = Config.OUTPUT_DIR / f"{filename}_processed.txt"
 
             if download_file(url, raw_file, session):
-                # 处理文件
-                if process_smartdns_rules(raw_file, processed_file):
+                # 处理文件并获取规则数量
+                rule_count = process_smartdns_rules(raw_file, processed_file)
+                if rule_count > 0:
                     successful_downloads += 1
+                    source_stats[url] = rule_count
+                    logger.debug(f"Processed {url}: {rule_count} rules")
 
             # 根据响应时间动态调整睡眠间隔
             time.sleep(min(1, max(0.1, 1 / (i + 1))))
 
         except Exception as e:
-            logger.error(f"处理规则源 {url} 时出错: {e}")
+            logger.error(f"Error processing source {url}: {e}")
 
-    logger.info(f"SmartDNS规则下载完成，成功处理 {successful_downloads}/{len(all_sources)} 个规则源")
+    # 输出统计结果
+    total_rules = sum(source_stats.values())
+    
+    print(f"::set-output name=downloaded_sources::{successful_downloads}")
+    print(f"::set-output name=total_sources::{len(all_sources)}")
+    print(f"::set-output name=total_rules::{total_rules}")
+    
+    logger.info("=" * 50)
+    logger.info("DOWNLOAD SUMMARY:")
+    logger.info(f"Downloaded sources: {successful_downloads}/{len(all_sources)}")
+    logger.info(f"Total rules: {total_rules}")
+    
+    # 输出每个源的规则数量
+    for url, count in source_stats.items():
+        logger.info(f"  {url}: {count} rules")
 
 if __name__ == '__main__':
     main()
