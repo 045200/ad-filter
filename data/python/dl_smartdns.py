@@ -137,6 +137,16 @@ def sanitize_filename(text):
     # 替换Windows/Linux文件名中的非法字符
     return re.sub(r'[\\/*?:"<>|]', '_', text)
 
+def write_github_output(name, value):
+    """使用新的GitHub Actions输出方法"""
+    github_output = os.getenv('GITHUB_OUTPUT')
+    if github_output:
+        with open(github_output, 'a') as f:
+            f.write(f"{name}={value}\n")
+    else:
+        # 如果不是在GitHub Actions环境中运行，则打印到控制台
+        print(f"{name}={value}")
+
 def main():
     """主函数"""
     logger.info("Starting SmartDNS rules download")
@@ -173,7 +183,7 @@ def main():
                 if rule_count > 0:
                     successful_downloads += 1
                     source_stats[url] = rule_count
-                    logger.debug(f"Processed {url}: {rule_count} rules")
+                    logger.info(f"{url}: {rule_count} rules")
 
             # 根据响应时间动态调整睡眠间隔
             time.sleep(min(1, max(0.1, 1 / (i + 1))))
@@ -184,18 +194,15 @@ def main():
     # 输出统计结果
     total_rules = sum(source_stats.values())
     
-    print(f"::set-output name=downloaded_sources::{successful_downloads}")
-    print(f"::set-output name=total_sources::{len(all_sources)}")
-    print(f"::set-output name=total_rules::{total_rules}")
+    # 使用新的GitHub Actions输出方法
+    write_github_output("downloaded_sources", successful_downloads)
+    write_github_output("total_sources", len(all_sources))
+    write_github_output("total_rules", total_rules)
     
     logger.info("=" * 50)
     logger.info("DOWNLOAD SUMMARY:")
     logger.info(f"Downloaded sources: {successful_downloads}/{len(all_sources)}")
     logger.info(f"Total rules: {total_rules}")
-    
-    # 输出每个源的规则数量
-    for url, count in source_stats.items():
-        logger.info(f"  {url}: {count} rules")
 
 if __name__ == '__main__':
     main()
