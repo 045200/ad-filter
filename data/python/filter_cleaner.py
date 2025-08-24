@@ -5,6 +5,7 @@
 AdGuard/AdGuard Home规则清理器
 专为GitHub Actions环境优化
 使用SmartDNS和多DNS服务器验证去除过期无效域名
+优化版：减少DNS查询，提高处理速度
 """
 
 import os
@@ -38,10 +39,10 @@ class Config:
     SMARTDNS_CONFIG_FILE = SMARTDNS_CONFIG_DIR / "smartdns.conf"
     SMARTDNS_PORT = int(os.getenv('SMARTDNS_PORT', 5353))
 
-    # 性能配置
-    DNS_WORKERS = int(os.getenv('DNS_WORKERS', 20))
-    BATCH_SIZE = int(os.getenv('BATCH_SIZE', 300))
-    DNS_TIMEOUT = int(os.getenv('DNS_TIMEOUT', 6))
+    # 性能配置 - 降低并发数以适应GitHub Actions环境
+    DNS_WORKERS = int(os.getenv('DNS_WORKERS', 10))  # 从20降低到10
+    BATCH_SIZE = int(os.getenv('BATCH_SIZE', 100))   # 从300降低到100
+    DNS_TIMEOUT = int(os.getenv('DNS_TIMEOUT', 4))   # 从6降低到4
 
     # 缓存配置
     CACHE_FILE = FILTER_DIR / "domain_cache.json"
@@ -53,7 +54,7 @@ IS_GITHUB_ACTIONS = os.getenv('GITHUB_ACTIONS') == 'true'
 # 日志配置
 def setup_logger():
     logger = logging.getLogger('AdGuardCleaner')
-    
+
     # 在GitHub Actions中使用更简化的日志级别
     if IS_GITHUB_ACTIONS:
         logger.setLevel(logging.WARNING)
@@ -61,13 +62,13 @@ def setup_logger():
         logger.setLevel(logging.INFO)
 
     handler = logging.StreamHandler(sys.stdout)
-    
+
     # 简化日志格式
     if IS_GITHUB_ACTIONS:
         formatter = logging.Formatter('%(levelname)s: %(message)s')
     else:
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    
+
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
@@ -243,7 +244,7 @@ class AdGuardRuleProcessor:
             # 主机文件格式
             'hosts_format': re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([a-zA-Z0-9.-]+)$'),
         }
-        
+
         # 不可验证规则的正则模式（直接保留）
         self.non_validatable_patterns = {
             # 注释
@@ -261,7 +262,7 @@ class AdGuardRuleProcessor:
             # HTML过滤规则
             'html_filter': re.compile(r'\$\$'),
         }
-        
+
         # 支持的修饰符（可验证）
         self.valid_modifiers = {
             'domain', 'third-party', 'script', 'stylesheet', 'image', 
@@ -275,24 +276,24 @@ class AdGuardRuleProcessor:
         返回值: (domain, category)
         """
         rule = rule.strip()
-        
+
         # 检查不可验证规则
         for category, pattern in self.non_validatable_patterns.items():
             if pattern.match(rule):
                 return None, category
-        
+
         # 检查可验证规则
         for category, pattern in self.validatable_patterns.items():
             match = pattern.match(rule)
             if match:
                 domain = match.group(1)
-                
+
                 # 检查修饰符是否支持验证
                 if self._has_unsupported_modifiers(rule):
                     return None, "unsupported_modifiers"
-                    
+
                 return domain, category
-        
+
         # 默认分类为未知（保留）
         return None, "unknown"
 
@@ -302,22 +303,22 @@ class AdGuardRuleProcessor:
         modifier_match = re.search(r'\$([^,\s]+)', rule)
         if not modifier_match:
             return False
-            
+
         modifiers = modifier_match.group(1).split(',')
-        
+
         # 检查是否有不支持的修饰符
         for modifier in modifiers:
             # 处理否定修饰符 (~modifier)
             if modifier.startswith('~'):
                 modifier = modifier[1:]
-                
+
             # 处理键值对修饰符 (key=value)
             if '=' in modifier:
                 modifier = modifier.split('=')[0]
-                
+
             if modifier not in self.valid_modifiers:
                 return True
-                
+
         return False
 
 # DNS验证器
@@ -334,7 +335,7 @@ class DNSValidator:
             'dig_queries': 0,
             'system_queries': 0
         }
-        
+
         # 多DNS服务器配置（不依赖地理信息）
         self.dns_servers = [
             "1.1.1.1",        # Cloudflare (全球)
@@ -403,12 +404,12 @@ class DNSValidator:
         self.stats['system_queries'] += 1
         result = await self._system_query_async(domain)
         self.cache[domain] = (result, current_time)
-        
+
         if result:
             self.stats['valid'] += 1
         else:
             self.stats['invalid'] += 1
-            
+
         return result
 
     async def _dig_query_async(self, domain, dns_server):
@@ -425,9 +426,9 @@ class DNSValidator:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
+
             stdout, stderr = await process.communicate()
-            
+
             return process.returncode == 0 and stdout.strip()
         except:
             return False
@@ -467,7 +468,7 @@ class RuleCleaner:
         """异步初始化"""
         # 启动SmartDNS
         smartdns_started = self.smartdns.start()
-        
+
         # 初始化验证器
         self.validator = DNSValidator(self.smartdns)
 
@@ -514,12 +515,12 @@ class RuleCleaner:
         valid_rules = []
         domains_to_validate = {}
         rule_categories = {}
-        
+
         # 分类规则
         for rule in rules:
             domain, category = self.processor.categorize_rule(rule)
             rule_categories[rule] = category
-            
+
             if domain:
                 if domain not in domains_to_validate:
                     domains_to_validate[domain] = []
@@ -549,21 +550,21 @@ class RuleCleaner:
 
         # 使用信号量控制并发量
         semaphore = asyncio.Semaphore(Config.DNS_WORKERS)
-        
+
         async def validate_with_semaphore(domain):
             async with semaphore:
                 return await self.validator.validate_domain(domain)
-        
+
         # 分批处理避免内存溢出
         for i in range(0, total, Config.BATCH_SIZE):
             batch = domains[i:i + Config.BATCH_SIZE]
             tasks = [validate_with_semaphore(domain) for domain in batch]
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            
+
             for j, result in enumerate(results):
                 if isinstance(result, bool) and result:
                     valid_domains.add(batch[j])
-            
+
             # 进度报告（在GitHub Actions中减少输出频率）
             processed = min(i + Config.BATCH_SIZE, total)
             if processed % 1000 == 0 or processed == total:
@@ -577,7 +578,7 @@ class RuleCleaner:
         try:
             # 确保目录存在
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            
+
             # 保存规则
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.writelines(rules)
@@ -589,7 +590,7 @@ class RuleCleaner:
     def print_stats(self, elapsed):
         """输出处理统计信息"""
         stats = self.validator.get_stats()
-        
+
         log_group("处理统计信息")
         log_info(f"总耗时: {elapsed:.2f} 秒")
         log_info(f"处理域名: {stats['total']} 个")
