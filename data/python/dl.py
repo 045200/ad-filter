@@ -86,6 +86,24 @@ def gh_endgroup():
         logger.info("::endgroup::")
 
 
+def count_rules_in_file(file_path: Path) -> int:
+    """统计文件中的规则数量（忽略空行和注释行）"""
+    try:
+        if not file_path.exists():
+            return 0
+            
+        count = 0
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    count += 1
+        return count
+    except Exception as e:
+        logger.error(f"统计规则数量失败 {file_path}: {e}")
+        return 0
+
+
 class RuleDownloader:
     def __init__(self):
         FILTER_DIR.mkdir(parents=True, exist_ok=True)
@@ -94,9 +112,9 @@ class RuleDownloader:
         self._clean_filter_dir()
         self.adblock_urls, self.allow_urls = self._load_rules_config()
         self.stats = {
-            'adblock': {'success': 0, 'fail': 0},
-            'allow': {'success': 0, 'fail': 0},
-            'local': {'copied': 0, 'missing': 0}
+            'adblock': {'success': 0, 'fail': 0, 'files': {}},
+            'allow': {'success': 0, 'fail': 0, 'files': {}},
+            'local': {'copied': 0, 'missing': 0, 'files': {}}
         }
 
     def _init_session(self) -> requests.Session:
@@ -126,38 +144,38 @@ class RuleDownloader:
         """从配置文件加载规则URL"""
         adblock_urls = []
         allow_urls = []
-        
+
         if not RULES_CONFIG.exists():
             logger.error(f"配置文件不存在: {RULES_CONFIG}")
             return adblock_urls, allow_urls
-            
+
         try:
             with open(RULES_CONFIG, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
-            
+
             current_section = None
             for line in lines:
                 line = line.strip()
                 if not line or line.startswith('#'):
                     continue
-                    
+
                 if line.lower() == '[adblock]':
                     current_section = 'adblock'
                     continue
                 elif line.lower() == '[allow]':
                     current_section = 'allow'
                     continue
-                    
+
                 if current_section == 'adblock' and validate_url(line):
                     adblock_urls.append(line)
                 elif current_section == 'allow' and validate_url(line):
                     allow_urls.append(line)
-                    
+
             logger.info(f"从配置加载: {len(adblock_urls)}个拦截规则, {len(allow_urls)}个放行规则")
-            
+
         except IOError as e:
             logger.error(f"读取配置文件失败: {e}")
-            
+
         return adblock_urls, allow_urls
 
     def _convert_to_utf8(self, content: bytes) -> Tuple[str, str]:
@@ -214,6 +232,14 @@ class RuleDownloader:
                 with open(save_path, 'w', encoding='utf-8') as f:
                     f.write(text)
 
+                # 统计规则数量
+                rule_count = count_rules_in_file(save_path)
+                filename = save_path.name
+                if filename.startswith('adblock'):
+                    self.stats['adblock']['files'][filename] = rule_count
+                elif filename.startswith('allow'):
+                    self.stats['allow']['files'][filename] = rule_count
+                
                 return True
 
             except requests.exceptions.RequestException as e:
@@ -239,6 +265,10 @@ class RuleDownloader:
                     text, _ = self._convert_to_utf8(content)
                     with open(dest, 'w', encoding='utf-8') as f:
                         f.write(text)
+                    
+                    # 统计规则数量
+                    rule_count = count_rules_in_file(dest)
+                    self.stats['local']['files'][dest.name] = rule_count
                     self.stats['local']['copied'] += 1
                 else:
                     self.stats['local']['missing'] += 1
@@ -280,6 +310,39 @@ class RuleDownloader:
         else:
             logger.warning("未配置白名单规则URL")
 
+    def print_statistics(self):
+        """打印规则统计信息"""
+        # 统计拦截规则
+        adblock_total = 0
+        if self.stats['adblock']['files']:
+            logger.info("拦截规则统计:")
+            for filename, count in self.stats['adblock']['files'].items():
+                logger.info(f"  {filename}: {count} 条规则")
+                adblock_total += count
+            logger.info(f"拦截规则总计: {adblock_total} 条规则")
+        
+        # 统计放行规则
+        allow_total = 0
+        if self.stats['allow']['files']:
+            logger.info("放行规则统计:")
+            for filename, count in self.stats['allow']['files'].items():
+                logger.info(f"  {filename}: {count} 条规则")
+                allow_total += count
+            logger.info(f"放行规则总计: {allow_total} 条规则")
+        
+        # 统计本地规则
+        local_total = 0
+        if self.stats['local']['files']:
+            logger.info("本地规则统计:")
+            for filename, count in self.stats['local']['files'].items():
+                logger.info(f"  {filename}: {count} 条规则")
+                local_total += count
+            logger.info(f"本地规则总计: {local_total} 条规则")
+        
+        # 总计
+        total_rules = adblock_total + allow_total + local_total
+        logger.info(f"规则总计: {total_rules} 条规则")
+
     def run(self):
         """运行下载器"""
         start_time = time.time()
@@ -293,6 +356,9 @@ class RuleDownloader:
         logger.info(f"耗时:{elapsed:.1f}s 拦截:{self.stats['adblock']['success']}/{len(self.adblock_urls)} "
                    f"放行:{self.stats['allow']['success']}/{len(self.allow_urls)} "
                    f"本地:{self.stats['local']['copied']}/{len(LOCAL_RULES)}")
+        
+        # 打印规则统计
+        self.print_statistics()
 
 
 if __name__ == "__main__":
