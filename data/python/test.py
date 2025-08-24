@@ -3,206 +3,257 @@
 
 import dns.resolver
 import time
-import statistics
 import json
 import sys
+import concurrent.futures
 from datetime import datetime
+import requests
+import re
+from urllib.parse import urlparse
+import os
 
-# 测试的域名列表 - 国内和国外
-DOMAINS = [
-    # 国内主流网站
-    "www.baidu.com",          # 百度
-    "www.taobao.com",         # 淘宝
-    "www.qq.com",             # 腾讯
-    "www.jd.com",             # 京东
-    "www.sina.com.cn",        # 新浪
-    "www.163.com",            # 网易
-    "www.weibo.com",          # 微博
-    "www.zhihu.com",          # 知乎
-    "www.bilibili.com",       # B站
-    "www.douyin.com",         # 抖音
-    "www.xiaohongshu.com",    # 小红书
-    "www.meituan.com",        # 美团
-    "www.dianping.com",       # 大众点评
-    "www.ctrip.com",          # 携程
-    "www.12306.cn",           # 铁路官网
-    "www.gov.cn",             # 政府网
-    
-    # 国外主流网站
-    "www.google.com",         # Google
-    "www.facebook.com",       # Facebook
-    "www.twitter.com",        # Twitter
-    "www.instagram.com",      # Instagram
-    "www.youtube.com",        # YouTube
-    "www.amazon.com",         # Amazon
-    "www.microsoft.com",      # Microsoft
-    "www.apple.com",          # Apple
-    "www.netflix.com",        # Netflix
-    "www.wikipedia.org",      # Wikipedia
-    "www.reddit.com",         # Reddit
-    "www.linkedin.com",       # LinkedIn
-    "www.spotify.com",        # Spotify
-    "www.tiktok.com",         # TikTok
-    "www.discord.com",        # Discord
-    "www.twitch.tv",          # Twitch
-    
-    # CDN和云服务
-    "cloudflare.com",
-    "aws.amazon.com",
-    "azure.microsoft.com",
-    "cloud.google.com",
-    
-    # 国际新闻媒体
-    "www.bbc.com",
-    "www.cnn.com",
-    "www.nytimes.com",
-    "www.theguardian.com"
+# 广告域名列表（可以从文件读取或直接在这里定义）
+AD_DOMAINS = [
+    # 这里可以添加您需要测试的广告域名
+    # 示例：
+    "ad.example.com",
+    "tracking.example.org",
+    "ads.google.com",
+    "adservice.google.com",
+    "ad.doubleclick.net",
+    "ad.360.cn",
+    "ad.taobao.com",
+    "ad.baidu.com",
+    "adx.baidu.com",
+    "adui.tg.meitu.com",
+    "ads.mopub.com",
+    "ads.facebook.com",
+    "analytics.google.com",
+    "stats.g.doubleclick.net",
+    "pagead2.googlesyndication.com",
+    "partnerad.l.doubleclick.net",
+    "securepubads.g.doubleclick.net",
+    "tpc.googlesyndication.com",
+    "ad.qq.com",
+    "adcdn.tencent.com",
+    "ads.tencent.com",
+    "admaster.com.cn",
+    "adn.insight.ucweb.com",
+    "adx.yiche.com",
+    "adxserver.ad.cmvideo.cn",
+    "ad.weibo.com",
+    "ad.weibo.com.cn",
+    "adimg.uve.weibo.com",
+    "adimgs.x.cn",
+    "adx.dlads.cn",
+    "adx.pro.cn",
+    "adx.sina.com.cn",
+    "adx.sina.cn",
+    "adxstatic.sina.cn",
+    "ad.zhangyue.com",
+    "ad.api.zhangyue.com",
+    "adlog.vivo.com.cn",
+    "ads.wasu.cn",
+    "adshow.58.com",
+    "adshow.g.58.com",
+    "adx.58.com",
+    "adx.gifshow.com",
+    "adx.kuaishou.com",
+    "adx.kuaishouzt.com",
+    "adx.kuwo.cn",
+    "adx.yiche.com",
+    "adx.zhangyue.com",
+    "adx.zhangyue.com.cn"
 ]
 
-# DNS服务器列表 - 国内和国外
+# 专注于国内DNS服务器
 DNS_SERVERS = {
-    # 国内DNS服务器
-    "国内DNS-114": "114.114.114.114",
-    "国内DNS-114备": "114.114.115.115",
-    "国内DNS-阿里": "223.5.5.5",
-    "国内DNS-阿里备": "223.6.6.6",
-    "国内DNS-腾讯": "119.29.29.29",
-    "国内DNS-百度": "180.76.76.76",
-    "国内DNS-清华": "101.6.6.6",
-    "国内DNS-清华备": "101.7.7.7",
-    "国内DNS-南京信风": "114.114.114.119",  # 纯净无劫持
-    "国内DNS-南京信风备": "114.114.115.119",
-    "国内DNS-360": "101.226.4.6",         # 360安全DNS
-    "国内DNS-360备": "123.125.81.6",
+    # 国内公共DNS服务器
+    "114DNS": {"ip": "114.114.114.114", "type": "udp"},
+    "AliDNS": {"ip": "223.5.5.5", "type": "udp"},
+    "TencentDNS": {"ip": "119.29.29.29", "type": "udp"},
+    "BaiduDNS": {"ip": "180.76.76.76", "type": "udp"},
     
-    # 国外DNS服务器
-    "国外DNS-Google": "8.8.8.8",
-    "国外DNS-Google备": "8.8.4.4",
-    "国外DNS-Cloudflare": "1.1.1.1",
-    "国外DNS-Cloudflare备": "1.0.0.1",
-    "国外DNS-OpenDNS": "208.67.222.222",
-    "国外DNS-OpenDNS备": "208.67.220.220",
-    "国外DNS-Quad9": "9.9.9.9",           # 安全DNS
-    "国外DNS-Quad9备": "149.112.112.112",
-    "国外DNS-AdGuard": "94.140.14.14",    # AdGuard DNS
-    "国外DNS-AdGuard备": "94.140.15.15",
-    "国外DNS-Comodo": "8.26.56.26",       # Comodo安全DNS
-    "国外DNS-Comodo备": "8.20.247.20",
-    "国外DNS-Norton": "199.85.126.10",    # Norton ConnectSafe
-    "国外DNS-Norton备": "199.85.127.10",
-    "国外DNS-Yandex": "77.88.8.8",        # 俄罗斯Yandex DNS
-    "国外DNS-Yandex备": "77.88.8.1",
-    "国外DNS-Level3": "209.244.0.3",      # Level3通信
-    "国外DNS-Level3备": "209.244.0.4",
-    "国外DNS-Verisign": "64.6.64.6",      # Verisign公共DNS
-    "国外DNS-Verisign备": "64.6.65.6"
+    # 国内DoH服务器
+    "AliDoH": {"url": "https://dns.alidns.com/dns-query", "type": "doh"},
+    "TencentDoH": {"url": "https://doh.pub/dns-query", "type": "doh"},
+    "360DoH": {"url": "https://doh.360.cn/dns-query", "type": "doh"},
+    
+    # 运营商DNS
+    "ChinaTelecom": {"ip": "218.2.2.2", "type": "udp"},
+    "ChinaUnicom": {"ip": "123.123.123.123", "type": "udp"},
+    "ChinaMobile": {"ip": "211.136.192.6", "type": "udp"},
 }
 
-def test_dns_server(server_name, server_ip, domains):
-    """测试单个DNS服务器的解析速度"""
-    resolver = dns.resolver.Resolver()
-    resolver.nameservers = [server_ip]
-    resolver.timeout = 5  # 设置超时时间为5秒
-    resolver.lifetime = 5  # 设置总超时时间为5秒
-    
-    results = []
-    
-    for domain in domains:
-        try:
+def load_ad_domains_from_file(file_path):
+    """从文件加载广告域名列表"""
+    domains = []
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    # 处理AdBlock规则格式
+                    if line.startswith('||'):
+                        domain = line[2:].split('^')[0]
+                        domains.append(domain)
+                    elif line.startswith('|http://') or line.startswith('|https://'):
+                        parsed = urlparse(line[1:])
+                        domains.append(parsed.netloc)
+                    else:
+                        domains.append(line)
+        return domains
+    except FileNotFoundError:
+        print(f"文件 {file_path} 不存在，使用内置域名列表")
+        return AD_DOMAINS
+
+def test_domain_resolution(domain, dns_server_info, timeout=5):
+    """测试单个域名的DNS解析"""
+    try:
+        if dns_server_info["type"] == "udp":
+            resolver = dns.resolver.Resolver()
+            resolver.nameservers = [dns_server_info["ip"]]
+            resolver.timeout = timeout
+            resolver.lifetime = timeout
+            
             start_time = time.time()
             answers = resolver.resolve(domain)
             end_time = time.time()
             
             response_time = (end_time - start_time) * 1000  # 转换为毫秒
-            results.append({
-                "domain": domain,
-                "time": round(response_time, 2),
+            return {
                 "success": True,
+                "time": round(response_time, 2),
                 "ip": answers[0].to_text() if answers else "N/A"
-            })
-        except Exception as e:
-            results.append({
-                "domain": domain,
-                "time": 0,
+            }
+            
+        elif dns_server_info["type"] == "doh":
+            headers = {
+                'accept': 'application/dns-json',
+                'content-type': 'application/dns-json'
+            }
+            
+            params = {
+                'name': domain,
+                'type': 'A'
+            }
+            
+            start_time = time.time()
+            response = requests.get(dns_server_info["url"], headers=headers, params=params, timeout=timeout)
+            end_time = time.time()
+            
+            response_time = (end_time - start_time) * 1000  # 转换为毫秒
+            
+            if response.status_code == 200:
+                data = response.json()
+                if 'Answer' in data and len(data['Answer']) > 0:
+                    return {
+                        "success": True,
+                        "time": round(response_time, 2),
+                        "ip": data['Answer'][0]['data']
+                    }
+            
+            return {
                 "success": False,
-                "error": str(e),
+                "time": 0,
+                "error": f"HTTP {response.status_code}",
                 "ip": "N/A"
-            })
-    
-    # 计算平均响应时间（仅成功请求）
-    success_times = [r["time"] for r in results if r["success"]]
-    avg_time = statistics.mean(success_times) if success_times else 0
-    success_rate = len(success_times) / len(results) * 100
-    
-    return {
-        "server": server_name,
-        "ip": server_ip,
-        "results": results,
-        "avg_time": round(avg_time, 2),
-        "success_rate": round(success_rate, 2)
-    }
+            }
+            
+    except Exception as e:
+        return {
+            "success": False,
+            "time": 0,
+            "error": str(e),
+            "ip": "N/A"
+        }
 
-def categorize_domains(domains):
-    """将域名分类为国内和国外"""
-    china_domains = []
-    overseas_domains = []
+def test_domain_with_multiple_dns(domain, dns_servers, timeout=5):
+    """使用多个DNS服务器测试域名解析"""
+    results = {}
     
-    # 国内域名关键词
-    china_keywords = ['.cn', '.com.cn', 'baidu', 'taobao', 'qq', 'jd', 'sina', '163', 
-                     'weibo', 'zhihu', 'bilibili', 'douyin', 'xiaohongshu', 'meituan',
-                     'dianping', 'ctrip', '12306', 'gov']
+    for server_name, server_info in dns_servers.items():
+        result = test_domain_resolution(domain, server_info, timeout)
+        results[server_name] = result
+        
+        # 如果有一个DNS服务器解析成功，就认为域名有效
+        if result["success"]:
+            break
     
-    for domain in domains:
-        if any(keyword in domain for keyword in china_keywords):
-            china_domains.append(domain)
-        else:
-            overseas_domains.append(domain)
-    
-    return china_domains, overseas_domains
+    return results
 
 def main():
-    print("开始DNS解析速度测试...")
+    print("开始广告域名DNS解析测试...")
     print(f"测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"测试域名总数: {len(DOMAINS)}")
     
-    # 分类域名
-    china_domains, overseas_domains = categorize_domains(DOMAINS)
-    print(f"国内域名: {len(china_domains)} 个")
-    print(f"国外域名: {len(overseas_domains)} 个")
+    # 从文件加载广告域名或使用内置列表
+    ad_domains_file = "ad_domains.txt"
+    if os.path.exists(ad_domains_file):
+        ad_domains = load_ad_domains_from_file(ad_domains_file)
+    else:
+        ad_domains = AD_DOMAINS
+    
+    print(f"测试域名总数: {len(ad_domains)}")
+    print(f"使用DNS服务器: {', '.join(DNS_SERVERS.keys())}")
     print("-" * 80)
     
-    all_results = []
+    valid_domains = []
+    invalid_domains = []
+    results = {}
     
-    # 测试所有DNS服务器
-    for server_name, server_ip in DNS_SERVERS.items():
-        print(f"正在测试 {server_name} ({server_ip})...")
-        result = test_dns_server(server_name, server_ip, DOMAINS)
-        all_results.append(result)
+    # 使用线程池并行测试域名
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_domain = {
+            executor.submit(test_domain_with_multiple_dns, domain, DNS_SERVERS): domain 
+            for domain in ad_domains
+        }
         
-        print(f"  平均响应时间: {result['avg_time']} ms")
-        print(f"  成功率: {result['success_rate']}%")
-        print()
+        for future in concurrent.futures.as_completed(future_to_domain):
+            domain = future_to_domain[future]
+            try:
+                domain_results = future.result()
+                results[domain] = domain_results
+                
+                # 检查是否有DNS服务器成功解析
+                is_valid = any(result["success"] for result in domain_results.values())
+                
+                if is_valid:
+                    valid_domains.append(domain)
+                    print(f"✓ {domain} - 有效")
+                else:
+                    invalid_domains.append(domain)
+                    print(f"✗ {domain} - 无效")
+                    
+            except Exception as e:
+                print(f"测试 {domain} 时发生错误: {str(e)}")
+                invalid_domains.append(domain)
     
-    # 按平均响应时间排序
-    all_results.sort(key=lambda x: x["avg_time"])
-    
-    # 输出结果
+    # 输出统计结果
     print("=" * 80)
-    print("DNS服务器响应时间排名:")
-    for i, result in enumerate(all_results, 1):
-        print(f"{i}. {result['server']} ({result['ip']}): {result['avg_time']} ms (成功率: {result['success_rate']}%)")
+    print(f"测试完成!")
+    print(f"有效域名: {len(valid_domains)} 个")
+    print(f"无效域名: {len(invalid_domains)} 个")
+    print(f"成功率: {len(valid_domains) / len(ad_domains) * 100:.2f}%")
     
     # 保存结果到文件
     with open("dns_test_results.json", "w", encoding="utf-8") as f:
         json.dump({
             "timestamp": datetime.now().isoformat(),
-            "domains": DOMAINS,
-            "china_domains": china_domains,
-            "overseas_domains": overseas_domains,
-            "results": all_results
+            "total_domains": len(ad_domains),
+            "valid_domains": valid_domains,
+            "invalid_domains": invalid_domains,
+            "results": results
         }, f, ensure_ascii=False, indent=2)
     
-    print("测试完成，结果已保存到 dns_test_results.json")
+    # 保存无效域名列表
+    with open("invalid_domains.txt", "w", encoding="utf-8") as f:
+        for domain in invalid_domains:
+            f.write(f"{domain}\n")
+    
+    print("测试完成!")
+    print(f"结果已保存到 dns_test_results.json")
+    print(f"无效域名列表已保存到 invalid_domains.txt")
+    
     return 0
 
 if __name__ == "__main__":
