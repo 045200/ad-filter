@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 
 """
-AdGuard/AdGuard Home规则清理器
+基于SmartDNS的Adblock规则清理器
 专为GitHub Actions环境优化
-使用SmartDNS和多DNS服务器验证去除过期无效域名
-优化版：减少DNS查询，提高处理速度
+支持完整的Adblock/AdGuard/AdGuard Home语法
+使用SmartDNS过滤过期无效域名
 """
 
 import os
@@ -16,11 +16,15 @@ import time
 import logging
 import asyncio
 import aiohttp
+import aiodns
 import subprocess
 import socket
+import ipaddress
 from pathlib import Path
 from typing import Set, List, Dict, Optional, Tuple
 from datetime import datetime
+from collections import OrderedDict
+import maxminddb
 
 # 配置类
 class Config:
@@ -31,7 +35,9 @@ class Config:
     # 输入输出路径
     FILTER_DIR = BASE_DIR / "data" / "filter"
     INPUT_BLOCKLIST = FILTER_DIR / "adblock_filter.txt"
+    INPUT_ALLOWLIST = FILTER_DIR / "allow_filter.txt"
     OUTPUT_BLOCKLIST = FILTER_DIR / "adblock.txt"
+    OUTPUT_ALLOWLIST = FILTER_DIR / "allow.txt"
 
     # SmartDNS配置
     SMARTDNS_BIN = "/usr/local/bin/smartdns"
@@ -39,36 +45,56 @@ class Config:
     SMARTDNS_CONFIG_FILE = SMARTDNS_CONFIG_DIR / "smartdns.conf"
     SMARTDNS_PORT = int(os.getenv('SMARTDNS_PORT', 5353))
 
-    # 性能配置 - 降低并发数以适应GitHub Actions环境
-    DNS_WORKERS = int(os.getenv('DNS_WORKERS', 10))  # 从20降低到10
-    BATCH_SIZE = int(os.getenv('BATCH_SIZE', 100))   # 从300降低到100
-    DNS_TIMEOUT = int(os.getenv('DNS_TIMEOUT', 4))   # 从6降低到4
+    # 额外数据文件
+    EXTRA_DATA_DIR = BASE_DIR / "data" / "extra"
+    CHINA_IP_FILE = EXTRA_DATA_DIR / "china_ip_ranges.txt"
+    GEOIP_DB = EXTRA_DATA_DIR / "GeoLite2-Country.mmdb"
+    GEOSITE_FILE = EXTRA_DATA_DIR / "geosite.dat"
+
+    # 规则源路径
+    SMARTDNS_SOURCES_DIR = BASE_DIR / "data" / "sources"
+
+    # 备份路径
+    BACKUP_DIR = FILTER_DIR / "backups"
 
     # 缓存配置
-    CACHE_FILE = FILTER_DIR / "domain_cache.json"
-    CACHE_TTL = 86400  # 缓存有效期24小时
+    CACHE_DIR = BASE_DIR / "data" / "cache"
+    CACHE_TTL = 86400  # 24小时
 
-# 检查是否在GitHub Actions环境中
-IS_GITHUB_ACTIONS = os.getenv('GITHUB_ACTIONS') == 'true'
+    # 性能配置
+    MAX_WORKERS = int(os.getenv('MAX_WORKERS', 8))
+    DNS_WORKERS = int(os.getenv('DNS_WORKERS', 30))
+    BATCH_SIZE = int(os.getenv('BATCH_SIZE', 500))
+    MAX_MEMORY_PERCENT = int(os.getenv('MAX_MEMORY_PERCENT', 80))
+    DNS_TIMEOUT = int(os.getenv('DNS_TIMEOUT', 8))
+    DNS_RETRIES = int(os.getenv('DNS_RETRIES', 2))
+
+    # 功能开关
+    USE_SMARTDNS = os.getenv('USE_SMARTDNS', 'true').lower() == 'true'
+    PROCESS_SMARTDNS_RULES = os.getenv('PROCESS_SMARTDNS_RULES', 'true').lower() == 'true'
+    USE_GEOIP = os.getenv('USE_GEOIP', 'true').lower() == 'true'
+    USE_GEOSITE = os.getenv('USE_GEOSITE', 'true').lower() == 'true'
+
+# 额外文件下载配置
+EXTRA_DOWNLOADS = {
+    "china_ip_ranges.txt": {
+        "url": "https://raw.githubusercontent.com/17mon/china_ip_list/master/china_ip_list.txt",
+    },
+    "GeoLite2-Country.mmdb": {
+        "url": "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-Country.mmdb",
+    },
+    "geosite.dat": {
+        "url": "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat",
+    }
+}
 
 # 日志配置
 def setup_logger():
-    logger = logging.getLogger('AdGuardCleaner')
-
-    # 在GitHub Actions中使用更简化的日志级别
-    if IS_GITHUB_ACTIONS:
-        logger.setLevel(logging.WARNING)
-    else:
-        logger.setLevel(logging.INFO)
+    logger = logging.getLogger('SmartDNSCleaner')
+    logger.setLevel(logging.INFO)
 
     handler = logging.StreamHandler(sys.stdout)
-
-    # 简化日志格式
-    if IS_GITHUB_ACTIONS:
-        formatter = logging.Formatter('%(levelname)s: %(message)s')
-    else:
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
@@ -76,45 +102,195 @@ def setup_logger():
 
 logger = setup_logger()
 
-def log_group(title):
-    """GitHub Actions日志分组"""
-    if IS_GITHUB_ACTIONS:
-        print(f"::group::{title}")
-    else:
-        logger.info(f"=== {title} ===")
+# 文件下载器
+class FileDownloader:
+    @staticmethod
+    async def download_file(url: str, dest: Path, session: aiohttp.ClientSession = None):
+        """下载文件到指定路径"""
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        
+        close_session = False
+        if session is None:
+            session = aiohttp.ClientSession()
+            close_session = True
+        
+        try:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    with open(dest, 'wb') as f:
+                        while True:
+                            chunk = await response.content.read(1024)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                    logger.info(f"下载成功: {dest.name}")
+                else:
+                    logger.error(f"下载失败: {url} - 状态码: {response.status}")
+        except Exception as e:
+            logger.error(f"下载文件时出错 {url}: {e}")
+        finally:
+            if close_session:
+                await session.close()
 
-def end_group():
-    """结束GitHub Actions日志分组"""
-    if IS_GITHUB_ACTIONS:
-        print("::endgroup::")
+    @staticmethod
+    async def download_extra_files():
+        """下载额外数据文件"""
+        tasks = []
+        async with aiohttp.ClientSession() as session:
+            for filename, info in EXTRA_DOWNLOADS.items():
+                dest_path = Config.EXTRA_DATA_DIR / filename
+                if not dest_path.exists():
+                    tasks.append(FileDownloader.download_file(info["url"], dest_path, session))
+            
+            if tasks:
+                await asyncio.gather(*tasks)
+                logger.info("所有额外文件下载完成")
+            else:
+                logger.info("所有额外文件已存在，跳过下载")
 
-def log_info(message):
-    """信息日志，在GitHub Actions中简化"""
-    if IS_GITHUB_ACTIONS:
-        print(f"ℹ️  {message}")
-    else:
-        logger.info(message)
+# 增强的规则处理器
+class EnhancedRuleProcessor:
+    def __init__(self):
+        # 正则模式定义
+        self.regex_patterns = {
+            # 基础Adblock语法
+            'domain': re.compile(r'^(?:@@)?\|{1,2}([\w.-]+)[\^\$\|\/]'),
+            'hosts': re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$'),
+            'comment': re.compile(r'^[!#]'),
+            'empty': re.compile(r'^\s*$'),
 
-def log_error(message):
-    """错误日志，在GitHub Actions中突出显示"""
-    if IS_GITHUB_ACTIONS:
-        print(f"::error::{message}")
-    else:
-        logger.error(message)
+            # AdGuard扩展语法
+            'adguard_domain': re.compile(r'^@@?\|\|?([\w.-]+)[\^\$\|\/]'),
+            'adguard_modifiers': re.compile(r'\$([^,\s]+)'),
+        }
 
-def log_warning(message):
-    """警告日志，在GitHub Actions中突出显示"""
-    if IS_GITHUB_ACTIONS:
-        print(f"::warning::{message}")
-    else:
-        logger.warning(message)
+        # 支持的AdGuard修饰符
+        self.supported_modifiers = {
+            'domain', 'third-party', 'script', 'stylesheet', 'image', 'object',
+            'xmlhttprequest', 'websocket', 'webrtc', 'popup', 'subdocument',
+            'document', 'elemhide', 'content', 'genericblock', 'generichide'
+        }
+
+    def parse_rule(self, rule: str) -> Tuple[Optional[str], Optional[dict]]:
+        """
+        解析单条规则，返回域名和修饰符信息
+        返回值: (domain, modifiers)
+        """
+        rule = rule.strip()
+
+        # 跳过注释和空行
+        if not rule or self.regex_patterns['comment'].match(rule):
+            return None, None
+
+        # 提取域名
+        domain = None
+        for pattern_name in ['domain', 'hosts', 'adguard_domain']:
+            match = self.regex_patterns[pattern_name].match(rule)
+            if match:
+                domain = match.group(1)
+                break
+
+        if not domain:
+            return None, None
+
+        # 提取修饰符
+        modifiers = {}
+        modifier_matches = self.regex_patterns['adguard_modifiers'].findall(rule)
+        for modifier in modifier_matches:
+            if '=' in modifier:
+                key, value = modifier.split('=', 1)
+                modifiers[key] = value
+            else:
+                modifiers[modifier] = True
+
+        # 过滤不支持的修饰符
+        supported_modifiers = {}
+        for mod, value in modifiers.items():
+            if mod in self.supported_modifiers:
+                supported_modifiers[mod] = value
+
+        return domain, supported_modifiers
+
+    def extract_domains_from_rules(self, rules: List[str]) -> Set[str]:
+        """
+        从规则列表中提取所有域名
+        """
+        domains = set()
+
+        for rule in rules:
+            domain, modifiers = self.parse_rule(rule)
+            if domain:
+                domains.add(domain)
+
+        return domains
+
+# 地理位置工具
+class GeoIPTools:
+    def __init__(self):
+        self.china_ips = set()
+        self.geoip_reader = None
+        self.loaded = False
+
+    def load_data(self):
+        """加载地理位置数据"""
+        try:
+            # 加载中国IP范围
+            if Config.CHINA_IP_FILE.exists():
+                with open(Config.CHINA_IP_FILE, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            self.china_ips.add(line)
+                logger.info(f"已加载 {len(self.china_ips)} 个中国IP范围")
+            
+            # 加载GeoIP数据库
+            if Config.USE_GEOIP and Config.GEOIP_DB.exists():
+                self.geoip_reader = maxminddb.open_database(str(Config.GEOIP_DB))
+                logger.info("GeoIP数据库加载成功")
+            
+            self.loaded = True
+        except Exception as e:
+            logger.error(f"加载地理位置数据失败: {e}")
+
+    def is_china_ip(self, ip: str) -> bool:
+        """检查IP是否属于中国"""
+        if not self.loaded:
+            return False
+            
+        try:
+            ip_obj = ipaddress.ip_address(ip)
+            for cidr in self.china_ips:
+                if ip_obj in ipaddress.ip_network(cidr):
+                    return True
+        except:
+            pass
+            
+        return False
+
+    def get_country_code(self, ip: str) -> Optional[str]:
+        """获取IP所属国家代码"""
+        if not self.geoip_reader:
+            return None
+            
+        try:
+            data = self.geoip_reader.get(ip)
+            if data and 'country' in data and 'iso_code' in data['country']:
+                return data['country']['iso_code']
+        except:
+            pass
+            
+        return None
+
+    def close(self):
+        """关闭资源"""
+        if self.geoip_reader:
+            self.geoip_reader.close()
 
 # SmartDNS管理器
 class SmartDNSManager:
     def __init__(self):
         self.process = None
         self.port = Config.SMARTDNS_PORT
-        self.started = False
 
     def generate_config(self):
         """生成SmartDNS配置文件"""
@@ -128,6 +304,7 @@ log-level error
 log-size 128K
 speed-check-mode ping,tcp:80,tcp:443
 
+# DNS服务器 - 基于测试结果选择响应快且支持加密协议的
 # 国内DNS服务器
 server 114.114.114.114
 server 114.114.115.115
@@ -144,12 +321,26 @@ server-https https://cloudflare-dns.com/dns-query
 server-https https://dns.google/dns-query
 """
 
+        # 如果启用了GeoSite，添加GeoSite配置
+        if Config.USE_GEOSITE and Config.GEOSITE_FILE.exists():
+            config_content += f"\n# GeoSite配置\n"
+            config_content += f"geosite-file {Config.GEOSITE_FILE}\n"
+            config_content += f"nameserver /geosite:cn/114.114.114.114\n"
+            config_content += f"nameserver /geosite:geolocation-cn/114.114.114.114\n"
+            config_content += f"nameserver /geosite:geolocation-!cn/1.1.1.1\n"
+
         Config.SMARTDNS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         with open(Config.SMARTDNS_CONFIG_FILE, 'w') as f:
             f.write(config_content)
 
+        logger.info("SmartDNS配置文件生成完成")
+
     def start(self):
         """启动SmartDNS服务"""
+        if not Config.USE_SMARTDNS:
+            logger.info("SmartDNS功能已禁用")
+            return False
+
         self.generate_config()
 
         try:
@@ -172,15 +363,14 @@ server-https https://dns.google/dns-query
             # 测试服务是否正常
             test_result = self.test_connection()
             if test_result:
-                log_info("SmartDNS服务启动成功")
-                self.started = True
+                logger.info("SmartDNS服务启动成功")
                 return True
             else:
-                log_error("SmartDNS服务启动失败")
+                logger.error("SmartDNS服务启动失败")
                 return False
 
         except Exception as e:
-            log_error(f"启动SmartDNS服务时出错: {e}")
+            logger.error(f"启动SmartDNS服务时出错: {e}")
             return False
 
     def stop(self):
@@ -188,8 +378,7 @@ server-https https://dns.google/dns-query
         if self.process:
             self.process.terminate()
             self.process.wait()
-            log_info("SmartDNS服务已停止")
-            self.started = False
+            logger.info("SmartDNS服务已停止")
 
     def test_connection(self):
         """测试SmartDNS连接"""
@@ -232,178 +421,40 @@ server-https https://dns.google/dns-query
         except:
             return False
 
-# AdGuard规则处理器
-class AdGuardRuleProcessor:
-    def __init__(self):
-        # 可验证规则的正则模式（包含域名）
-        self.validatable_patterns = {
-            # 基本域名规则
-            'domain_rule': re.compile(r'^\|{1,2}([a-zA-Z0-9.-]+)[\^\|\/]'),
-            # 包含修饰符的域名规则
-            'domain_with_modifiers': re.compile(r'^\|{1,2}([a-zA-Z0-9.-]+)[\^\|\/].*?\$[a-z,-]+'),
-            # 主机文件格式
-            'hosts_format': re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([a-zA-Z0-9.-]+)$'),
-        }
-
-        # 不可验证规则的正则模式（直接保留）
-        self.non_validatable_patterns = {
-            # 注释
-            'comment': re.compile(r'^[!#]'),
-            # 空行
-            'empty': re.compile(r'^\s*$'),
-            # 正则表达式规则
-            'regex_rule': re.compile(r'^/.*/$'),
-            # 异常规则
-            'exception_rule': re.compile(r'^@@'),
-            # 脚本规则
-            'script_rule': re.compile(r'#%#'),
-            # 元素隐藏规则
-            'element_hiding': re.compile(r'#@?#'),
-            # HTML过滤规则
-            'html_filter': re.compile(r'\$\$'),
-        }
-
-        # 支持的修饰符（可验证）
-        self.valid_modifiers = {
-            'domain', 'third-party', 'script', 'stylesheet', 'image', 
-            'object', 'xmlhttprequest', 'websocket', 'popup', 'document',
-            'elemhide', 'generichide', 'important'
-        }
-
-    def categorize_rule(self, rule: str) -> Tuple[Optional[str], str]:
-        """
-        分类规则并提取域名（如果可验证）
-        返回值: (domain, category)
-        """
-        rule = rule.strip()
-
-        # 检查不可验证规则
-        for category, pattern in self.non_validatable_patterns.items():
-            if pattern.match(rule):
-                return None, category
-
-        # 检查可验证规则
-        for category, pattern in self.validatable_patterns.items():
-            match = pattern.match(rule)
-            if match:
-                domain = match.group(1)
-
-                # 检查修饰符是否支持验证
-                if self._has_unsupported_modifiers(rule):
-                    return None, "unsupported_modifiers"
-
-                return domain, category
-
-        # 默认分类为未知（保留）
-        return None, "unknown"
-
-    def _has_unsupported_modifiers(self, rule: str) -> bool:
-        """检查规则是否包含不支持的修饰符"""
-        # 提取修饰符部分
-        modifier_match = re.search(r'\$([^,\s]+)', rule)
-        if not modifier_match:
-            return False
-
-        modifiers = modifier_match.group(1).split(',')
-
-        # 检查是否有不支持的修饰符
-        for modifier in modifiers:
-            # 处理否定修饰符 (~modifier)
-            if modifier.startswith('~'):
-                modifier = modifier[1:]
-
-            # 处理键值对修饰符 (key=value)
-            if '=' in modifier:
-                modifier = modifier.split('=')[0]
-
-            if modifier not in self.valid_modifiers:
-                return True
-
-        return False
-
 # DNS验证器
 class DNSValidator:
     def __init__(self, smartdns_manager):
         self.smartdns = smartdns_manager
-        self.cache = self._load_cache()
+        self.cache = {}
         self.stats = {
             'total': 0,
             'valid': 0,
             'invalid': 0,
             'cached': 0,
             'smartdns_queries': 0,
-            'dig_queries': 0,
-            'system_queries': 0
+            'fallback_queries': 0
         }
 
-        # 多DNS服务器配置（不依赖地理信息）
-        self.dns_servers = [
-            "1.1.1.1",        # Cloudflare (全球)
-            "8.8.8.8",        # Google (全球)
-            "114.114.114.114", # 114DNS (中国)
-            "223.5.5.5",      # AliDNS (中国)
-        ]
-
-    def _load_cache(self):
-        """加载域名缓存"""
-        if Config.CACHE_FILE.exists():
-            try:
-                with open(Config.CACHE_FILE, 'r') as f:
-                    cached_data = json.load(f)
-                    # 清理过期缓存
-                    current_time = time.time()
-                    return {domain: (result, timestamp) for domain, (result, timestamp) in cached_data.items() 
-                            if current_time - timestamp < Config.CACHE_TTL}
-            except Exception as e:
-                log_error(f"加载缓存失败: {e}")
-        return {}
-
-    def _save_cache(self):
-        """保存域名缓存"""
-        try:
-            with open(Config.CACHE_FILE, 'w') as f:
-                json.dump(self.cache, f)
-        except Exception as e:
-            log_error(f"保存缓存失败: {e}")
-
     async def validate_domain(self, domain):
-        """验证域名有效性 - 使用多种验证方法"""
+        """验证域名有效性"""
         self.stats['total'] += 1
-        current_time = time.time()
 
         # 检查缓存
         if domain in self.cache:
-            result, timestamp = self.cache[domain]
-            if current_time - timestamp < Config.CACHE_TTL:
-                self.stats['cached'] += 1
-                if result:
-                    self.stats['valid'] += 1
-                else:
-                    self.stats['invalid'] += 1
-                return result
+            self.stats['cached'] += 1
+            return self.cache[domain]
 
-        # 1. 首先尝试SmartDNS（如果可用）
-        if self.smartdns.started:
+        # 使用SmartDNS验证
+        if Config.USE_SMARTDNS and self.smartdns:
             self.stats['smartdns_queries'] += 1
             result = self.smartdns.query_domain(domain)
-            if result:
-                self.cache[domain] = (True, current_time)
-                self.stats['valid'] += 1
-                return True
+        else:
+            # 备用验证方法
+            self.stats['fallback_queries'] += 1
+            result = await self.fallback_validate(domain)
 
-        # 2. 尝试多个DNS服务器
-        for dns_server in self.dns_servers:
-            self.stats['dig_queries'] += 1
-            result = await self._dig_query_async(domain, dns_server)
-            if result:
-                self.cache[domain] = (True, current_time)
-                self.stats['valid'] += 1
-                return True
-
-        # 3. 最后尝试系统DNS
-        self.stats['system_queries'] += 1
-        result = await self._system_query_async(domain)
-        self.cache[domain] = (result, current_time)
+        # 缓存结果
+        self.cache[domain] = result
 
         if result:
             self.stats['valid'] += 1
@@ -412,30 +463,10 @@ class DNSValidator:
 
         return result
 
-    async def _dig_query_async(self, domain, dns_server):
-        """异步执行dig查询"""
+    async def fallback_validate(self, domain):
+        """备用域名验证方法"""
         try:
-            cmd = [
-                "dig", f"@{dns_server}",
-                domain, "+short", "+time=3", "+tries=1"
-            ]
-
-            # 异步执行dig命令
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-
-            stdout, stderr = await process.communicate()
-
-            return process.returncode == 0 and stdout.strip()
-        except:
-            return False
-
-    async def _system_query_async(self, domain):
-        """异步执行系统DNS查询"""
-        try:
+            # 使用系统DNS解析
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
                 None, 
@@ -449,40 +480,51 @@ class DNSValidator:
         """获取统计信息"""
         return self.stats
 
-    def save_cache(self):
-        """保存缓存到文件"""
-        self._save_cache()
-
 # 主处理器
 class RuleCleaner:
     def __init__(self):
         # 确保目录存在
         Config.FILTER_DIR.mkdir(parents=True, exist_ok=True)
-        Config.SMARTDNS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-
-        # 初始化组件
+        Config.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        Config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        Config.EXTRA_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        
+        # 下载额外文件
+        asyncio.run(FileDownloader.download_extra_files())
+        
+        # 初始化地理位置工具
+        self.geo_tools = GeoIPTools()
+        self.geo_tools.load_data()
+        
+        # 初始化其他组件
         self.smartdns = SmartDNSManager()
-        self.processor = AdGuardRuleProcessor()
-
-    async def initialize(self):
-        """异步初始化"""
-        # 启动SmartDNS
-        smartdns_started = self.smartdns.start()
-
-        # 初始化验证器
         self.validator = DNSValidator(self.smartdns)
+        self.processor = EnhancedRuleProcessor()
 
     async def process(self):
         """处理规则文件"""
-        log_group("开始处理AdGuard规则文件")
+        logger.info("开始处理规则文件")
         start_time = time.time()
+
+        # 启动SmartDNS
+        smartdns_started = False
+        if Config.USE_SMARTDNS:
+            smartdns_started = self.smartdns.start()
+            if not smartdns_started:
+                logger.warning("SmartDNS启动失败，将使用备用验证方法")
 
         try:
             # 处理黑名单文件
-            log_info("处理黑名单文件...")
+            logger.info("处理黑名单文件...")
             blocklist_rules = self.read_rules(Config.INPUT_BLOCKLIST)
             valid_blocklist_rules = await self.validate_rules(blocklist_rules)
-            self.save_rules(valid_blocklist_rules, Config.OUTPUT_BLOCKLIST)
+            self.save_rules(valid_blocklist_rules, Config.OUTPUT_BLOCKLIST, Config.INPUT_BLOCKLIST)
+
+            # 处理白名单文件
+            logger.info("处理白名单文件...")
+            allowlist_rules = self.read_rules(Config.INPUT_ALLOWLIST)
+            valid_allowlist_rules = await self.validate_rules(allowlist_rules)
+            self.save_rules(valid_allowlist_rules, Config.OUTPUT_ALLOWLIST, Config.INPUT_ALLOWLIST)
 
             # 输出统计信息
             elapsed = time.time() - start_time
@@ -490,10 +532,10 @@ class RuleCleaner:
 
         finally:
             # 停止SmartDNS
-            self.smartdns.stop()
-            # 保存缓存
-            self.validator.save_cache()
-            end_group()
+            if smartdns_started:
+                self.smartdns.stop()
+            # 关闭地理位置工具
+            self.geo_tools.close()
 
     def read_rules(self, file_path):
         """读取规则文件"""
@@ -502,41 +544,40 @@ class RuleCleaner:
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     rules = f.readlines()
-                log_info(f"从 {file_path.name} 读取 {len(rules)} 条规则")
+                logger.info(f"从 {file_path.name} 读取 {len(rules)} 条规则")
             except Exception as e:
-                log_error(f"读取文件 {file_path} 失败: {e}")
+                logger.error(f"读取文件 {file_path} 失败: {e}")
         else:
-            log_warning(f"文件不存在: {file_path}")
+            logger.warning(f"文件不存在: {file_path}")
 
         return rules
 
     async def validate_rules(self, rules):
         """验证规则有效性"""
         valid_rules = []
-        domains_to_validate = {}
-        rule_categories = {}
+        domains_to_validate = set()
+        domain_to_rules = {}
 
-        # 分类规则
+        # 提取域名并分组
         for rule in rules:
-            domain, category = self.processor.categorize_rule(rule)
-            rule_categories[rule] = category
-
+            domain, modifiers = self.processor.parse_rule(rule)
             if domain:
-                if domain not in domains_to_validate:
-                    domains_to_validate[domain] = []
-                domains_to_validate[domain].append(rule)
+                domains_to_validate.add(domain)
+                if domain not in domain_to_rules:
+                    domain_to_rules[domain] = []
+                domain_to_rules[domain].append(rule)
             else:
-                # 保留不可验证的规则
+                # 保留无法提取域名的规则（注释、特殊规则等）
                 valid_rules.append(rule)
 
-        log_info(f"需要验证 {len(domains_to_validate)} 个域名")
+        logger.info(f"需要验证 {len(domains_to_validate)} 个域名")
 
         # 批量验证域名
-        valid_domains = await self.validate_domains_batch(list(domains_to_validate.keys()))
+        valid_domains = await self.validate_domains_batch(list(domains_to_validate))
 
         # 构建有效规则列表
         for domain in valid_domains:
-            valid_rules.extend(domains_to_validate[domain])
+            valid_rules.extend(domain_to_rules[domain])
 
         return valid_rules
 
@@ -548,64 +589,56 @@ class RuleCleaner:
         if total == 0:
             return valid_domains
 
-        # 使用信号量控制并发量
-        semaphore = asyncio.Semaphore(Config.DNS_WORKERS)
-
-        async def validate_with_semaphore(domain):
-            async with semaphore:
-                return await self.validator.validate_domain(domain)
-
-        # 分批处理避免内存溢出
+        # 分批处理
         for i in range(0, total, Config.BATCH_SIZE):
             batch = domains[i:i + Config.BATCH_SIZE]
-            tasks = [validate_with_semaphore(domain) for domain in batch]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            tasks = [self.validator.validate_domain(domain) for domain in batch]
+            results = await asyncio.gather(*tasks)
 
             for j, result in enumerate(results):
-                if isinstance(result, bool) and result:
+                if result:
                     valid_domains.add(batch[j])
 
-            # 进度报告（在GitHub Actions中减少输出频率）
+            # 输出进度
             processed = min(i + Config.BATCH_SIZE, total)
-            if processed % 1000 == 0 or processed == total:
-                log_info(f"域名验证进度: {processed}/{total}")
+            logger.info(f"进度: {processed}/{total} 域名")
 
-        log_info(f"验证完成: 有效 {len(valid_domains)}/{total} 域名")
+        logger.info(f"验证完成: 有效 {len(valid_domains)}/{total} 域名")
         return valid_domains
 
-    def save_rules(self, rules, output_path):
+    def save_rules(self, rules, output_path, input_path):
         """保存规则到文件"""
         try:
-            # 确保目录存在
-            output_path.parent.mkdir(parents=True, exist_ok=True)
+            # 创建备份
+            if input_path.exists():
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_file = Config.BACKUP_DIR / f"{input_path.stem}_backup_{timestamp}.txt"
+                backup_file.write_text(input_path.read_text())
 
-            # 保存规则
+            # 保存新规则
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.writelines(rules)
 
-            log_info(f"已保存 {len(rules)} 条规则到 {output_path}")
+            logger.info(f"已保存 {len(rules)} 条规则到 {output_path}")
         except Exception as e:
-            log_error(f"保存规则失败: {e}")
+            logger.error(f"保存规则失败: {e}")
 
     def print_stats(self, elapsed):
-        """输出处理统计信息"""
+        """输出统计信息"""
         stats = self.validator.get_stats()
 
-        log_group("处理统计信息")
-        log_info(f"总耗时: {elapsed:.2f} 秒")
-        log_info(f"处理域名: {stats['total']} 个")
-        log_info(f"有效域名: {stats['valid']} 个")
-        log_info(f"无效域名: {stats['invalid']} 个")
-        log_info(f"缓存命中: {stats['cached']} 次")
-        log_info(f"SmartDNS查询: {stats['smartdns_queries']} 次")
-        log_info(f"Dig查询: {stats['dig_queries']} 次")
-        log_info(f"系统查询: {stats['system_queries']} 次")
-        end_group()
+        logger.info("\n===== 处理统计 =====")
+        logger.info(f"总耗时: {elapsed:.2f} 秒")
+        logger.info(f"处理域名: {stats['total']} 个")
+        logger.info(f"有效域名: {stats['valid']} 个")
+        logger.info(f"无效域名: {stats['invalid']} 个")
+        logger.info(f"缓存命中: {stats['cached']} 次")
+        logger.info(f"SmartDNS查询: {stats['smartdns_queries']} 次")
+        logger.info(f"备用查询: {stats['fallback_queries']} 次")
 
 # 主函数
 async def main():
     cleaner = RuleCleaner()
-    await cleaner.initialize()
     await cleaner.process()
 
 if __name__ == '__main__':
