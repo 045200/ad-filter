@@ -448,24 +448,15 @@ class AdBlockRuleMerger:
             import hashlib
             return hashlib.md5(normalized.encode()).hexdigest()
 
-    async def process_file_async(self, file_path: Path, is_allow: bool = False):
-        """异步处理单个文件"""
+    async def process_file(self, file_path: Path, is_allow: bool = False, is_async: bool = True):
+        """处理单个文件（支持同步和异步）"""
         logger.info(f"处理文件: {file_path}")
         count = 0
 
-        try:
-            async with aiofiles.open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                async for line in f:
-                    classified_rules = self.parser.classify_rule(line)
-                    for rule, rule_is_allow in classified_rules:
-                        if rule and not self.parser.is_duplicate(rule) and self.parser.validate_rule(rule):
-                            final_is_allow = is_allow or rule_is_allow
-                            self.add_rule_memory_efficient(rule, final_is_allow)
-                            count += 1
-
-        except UnicodeDecodeError:
+        async def process_async():
+            nonlocal count
             try:
-                async with aiofiles.open(file_path, 'r', encoding='latin-1', errors='ignore') as f:
+                async with aiofiles.open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     async for line in f:
                         classified_rules = self.parser.classify_rule(line)
                         for rule, rule_is_allow in classified_rules:
@@ -473,34 +464,25 @@ class AdBlockRuleMerger:
                                 final_is_allow = is_allow or rule_is_allow
                                 self.add_rule_memory_efficient(rule, final_is_allow)
                                 count += 1
+            except UnicodeDecodeError:
+                try:
+                    async with aiofiles.open(file_path, 'r', encoding='latin-1', errors='ignore') as f:
+                        async for line in f:
+                            classified_rules = self.parser.classify_rule(line)
+                            for rule, rule_is_allow in classified_rules:
+                                if rule and not self.parser.is_duplicate(rule) and self.parser.validate_rule(rule):
+                                    final_is_allow = is_allow or rule_is_allow
+                                    self.add_rule_memory_efficient(rule, final_is_allow)
+                                    count += 1
+                except Exception as e:
+                    logger.error(f"处理文件 {file_path} 时出错 (latin-1编码): {e}")
             except Exception as e:
-                logger.error(f"处理文件 {file_path} 时出错 (latin-1编码): {e}")
-        except FileNotFoundError:
-            logger.error(f"文件不存在: {file_path}")
-        except Exception as e:
-            logger.error(f"处理文件 {file_path} 时发生未知错误: {e}")
+                logger.error(f"处理文件 {file_path} 时发生未知错误: {e}")
 
-        logger.info(f"从 {file_path} 添加了 {count} 条规则")
-        return count
-
-    def process_file_sync(self, file_path: Path, is_allow: bool = False):
-        """同步处理单个文件"""
-        logger.info(f"处理文件: {file_path}")
-        count = 0
-
-        try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    classified_rules = self.parser.classify_rule(line)
-                    for rule, rule_is_allow in classified_rules:
-                        if rule and not self.parser.is_duplicate(rule) and self.parser.validate_rule(rule):
-                            final_is_allow = is_allow or rule_is_allow
-                            self.add_rule_memory_efficient(rule, final_is_allow)
-                            count += 1
-
-        except UnicodeDecodeError:
+        def process_sync():
+            nonlocal count
             try:
-                with open(file_path, 'r', encoding='latin-1', errors='ignore') as f:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     for line in f:
                         classified_rules = self.parser.classify_rule(line)
                         for rule, rule_is_allow in classified_rules:
@@ -508,12 +490,25 @@ class AdBlockRuleMerger:
                                 final_is_allow = is_allow or rule_is_allow
                                 self.add_rule_memory_efficient(rule, final_is_allow)
                                 count += 1
+            except UnicodeDecodeError:
+                try:
+                    with open(file_path, 'r', encoding='latin-1', errors='ignore') as f:
+                        for line in f:
+                            classified_rules = self.parser.classify_rule(line)
+                            for rule, rule_is_allow in classified_rules:
+                                if rule and not self.parser.is_duplicate(rule) and self.parser.validate_rule(rule):
+                                    final_is_allow = is_allow or rule_is_allow
+                                    self.add_rule_memory_efficient(rule, final_is_allow)
+                                    count += 1
+                except Exception as e:
+                    logger.error(f"处理文件 {file_path} 时出错 (latin-1编码): {e}")
             except Exception as e:
-                logger.error(f"处理文件 {file_path} 时出错 (latin-1编码): {e}")
-        except FileNotFoundError:
-            logger.error(f"文件不存在: {file_path}")
-        except Exception as e:
-            logger.error(f"处理文件 {file_path} 时发生未知错误: {e}")
+                logger.error(f"处理文件 {file_path} 时发生未知错误: {e}")
+
+        if is_async:
+            await process_async()
+        else:
+            process_sync()
 
         logger.info(f"从 {file_path} 添加了 {count} 条规则")
         return count
@@ -523,7 +518,7 @@ class AdBlockRuleMerger:
         tasks = []
         for pattern in patterns:
             for file_path in glob.glob(str(AdBlockConfig.INPUT_DIR / pattern)):
-                tasks.append(self.process_file_async(Path(file_path), is_allow))
+                tasks.append(self.process_file(Path(file_path), is_allow, True))
 
         semaphore = asyncio.Semaphore(AdBlockConfig.MAX_CONCURRENT_FILES)
 
@@ -547,7 +542,7 @@ class AdBlockRuleMerger:
         total_count = 0
         for pattern in patterns:
             for file_path in glob.glob(str(AdBlockConfig.INPUT_DIR / pattern)):
-                total_count += self.process_file_sync(Path(file_path), is_allow)
+                total_count += self.process_file(Path(file_path), is_allow, False)
         return total_count
 
     def extract_domain_from_rule(self, rule: str) -> Optional[str]:
@@ -771,7 +766,7 @@ def main_sync():
     logger.info(f"总计: {len(block_rules)} 条拦截规则, {len(allow_rules)} 条允许规则")
     logger.info(f"处理统计: {stats['total_processed']} 条规则已处理, {stats['valid_rules']} 条有效, {stats['invalid_rules']} 条无效, {stats['duplicate_rules']} 条重复")
 
-    logger.info(f"规则类型: {stats['domain_rules']} 条域名规则, {stats['ip_rules']} 条IP规则, {stats['element_hiding_rules']} 条元素隐藏规则, {stats['adguard_rules']} 条AdGuard规则, {stats.get('adguard_modifier_rules', 0)} 条带修饰符的AdGuard规则, {stats.get('adguard_dnsrewrite_rules', 0)} 条DNS重写规则, {stats.get('regex_rules', 0)} 条正则表达式规则, {stats.get('client_specific_rules', 0)} 条客户端特定规则, {stats.get('domain_specific_rules', 0)} 条域名特定规则")
+    logger.info(f"规则类型: {stats['domain_rules']} 条域名规则, {stats['ip_rules'] 条IP规则, {stats['element_hiding_rules']} 条元素隐藏规则, {stats['adguard_rules']} 条AdGuard规则, {stats.get('adguard_modifier_rules', 0)} 条带修饰符的AdGuard规则, {stats.get('adguard_dnsrewrite_rules', 0)} 条DNS重写规则, {stats.get('regex_rules', 0)} 条正则表达式规则, {stats.get('client_specific_rules', 0)} 条客户端特定规则, {stats.get('domain_specific_rules', 0)} 条域名特定规则")
 
 if __name__ == '__main__':
     if AdBlockConfig.ASYNC_ENABLED:
