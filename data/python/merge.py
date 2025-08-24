@@ -1,4 +1,3 @@
-```python
 import os
 import re
 import sys
@@ -489,4 +488,3 @@ if __name__ == '__main__':
     except Exception as e:
         logger.error(f"运行出错：{str(e)}", exc_info=True)
         sys.exit(1)
-```
