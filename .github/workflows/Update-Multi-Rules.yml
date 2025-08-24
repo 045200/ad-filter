@@ -93,7 +93,7 @@ jobs:
               exit 1
           fi
 
-          sudo chmod +x /usr/local/bin/smartdns
+          sudo chmod +x "/usr/local/bin/smartdns"
           
           # 验证安装
           echo "SmartDNS安装完成，版本信息:"
@@ -151,7 +151,27 @@ jobs:
           python ${{ env.PYTHON_SCRIPTS }}/merge.py
           echo "广告规则合并完成"
 
-      # 11. 运行SmartDNS规则清理器
+      # 11. 清理临时生成的adblock和allow文件
+      - name: Cleanup temporary filter files
+        run: |
+          cd ${{ env.DATA_DIR }}/filter
+          # 删除所有adblock*.txt文件，但保留adblock_filter.txt
+          for file in adblock*.txt; do
+            if [ "$file" != "adblock_filter.txt" ]; then
+              echo "删除临时文件: $file"
+              rm -f "$file"
+            fi
+          done
+          # 删除所有allow*.txt文件，但保留allow_filter.txt
+          for file in allow*.txt; do
+            if [ "$file" != "allow_filter.txt" ]; then
+              echo "删除临时文件: $file"
+              rm -f "$file"
+            fi
+          done
+          echo "临时文件清理完成"
+
+      # 12. 运行SmartDNS规则清理器
       - name: Run SmartDNS Rule Cleaner
         run: |
           cd ${{ github.workspace }}
@@ -166,7 +186,7 @@ jobs:
           USE_SMARTDNS: "true"
           PROCESS_SMARTDNS_RULES: "true"
 
-      # 12. 生成多格式规则
+      # 13. 生成多格式规则
       - name: Generate multi-format rules
         run: |
           cd ${{ github.workspace }}
@@ -180,14 +200,56 @@ jobs:
           python ${{ env.PYTHON_SCRIPTS }}/filter_mihomo.py
           python ${{ env.PYTHON_SCRIPTS }}/filter_smartdns.py
 
-      # 13. 更新文档
+      # 14. 更新文档
       - name: Update documentation
         run: |
           cd ${{ github.workspace }}
           python ${{ env.PYTHON_SCRIPTS }}/title.py
           python ${{ env.PYTHON_SCRIPTS }}/readme.py
 
-      # 14. 提交变更
+      # 15. 统一清理步骤
+      - name: Unified cleanup process
+        run: |
+          # 清理备份文件（保留每种类型的最新一个）
+          BACKUP_DIR="${{ env.DATA_DIR }}/filter/backups"
+          if [ -d "$BACKUP_DIR" ]; then
+            echo "清理备份文件，保留每种类型的最新一个..."
+            
+            # 处理每种类型的备份文件
+            for type in adblock allow; do
+              echo "处理 $type 类型的备份文件..."
+              
+              # 找到该类型的所有备份文件并按时间排序（最新的在前）
+              files=$(find "$BACKUP_DIR" -type f -name "${type}_filter_backup_*.txt" -printf '%T@ %p\n' | sort -nr)
+              
+              if [ -n "$files" ]; then
+                # 计算文件数量
+                count=$(echo "$files" | wc -l)
+                echo "找到 $count 个 $type 备份文件"
+                
+                if [ $count -gt 1 ]; then
+                  # 保留第一个（最新的），删除其余
+                  echo "$files" | tail -n +2 | cut -d' ' -f2- | xargs -r rm -f
+                  echo "已删除 $((count-1)) 个旧的 $type 备份文件"
+                else
+                  echo "只有一个 $type 备份文件，无需删除"
+                fi
+              else
+                echo "未找到 $type 类型的备份文件"
+              fi
+            done
+            
+            echo "备份文件清理完成"
+          else
+            echo "备份目录不存在，跳过清理"
+          fi
+          
+          # 清理临时目录
+          echo "清理临时目录..."
+          rm -rf ${{ env.TEMP_DIR }}
+          echo "临时目录清理完成"
+
+      # 16. 提交变更
       - name: Commit changes
         id: commit
         run: |
@@ -195,6 +257,10 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Actions"
           git add --all
+          
+          # 确保不添加临时文件
+          git reset -- ${{ env.DATA_DIR }}/filter/adblock[0-9]*.txt
+          git reset -- ${{ env.DATA_DIR }}/filter/allow[0-9]*.txt
           
           if git diff --staged --quiet; then
             echo "No changes to commit"
@@ -204,7 +270,7 @@ jobs:
             git commit -m "SmartDNS规则更新: [$(date +'%Y-%m-%d %H:%M:%S') UTC+8]"
           fi
 
-      # 15. 推送变更
+      # 17. 推送变更
       - name: Push changes
         if: steps.commit.outputs.has_changes == 'true'
         run: |
@@ -214,7 +280,7 @@ jobs:
             git push origin ${{ env.MAIN_BRANCH }} && break || sleep 5
           done
 
-      # 16. 清理旧工作流
+      # 18. 清理旧工作流
       - name: Cleanup old workflows
         uses: Mattraks/delete-workflow-runs@v2
         with:
@@ -223,14 +289,8 @@ jobs:
           retain_days: 0
           keep_minimum_runs: 3
 
-      # 17. 清理旧工件
+      # 19. 清理旧工件
       - name: Cleanup old artifacts
         uses: c-hive/gha-remove-artifacts@v1.4.0
         with:
           age: '7 days'
-
-      # 18. 清理临时目录
-      - name: Cleanup temporary files
-        run: |
-          rm -rf ${{ env.TEMP_DIR }}
-          echo "临时文件清理完成"
