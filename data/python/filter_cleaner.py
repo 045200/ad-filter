@@ -3,9 +3,7 @@
 
 """
 基于SmartDNS的Adblock规则清理器
-专为GitHub Actions环境优化
-支持完整的Adblock/AdGuard/AdGuard Home语法
-使用SmartDNS过滤过期无效域名
+修复DNS查询问题，确保正确验证域名有效性
 """
 
 import os
@@ -32,7 +30,7 @@ class Config:
     GITHUB_WORKSPACE = Path(os.getenv('GITHUB_WORKSPACE', os.getcwd()))
     BASE_DIR = GITHUB_WORKSPACE
 
-    # 输入输出路径 - 统一为/data/filter/
+    # 输入输出路径
     FILTER_DIR = BASE_DIR / "data" / "filter"
     INPUT_BLOCKLIST = FILTER_DIR / "adblock_filter.txt"
     INPUT_ALLOWLIST = FILTER_DIR / "allow_filter.txt"
@@ -45,27 +43,19 @@ class Config:
     SMARTDNS_CONFIG_FILE = SMARTDNS_CONFIG_DIR / "smartdns.conf"
     SMARTDNS_PORT = int(os.getenv('SMARTDNS_PORT', 5353))
 
-    # 规则源路径
-    SMARTDNS_SOURCES_DIR = BASE_DIR / "data" / "sources"
-
-    # 备份路径
-    BACKUP_DIR = FILTER_DIR / "backups"
-
     # 缓存配置
     CACHE_DIR = BASE_DIR / "data" / "cache"
-    CACHE_TTL = 86400  # 24小时
+    BACKUP_DIR = FILTER_DIR / "backups"
 
-    # 性能配置 - 优化参数
+    # 性能配置
     MAX_WORKERS = int(os.getenv('MAX_WORKERS', 16))
-    DNS_WORKERS = int(os.getenv('DNS_WORKERS', 100))
-    BATCH_SIZE = int(os.getenv('BATCH_SIZE', 2000))
-    MAX_MEMORY_PERCENT = int(os.getenv('MAX_MEMORY_PERCENT', 80))
-    DNS_TIMEOUT = int(os.getenv('DNS_TIMEOUT', 3))
-    DNS_RETRIES = int(os.getenv('DNS_RETRIES', 1))
+    DNS_WORKERS = int(os.getenv('DNS_WORKERS', 50))
+    BATCH_SIZE = int(os.getenv('BATCH_SIZE', 1000))
+    DNS_TIMEOUT = int(os.getenv('DNS_TIMEOUT', 5))
+    DNS_RETRIES = int(os.getenv('DNS_RETRIES', 2))
 
     # 功能开关
     USE_SMARTDNS = os.getenv('USE_SMARTDNS', 'true').lower() == 'true'
-    PROCESS_SMARTDNS_RULES = os.getenv('PROCESS_SMARTDNS_RULES', 'true').lower() == 'true'
 
 # 日志配置
 def setup_logger():
@@ -81,185 +71,114 @@ def setup_logger():
 
 logger = setup_logger()
 
-# 进度跟踪器
-class ProgressTracker:
+# 规则处理器
+class RuleProcessor:
     def __init__(self):
-        self.progress_file = Config.CACHE_DIR / "progress.json"
-        self.processed_domains = set()
-        
-        # 确保缓存目录存在
-        Config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        
-        if self.progress_file.exists():
-            try:
-                with open(self.progress_file, 'r') as f:
-                    data = json.load(f)
-                    self.processed_domains = set(data.get('processed_domains', []))
-                logger.info(f"从进度文件加载了 {len(self.processed_domains)} 个已处理域名")
-            except Exception as e:
-                logger.error(f"加载进度文件失败: {e}")
-                self.processed_domains = set()
-    
-    def save_progress(self, domains):
-        self.processed_domains.update(domains)
-        try:
-            with open(self.progress_file, 'w') as f:
-                json.dump({'processed_domains': list(self.processed_domains)}, f)
-        except Exception as e:
-            logger.error(f"保存进度文件失败: {e}")
-    
-    def is_processed(self, domain):
-        return domain in self.processed_domains
-
-# 增强的规则处理器
-class EnhancedRuleProcessor:
-    def __init__(self):
-        # 正则模式定义
-        self.regex_patterns = {
-            # 基础Adblock语法
+        self.patterns = {
             'domain': re.compile(r'^(?:@@)?\|{1,2}([\w.-]+)[\^\$\|\/]'),
             'hosts': re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$'),
             'comment': re.compile(r'^[!#]'),
-            'empty': re.compile(r'^\s*$'),
-
-            # AdGuard扩展语法
             'adguard_domain': re.compile(r'^@@?\|\|?([\w.-]+)[\^\$\|\/]'),
-            'adguard_modifiers': re.compile(r'\$([^,\s]+)'),
-            'adguard_css': re.compile(r'.*#\$?#.*'),
-            'adguard_js': re.compile(r'.*#@?#.*'),
-            'adguard_csp': re.compile(r'.*\$csp='),
-            'adguard_redirect': re.compile(r'.*\$redirect(?:-rule)?='),
-
-            # 元素隐藏规则
-            'element_hiding': re.compile(r'.*##.*'),
-            'element_exception': re.compile(r'.*#@#.*'),
-
-            # 复杂模式
-            'regex_pattern': re.compile(r'^/.*/$'),
-            'wildcard_pattern': re.compile(r'.*[*^].*'),
         }
 
-        # 支持的AdGuard修饰符
-        self.supported_modifiers = {
-            'domain', 'third-party', 'script', 'stylesheet', 'image', 'object',
-            'xmlhttprequest', 'websocket', 'webrtc', 'popup', 'subdocument',
-            'document', 'elemhide', 'content', 'genericblock', 'generichide'
-        }
-
-    def parse_rule(self, rule: str) -> Tuple[Optional[str], Optional[dict]]:
-        """
-        解析单条规则，返回域名和修饰符信息
-        返回值: (domain, modifiers)
-        """
+    def parse_rule(self, rule: str) -> Optional[str]:
         rule = rule.strip()
-
-        # 跳过注释和空行
-        if not rule or self.regex_patterns['comment'].match(rule):
-            return None, None
-
-        # 检查是否为元素隐藏规则（不支持）
-        if (self.regex_patterns['element_hiding'].match(rule) or 
-            self.regex_patterns['element_exception'].match(rule)):
-            logger.debug(f"跳过元素隐藏规则: {rule}")
-            return None, None
-
-        # 检查是否为CSS/JS规则（不支持）
-        if (self.regex_patterns['adguard_css'].match(rule) or 
-            self.regex_patterns['adguard_js'].match(rule)):
-            logger.debug(f"跳过CSS/JS规则: {rule}")
-            return None, None
-
-        # 检查是否为CSP规则（不支持）
-        if self.regex_patterns['adguard_csp'].match(rule):
-            logger.debug(f"跳过CSP规则: {rule}")
-            return None, None
-
-        # 检查是否为重定向规则（不支持）
-        if self.regex_patterns['adguard_redirect'].match(rule):
-            logger.debug(f"跳过重定向规则: {rule}")
-            return None, None
-
-        # 检查是否为正则表达式规则（不支持）
-        if self.regex_patterns['regex_pattern'].match(rule):
-            logger.debug(f"跳过正则表达式规则: {rule}")
-            return None, None
-
-        # 提取域名
-        domain = None
+        
+        if not rule or self.patterns['comment'].match(rule):
+            return None
+            
         for pattern_name in ['domain', 'hosts', 'adguard_domain']:
-            match = self.regex_patterns[pattern_name].match(rule)
+            match = self.patterns[pattern_name].match(rule)
             if match:
-                domain = match.group(1)
-                break
+                return match.group(1)
+                
+        return None
 
-        if not domain:
-            # 尝试处理通配符模式
-            if self.regex_patterns['wildcard_pattern'].match(rule):
-                logger.debug(f"跳过通配符规则: {rule}")
-            return None, None
-
-        # 提取修饰符
-        modifiers = {}
-        modifier_matches = self.regex_patterns['adguard_modifiers'].findall(rule)
-        for modifier in modifier_matches:
-            if '=' in modifier:
-                key, value = modifier.split('=', 1)
-                modifiers[key] = value
-            else:
-                modifiers[modifier] = True
-
-        # 过滤不支持的修饰符
-        supported_modifiers = {}
-        for mod, value in modifiers.items():
-            if mod in self.supported_modifiers:
-                supported_modifiers[mod] = value
-            else:
-                logger.debug(f"跳过不支持的修饰符: {mod}")
-
-        return domain, supported_modifiers
-
-    def extract_domains_from_rules(self, rules: List[str]) -> Set[str]:
-        """
-        从规则列表中提取所有域名
-        """
-        domains = set()
-
-        for rule in rules:
-            domain, modifiers = self.parse_rule(rule)
-            if domain:
-                domains.add(domain)
-                logger.debug(f"从规则提取域名: {rule} -> {domain}")
-
-        return domains
+# DNS验证器
+class DNSValidator:
+    def __init__(self):
+        self.cache = {}
+        self.stats = {
+            'total': 0,
+            'valid': 0,
+            'invalid': 0,
+            'cached': 0
+        }
+        
+    async def validate_domain(self, domain):
+        self.stats['total'] += 1
+        
+        if domain in self.cache:
+            self.stats['cached'] += 1
+            return self.cache[domain]
+            
+        # 使用系统DNS进行验证
+        valid = await self._validate_with_system_dns(domain)
+        
+        self.cache[domain] = valid
+        
+        if valid:
+            self.stats['valid'] += 1
+        else:
+            self.stats['invalid'] += 1
+            
+        return valid
+        
+    async def _validate_with_system_dns(self, domain):
+        """使用系统DNS验证域名"""
+        loop = asyncio.get_event_loop()
+        
+        for _ in range(Config.DNS_RETRIES):
+            try:
+                # 尝试解析A记录
+                result = await loop.run_in_executor(
+                    None, 
+                    lambda: socket.getaddrinfo(domain, None, family=socket.AF_INET)
+                )
+                if result:
+                    return True
+                    
+                # 尝试解析AAAA记录
+                result = await loop.run_in_executor(
+                    None, 
+                    lambda: socket.getaddrinfo(domain, None, family=socket.AF_INET6)
+                )
+                if result:
+                    return True
+                    
+            except (socket.gaierror, OSError, Exception):
+                pass
+                
+            # 短暂等待后重试
+            await asyncio.sleep(0.1)
+            
+        return False
 
 # SmartDNS管理器
 class SmartDNSManager:
     def __init__(self):
         self.process = None
-        self.port = Config.SMARTDNS_PORT
-
+        
     def generate_config(self):
-        """生成优化的SmartDNS配置文件"""
-        config_content = f"""bind 127.0.0.1:{self.port}
-bind-tcp 127.0.0.1:{self.port}
+        """生成SmartDNS配置文件"""
+        config_content = f"""bind 127.0.0.1:{Config.SMARTDNS_PORT}
+bind-tcp 127.0.0.1:{Config.SMARTDNS_PORT}
 cache-size 2048
 prefetch-domain yes
 serve-expired yes
 rr-ttl-min 300
 log-level error
 log-size 128K
-speed-check-mode none  # 禁用速度检查以加快响应
-max-reply-ip-num 1  # 只返回一个IP以减少响应大小
+speed-check-mode none
 
-# 优化的DNS服务器配置
-server 223.5.5.5 -exclude-default-group
-server 119.29.29.29 -exclude-default-group
-server-tls 1.12.12.12 -exclude-default-group
+# 国内DNS服务器
+server 223.5.5.5
+server 119.29.29.29
+server-tls 1.12.12.12
 
 # 国际DNS服务器
 server-tls 1.1.1.1 -group overseas -exclude-default-group
 server-tls 8.8.8.8 -group overseas -exclude-default-group
-server-https https://cloudflare-dns.com/dns-query -group overseas -exclude-default-group
 
 # 域名分流规则
 nameserver /cn/223.5.5.5
@@ -300,7 +219,7 @@ nameserver /youtube.com/overseas
             )
 
             # 等待服务启动
-            time.sleep(2)
+            time.sleep(3)
 
             # 测试服务是否正常
             test_result = self.test_connection()
@@ -325,10 +244,10 @@ nameserver /youtube.com/overseas
     def test_connection(self):
         """测试SmartDNS连接"""
         try:
-            # 使用dig测试连接
+            # 使用nslookup测试连接
             cmd = [
-                "dig", "@127.0.0.1", "-p", str(self.port),
-                "google.com", "+short", "+time=3", "+tries=2"
+                "nslookup", "-timeout=3", 
+                "google.com", "127.0.0.1", str(Config.SMARTDNS_PORT)
             ]
 
             result = subprocess.run(
@@ -338,93 +257,16 @@ nameserver /youtube.com/overseas
                 timeout=5
             )
 
-            return result.returncode == 0 and len(result.stdout.strip()) > 0
+            return result.returncode == 0 and "Name:" in result.stdout
         except:
             return False
-
-# 异步DNS验证器
-class AsyncDNSValidator:
-    def __init__(self, smartdns_manager):
-        self.smartdns = smartdns_manager
-        self.resolver = aiodns.DNSResolver()
-        self.resolver.nameservers = ['127.0.0.1']
-        self.resolver.port = Config.SMARTDNS_PORT
-        self.cache = {}
-        self.semaphore = asyncio.Semaphore(Config.DNS_WORKERS)
-        self.stats = {
-            'total': 0,
-            'valid': 0,
-            'invalid': 0,
-            'cached': 0,
-            'smartdns_queries': 0,
-            'fallback_queries': 0
-        }
-
-    async def validate_domain(self, domain):
-        """验证域名有效性"""
-        self.stats['total'] += 1
-
-        # 检查缓存
-        if domain in self.cache:
-            self.stats['cached'] += 1
-            return self.cache[domain]
-
-        # 使用SmartDNS验证
-        if Config.USE_SMARTDNS and self.smartdns:
-            self.stats['smartdns_queries'] += 1
-            result = await self._async_query_domain(domain)
-        else:
-            # 备用验证方法
-            self.stats['fallback_queries'] += 1
-            result = await self._fallback_validate(domain)
-
-        # 缓存结果
-        self.cache[domain] = result
-
-        if result:
-            self.stats['valid'] += 1
-        else:
-            self.stats['invalid'] += 1
-
-        return result
-
-    async def _async_query_domain(self, domain):
-        """使用aiodns进行异步DNS查询"""
-        async with self.semaphore:
-            try:
-                # 查询A记录
-                result = await asyncio.wait_for(
-                    self.resolver.query(domain, 'A'),
-                    timeout=Config.DNS_TIMEOUT
-                )
-                return bool(result)
-            except (aiodns.error.DNSError, asyncio.TimeoutError, Exception):
-                return False
-
-    async def _fallback_validate(self, domain):
-        """备用域名验证方法"""
-        try:
-            # 使用系统DNS解析
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None, 
-                lambda: socket.getaddrinfo(domain, None, family=socket.AF_INET)
-            )
-            return bool(result)
-        except:
-            return False
-
-    def get_stats(self):
-        """获取统计信息"""
-        return self.stats
 
 # 主处理器
 class RuleCleaner:
     def __init__(self):
+        self.validator = DNSValidator()
+        self.processor = RuleProcessor()
         self.smartdns = SmartDNSManager()
-        self.validator = AsyncDNSValidator(self.smartdns)
-        self.processor = EnhancedRuleProcessor()
-        self.progress = ProgressTracker()
 
         # 确保目录存在
         Config.FILTER_DIR.mkdir(parents=True, exist_ok=True)
@@ -436,12 +278,8 @@ class RuleCleaner:
         logger.info("开始处理规则文件")
         start_time = time.time()
 
-        # 启动SmartDNS
-        smartdns_started = False
-        if Config.USE_SMARTDNS:
-            smartdns_started = self.smartdns.start()
-            if not smartdns_started:
-                logger.warning("SmartDNS启动失败，将使用备用验证方法")
+        # 启动SmartDNS（即使不使用它进行验证，也启动以保持配置一致性）
+        smartdns_started = self.smartdns.start()
 
         try:
             # 处理黑名单文件
@@ -488,11 +326,9 @@ class RuleCleaner:
 
         # 提取域名并分组
         for rule in rules:
-            domain, modifiers = self.processor.parse_rule(rule)
+            domain = self.processor.parse_rule(rule)
             if domain:
-                # 跳过已处理的域名
-                if not self.progress.is_processed(domain):
-                    domains_to_validate.add(domain)
+                domains_to_validate.add(domain)
                 if domain not in domain_to_rules:
                     domain_to_rules[domain] = []
                 domain_to_rules[domain].append(rule)
@@ -504,9 +340,6 @@ class RuleCleaner:
 
         # 批量验证域名
         valid_domains = await self.validate_domains_batch(list(domains_to_validate))
-
-        # 更新进度
-        self.progress.save_progress(domains_to_validate)
 
         # 构建有效规则列表
         for domain in valid_domains:
@@ -522,10 +355,17 @@ class RuleCleaner:
         if total == 0:
             return valid_domains
 
+        # 创建信号量限制并发数
+        semaphore = asyncio.Semaphore(Config.DNS_WORKERS)
+
+        async def validate_with_semaphore(domain):
+            async with semaphore:
+                return await self.validator.validate_domain(domain)
+
         # 分批处理
         for i in range(0, total, Config.BATCH_SIZE):
             batch = domains[i:i + Config.BATCH_SIZE]
-            tasks = [self.validator.validate_domain(domain) for domain in batch]
+            tasks = [validate_with_semaphore(domain) for domain in batch]
             results = await asyncio.gather(*tasks)
 
             for j, result in enumerate(results):
@@ -558,7 +398,7 @@ class RuleCleaner:
 
     def print_stats(self, elapsed):
         """输出统计信息"""
-        stats = self.validator.get_stats()
+        stats = self.validator.stats
 
         logger.info("\n===== 处理统计 =====")
         logger.info(f"总耗时: {elapsed:.2f} 秒")
@@ -566,8 +406,6 @@ class RuleCleaner:
         logger.info(f"有效域名: {stats['valid']} 个")
         logger.info(f"无效域名: {stats['invalid']} 个")
         logger.info(f"缓存命中: {stats['cached']} 次")
-        logger.info(f"SmartDNS查询: {stats['smartdns_queries']} 次")
-        logger.info(f"备用查询: {stats['fallback_queries']} 次")
 
 # 主函数
 async def main():
