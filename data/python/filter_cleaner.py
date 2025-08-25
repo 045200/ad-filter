@@ -3,10 +3,9 @@
 
 """
 基于SmartDNS的Adblock规则清理器
+实现SmartDNS + CDN双重验证方案
 专为GitHub Actions环境优化
 支持完整的Adblock/AdGuard/AdGuard Home语法
-使用SmartDNS过滤过期无效域名
-实现国内域名走国内DNS验证，国外域名走国外DNS验证
 """
 
 import os
@@ -52,6 +51,7 @@ class Config:
     CHINA_IP_FILE = EXTRA_DATA_DIR / "china_ip_ranges.txt"
     GEOIP_DB = EXTRA_DATA_DIR / "GeoLite2-Country.mmdb"
     GEOSITE_FILE = EXTRA_DATA_DIR / "geosite.dat"
+    CDN_IP_RANGES_FILE = EXTRA_DATA_DIR / "cdn_ip_ranges.json"
 
     # 规则源路径
     SMARTDNS_SOURCES_DIR = BASE_DIR / "data" / "sources"
@@ -65,11 +65,12 @@ class Config:
 
     # 性能配置
     MAX_WORKERS = int(os.getenv('MAX_WORKERS', 8))
-    DNS_WORKERS = int(os.getenv('DNS_WORKERS', 50))  # 降低并发数避免资源耗尽
-    BATCH_SIZE = int(os.getenv('BATCH_SIZE', 500))   # 减小批处理大小
+    DNS_WORKERS = int(os.getenv('DNS_WORKERS', 50))
+    BATCH_SIZE = int(os.getenv('BATCH_SIZE', 500))
     MAX_MEMORY_PERCENT = int(os.getenv('MAX_MEMORY_PERCENT', 80))
-    DNS_TIMEOUT = int(os.getenv('DNS_TIMEOUT', 10))   # 增加超时时间
-    DNS_RETRIES = int(os.getenv('DNS_RETRIES', 2))    # 增加重试次数
+    DNS_TIMEOUT = int(os.getenv('DNS_TIMEOUT', 10))
+    DNS_RETRIES = int(os.getenv('DNS_RETRIES', 2))
+    CDN_VERIFICATION = os.getenv('CDN_VERIFICATION', 'true').lower() == 'true'
 
     # 功能开关
     USE_SMARTDNS = os.getenv('USE_SMARTDNS', 'true').lower() == 'true'
@@ -102,6 +103,9 @@ EXTRA_DOWNLOADS = {
     },
     "geosite.dat": {
         "url": "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat",
+    },
+    "cdn_ip_ranges.json": {
+        "url": "https://raw.githubusercontent.com/SukkaW/CDN-IP-Blacklist/master/cdn_ip_ranges.json",
     }
 }
 
@@ -246,6 +250,7 @@ class GeoIPTools:
     def __init__(self):
         self.china_ips = set()
         self.geoip_reader = None
+        self.cdn_ip_ranges = {}
         self.loaded = False
 
     def load_data(self):
@@ -264,6 +269,12 @@ class GeoIPTools:
             if Config.USE_GEOIP and Config.GEOIP_DB.exists():
                 self.geoip_reader = maxminddb.open_database(str(Config.GEOIP_DB))
                 logger.info("GeoIP数据库加载成功")
+
+            # 加载CDN IP范围
+            if Config.CDN_VERIFICATION and Config.CDN_IP_RANGES_FILE.exists():
+                with open(Config.CDN_IP_RANGES_FILE, 'r') as f:
+                    self.cdn_ip_ranges = json.load(f)
+                logger.info(f"已加载 {len(self.cdn_ip_ranges)} 个CDN IP范围")
 
             self.loaded = True
         except Exception as e:
@@ -297,6 +308,22 @@ class GeoIPTools:
             pass
 
         return None
+
+    def is_cdn_ip(self, ip: str) -> bool:
+        """检查IP是否属于CDN"""
+        if not self.cdn_ip_ranges:
+            return False
+
+        try:
+            ip_obj = ipaddress.ip_address(ip)
+            for cdn_name, ranges in self.cdn_ip_ranges.items():
+                for cidr in ranges:
+                    if ip_obj in ipaddress.ip_network(cidr):
+                        return True
+        except:
+            pass
+
+        return False
 
     def close(self):
         """关闭资源"""
@@ -505,7 +532,7 @@ server-https https://dns.google/dns-query
         # 至少成功两个测试才认为服务正常
         return success_count >= 2
 
-# DNS验证器
+# DNS验证器 - 实现SmartDNS + CDN双重验证
 class DNSValidator:
     def __init__(self, smartdns_manager: Optional[SmartDNSManager], geo_tools: GeoIPTools):
         self.smartdns = smartdns_manager
@@ -519,12 +546,13 @@ class DNSValidator:
             'cached': 0,
             'smartdns_queries': 0,
             'direct_queries': 0,
+            'cdn_verifications': 0,
             'china_domains': 0,
             'global_domains': 0
         }
 
     async def validate_domain(self, domain: str) -> bool:
-        """验证域名有效性"""
+        """验证域名有效性 - 实现SmartDNS + CDN双重验证"""
         self.stats['total'] += 1
 
         # 检查缓存
@@ -535,48 +563,79 @@ class DNSValidator:
         # 分类域名
         domain_type = self.classifier.classify_domain(domain)
         
-        # 根据域名类型选择验证方式
+        # 第一步：使用SmartDNS或直接DNS查询域名
+        if Config.USE_SMARTDNS and self.smartdns and self.smartdns.is_running:
+            self.stats['smartdns_queries'] += 1
+            dns_result = await self.query_smartdns(domain)
+        else:
+            if domain_type == 'china':
+                dns_servers = Config.CHINA_DNS_SERVERS
+            else:
+                dns_servers = Config.GLOBAL_DNS_SERVERS
+                
+            self.stats['direct_queries'] += 1
+            dns_result = await self.query_direct(domain, dns_servers)
+
+        # 如果DNS查询失败，直接返回无效
+        if not dns_result:
+            self.cache[domain] = False
+            self.stats['invalid'] += 1
+            return False
+
+        # 第二步：CDN验证（如果启用）
+        if Config.CDN_VERIFICATION:
+            self.stats['cdn_verifications'] += 1
+            cdn_result = await self.verify_cdn(domain, dns_result)
+            
+            # 如果CDN验证失败，返回无效
+            if not cdn_result:
+                self.cache[domain] = False
+                self.stats['invalid'] += 1
+                return False
+
+        # 第三步：根据域名类型更新统计
         if domain_type == 'china':
             self.stats['china_domains'] += 1
-            result = await self.validate_china_domain(domain)
-        elif domain_type == 'global':
+        else:
             self.stats['global_domains'] += 1
-            result = await self.validate_global_domain(domain)
-        else:  # unknown
-            # 先尝试用国内DNS验证，失败再用国外DNS
-            result = await self.validate_china_domain(domain)
-            if not result:
-                result = await self.validate_global_domain(domain)
 
         # 缓存结果
-        self.cache[domain] = result
+        self.cache[domain] = True
+        self.stats['valid'] += 1
+        return True
 
-        if result:
-            self.stats['valid'] += 1
-        else:
-            self.stats['invalid'] += 1
+    async def verify_cdn(self, domain: str, ip_addresses: List[str]) -> bool:
+        """CDN验证 - 检查IP是否属于CDN或合法IP范围"""
+        for ip in ip_addresses:
+            # 检查是否为CDN IP
+            if self.geo_tools.is_cdn_ip(ip):
+                logger.debug(f"域名 {domain} 使用CDN IP: {ip}")
+                return True
+            
+            # 检查IP地理位置是否与域名类型匹配
+            domain_type = self.classifier.classify_domain(domain)
+            is_china_ip = self.geo_tools.is_china_ip(ip)
+            
+            if domain_type == 'china' and is_china_ip:
+                return True
+            elif domain_type != 'china' and not is_china_ip:
+                return True
+            
+            # 如果无法确定域名类型，检查IP是否属于中国
+            if domain_type == 'unknown':
+                country_code = self.geo_tools.get_country_code(ip)
+                if country_code == 'CN' and is_china_ip:
+                    self.classifier.china_domains.add(domain)
+                    return True
+                elif country_code and country_code != 'CN' and not is_china_ip:
+                    self.classifier.global_domains.add(domain)
+                    return True
+        
+        # 所有IP验证都失败
+        logger.debug(f"CDN验证失败: {domain} -> {ip_addresses}")
+        return False
 
-        return result
-
-    async def validate_china_domain(self, domain: str) -> bool:
-        """使用国内DNS验证域名"""
-        if Config.USE_SMARTDNS and self.smartdns and self.smartdns.is_running:
-            self.stats['smartdns_queries'] += 1
-            return await self.query_smartdns(domain)
-        else:
-            self.stats['direct_queries'] += 1
-            return await self.query_direct(domain, Config.CHINA_DNS_SERVERS)
-
-    async def validate_global_domain(self, domain: str) -> bool:
-        """使用国外DNS验证域名"""
-        if Config.USE_SMARTDNS and self.smartdns and self.smartdns.is_running:
-            self.stats['smartdns_queries'] += 1
-            return await self.query_smartdns(domain)
-        else:
-            self.stats['direct_queries'] += 1
-            return await self.query_direct(domain, Config.GLOBAL_DNS_SERVERS)
-
-    async def query_smartdns(self, domain: str) -> bool:
+    async def query_smartdns(self, domain: str) -> List[str]:
         """使用SmartDNS查询域名"""
         for attempt in range(Config.DNS_RETRIES):
             try:
@@ -589,7 +648,10 @@ class DNSValidator:
                     resolver.query(domain, 'A'),
                     timeout=Config.DNS_TIMEOUT
                 )
-                return bool(result)
+                
+                # 提取IP地址
+                ip_addresses = [record.host for record in result]
+                return ip_addresses
             except (aiodns.error.DNSError, asyncio.TimeoutError):
                 if attempt < Config.DNS_RETRIES - 1:
                     await asyncio.sleep(0.1)  # 短暂等待后重试
@@ -598,9 +660,9 @@ class DNSValidator:
                 logger.debug(f"SmartDNS查询异常 {domain}: {e}")
                 break
                 
-        return False
+        return []
 
-    async def query_direct(self, domain: str, dns_servers: List[str]) -> bool:
+    async def query_direct(self, domain: str, dns_servers: List[str]) -> List[str]:
         """直接使用指定DNS服务器查询域名"""
         for attempt in range(Config.DNS_RETRIES):
             try:
@@ -615,7 +677,10 @@ class DNSValidator:
                     resolver.query(domain, 'A'),
                     timeout=Config.DNS_TIMEOUT
                 )
-                return bool(result)
+                
+                # 提取IP地址
+                ip_addresses = [record.host for record in result]
+                return ip_addresses
             except (aiodns.error.DNSError, asyncio.TimeoutError):
                 if attempt < Config.DNS_RETRIES - 1:
                     await asyncio.sleep(0.1)  # 短暂等待后重试
@@ -624,7 +689,7 @@ class DNSValidator:
                 logger.debug(f"直接DNS查询异常 {domain}@{dns_server}: {e}")
                 break
                 
-        return False
+        return []
 
     def get_stats(self):
         """获取统计信息"""
@@ -802,6 +867,7 @@ class RuleCleaner:
         logger.info(f"缓存命中: {stats['cached']} 次")
         logger.info(f"SmartDNS查询: {stats['smartdns_queries']} 次")
         logger.info(f"直接DNS查询: {stats['direct_queries']} 次")
+        logger.info(f"CDN验证: {stats['cdn_verifications']} 次")
         logger.info(f"中国域名: {stats['china_domains']} 个")
         logger.info(f"国际域名: {stats['global_domains']} 个")
         logger.info(f"未知域名: {stats['unknown']} 个")
