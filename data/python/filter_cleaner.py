@@ -489,22 +489,30 @@ class RuleCleaner:
         Config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
         Config.EXTRA_DATA_DIR.mkdir(parents=True, exist_ok=True)
         
-        # 下载额外文件
-        asyncio.run(FileDownloader.download_extra_files())
-        
-        # 初始化地理位置工具
-        self.geo_tools = GeoIPTools()
-        self.geo_tools.load_data()
-        
         # 初始化其他组件
         self.smartdns = SmartDNSManager()
-        self.validator = DNSValidator(self.smartdns)
+        self.validator = None
         self.processor = EnhancedRuleProcessor()
+        self.geo_tools = GeoIPTools()
+
+    async def initialize(self):
+        """异步初始化方法"""
+        # 下载额外文件
+        await FileDownloader.download_extra_files()
+        
+        # 加载地理位置工具
+        self.geo_tools.load_data()
+        
+        # 初始化验证器
+        self.validator = DNSValidator(self.smartdns)
 
     async def process(self):
         """处理规则文件"""
         logger.info("开始处理规则文件")
         start_time = time.time()
+
+        # 异步初始化
+        await self.initialize()
 
         # 启动SmartDNS
         smartdns_started = False
