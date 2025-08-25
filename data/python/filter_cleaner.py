@@ -63,11 +63,11 @@ class Config:
 
     # 性能配置
     MAX_WORKERS = int(os.getenv('MAX_WORKERS', 8))
-    DNS_WORKERS = int(os.getenv('DNS_WORKERS', 30))
-    BATCH_SIZE = int(os.getenv('BATCH_SIZE', 500))
+    DNS_WORKERS = int(os.getenv('DNS_WORKERS', 100))  # 增加并发数
+    BATCH_SIZE = int(os.getenv('BATCH_SIZE', 1000))   # 增加批处理大小
     MAX_MEMORY_PERCENT = int(os.getenv('MAX_MEMORY_PERCENT', 80))
-    DNS_TIMEOUT = int(os.getenv('DNS_TIMEOUT', 8))
-    DNS_RETRIES = int(os.getenv('DNS_RETRIES', 2))
+    DNS_TIMEOUT = int(os.getenv('DNS_TIMEOUT', 5))    # 减少超时时间
+    DNS_RETRIES = int(os.getenv('DNS_RETRIES', 1))    # 减少重试次数
 
     # 功能开关
     USE_SMARTDNS = os.getenv('USE_SMARTDNS', 'true').lower() == 'true'
@@ -400,25 +400,23 @@ server-https https://dns.google/dns-query
         except:
             return False
 
-    def query_domain(self, domain):
-        """查询域名解析结果"""
+    async def query_domain_async(self, domain):
+        """异步查询域名解析结果"""
         try:
-            cmd = [
-                "dig", "@127.0.0.1", "-p", str(self.port),
-                domain, "+short", "+time=3", "+tries=1"
-            ]
-
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=Config.DNS_TIMEOUT
-            )
-
-            if result.returncode == 0 and result.stdout.strip():
-                return True
-            return False
-        except:
+            # 使用aiodns进行异步DNS查询
+            resolver = aiodns.DNSResolver()
+            resolver.nameservers = ['127.0.0.1']
+            resolver.port = self.port
+            
+            try:
+                result = await asyncio.wait_for(
+                    resolver.query(domain, 'A'),
+                    timeout=Config.DNS_TIMEOUT
+                )
+                return bool(result)
+            except (aiodns.error.DNSError, asyncio.TimeoutError):
+                return False
+        except Exception:
             return False
 
 # DNS验证器
@@ -447,7 +445,7 @@ class DNSValidator:
         # 使用SmartDNS验证
         if Config.USE_SMARTDNS and self.smartdns:
             self.stats['smartdns_queries'] += 1
-            result = self.smartdns.query_domain(domain)
+            result = await self.smartdns.query_domain_async(domain)
         else:
             # 备用验证方法
             self.stats['fallback_queries'] += 1
@@ -597,10 +595,17 @@ class RuleCleaner:
         if total == 0:
             return valid_domains
 
+        # 使用信号量限制并发数
+        semaphore = asyncio.Semaphore(Config.DNS_WORKERS)
+
+        async def validate_with_semaphore(domain):
+            async with semaphore:
+                return await self.validator.validate_domain(domain)
+
         # 分批处理
         for i in range(0, total, Config.BATCH_SIZE):
             batch = domains[i:i + Config.BATCH_SIZE]
-            tasks = [self.validator.validate_domain(domain) for domain in batch]
+            tasks = [validate_with_semaphore(domain) for domain in batch]
             results = await asyncio.gather(*tasks)
 
             for j, result in enumerate(results):
