@@ -6,6 +6,7 @@
 专为GitHub Actions环境优化
 支持完整的Adblock/AdGuard/AdGuard Home语法
 使用SmartDNS过滤过期无效域名
+实现国内域名走国内DNS验证，国外域名走国外DNS验证
 """
 
 import os
@@ -20,8 +21,9 @@ import aiodns
 import subprocess
 import socket
 import ipaddress
+import random
 from pathlib import Path
-from typing import Set, List, Dict, Optional, Tuple
+from typing import Set, List, Dict, Optional, Tuple, Any
 from datetime import datetime
 from collections import OrderedDict
 import maxminddb
@@ -63,17 +65,32 @@ class Config:
 
     # 性能配置
     MAX_WORKERS = int(os.getenv('MAX_WORKERS', 8))
-    DNS_WORKERS = int(os.getenv('DNS_WORKERS', 100))  # 增加并发数
-    BATCH_SIZE = int(os.getenv('BATCH_SIZE', 1000))   # 增加批处理大小
+    DNS_WORKERS = int(os.getenv('DNS_WORKERS', 50))  # 降低并发数避免资源耗尽
+    BATCH_SIZE = int(os.getenv('BATCH_SIZE', 500))   # 减小批处理大小
     MAX_MEMORY_PERCENT = int(os.getenv('MAX_MEMORY_PERCENT', 80))
-    DNS_TIMEOUT = int(os.getenv('DNS_TIMEOUT', 5))    # 减少超时时间
-    DNS_RETRIES = int(os.getenv('DNS_RETRIES', 1))    # 减少重试次数
+    DNS_TIMEOUT = int(os.getenv('DNS_TIMEOUT', 10))   # 增加超时时间
+    DNS_RETRIES = int(os.getenv('DNS_RETRIES', 2))    # 增加重试次数
 
     # 功能开关
     USE_SMARTDNS = os.getenv('USE_SMARTDNS', 'true').lower() == 'true'
     PROCESS_SMARTDNS_RULES = os.getenv('PROCESS_SMARTDNS_RULES', 'true').lower() == 'true'
     USE_GEOIP = os.getenv('USE_GEOIP', 'true').lower() == 'true'
     USE_GEOSITE = os.getenv('USE_GEOSITE', 'true').lower() == 'true'
+
+    # DNS服务器配置
+    CHINA_DNS_SERVERS = [
+        '114.114.114.114',
+        '114.114.115.115',
+        '223.5.5.5',
+        '223.6.6.6'
+    ]
+    
+    GLOBAL_DNS_SERVERS = [
+        '1.1.1.1',
+        '8.8.8.8',
+        '9.9.9.9',
+        '208.67.222.222'
+    ]
 
 # 额外文件下载配置
 EXTRA_DOWNLOADS = {
@@ -108,12 +125,12 @@ class FileDownloader:
     async def download_file(url: str, dest: Path, session: aiohttp.ClientSession = None):
         """下载文件到指定路径"""
         dest.parent.mkdir(parents=True, exist_ok=True)
-        
+
         close_session = False
         if session is None:
             session = aiohttp.ClientSession()
             close_session = True
-        
+
         try:
             async with session.get(url) as response:
                 if response.status == 200:
@@ -141,7 +158,7 @@ class FileDownloader:
                 dest_path = Config.EXTRA_DATA_DIR / filename
                 if not dest_path.exists():
                     tasks.append(FileDownloader.download_file(info["url"], dest_path, session))
-            
+
             if tasks:
                 await asyncio.gather(*tasks)
                 logger.info("所有额外文件下载完成")
@@ -179,7 +196,7 @@ class EnhancedRuleProcessor:
         rule = rule.strip()
 
         # 跳过注释和空行
-        if not rule or self.regex_patterns['comment'].match(rule):
+        if not rule or self.regex_patterns['comment'].match(rule) or self.regex_patterns['empty'].match(rule):
             return None, None
 
         # 提取域名
@@ -242,12 +259,12 @@ class GeoIPTools:
                         if line and not line.startswith('#'):
                             self.china_ips.add(line)
                 logger.info(f"已加载 {len(self.china_ips)} 个中国IP范围")
-            
+
             # 加载GeoIP数据库
             if Config.USE_GEOIP and Config.GEOIP_DB.exists():
                 self.geoip_reader = maxminddb.open_database(str(Config.GEOIP_DB))
                 logger.info("GeoIP数据库加载成功")
-            
+
             self.loaded = True
         except Exception as e:
             logger.error(f"加载地理位置数据失败: {e}")
@@ -256,7 +273,7 @@ class GeoIPTools:
         """检查IP是否属于中国"""
         if not self.loaded:
             return False
-            
+
         try:
             ip_obj = ipaddress.ip_address(ip)
             for cidr in self.china_ips:
@@ -264,21 +281,21 @@ class GeoIPTools:
                     return True
         except:
             pass
-            
+
         return False
 
     def get_country_code(self, ip: str) -> Optional[str]:
         """获取IP所属国家代码"""
         if not self.geoip_reader:
             return None
-            
+
         try:
             data = self.geoip_reader.get(ip)
             if data and 'country' in data and 'iso_code' in data['country']:
                 return data['country']['iso_code']
         except:
             pass
-            
+
         return None
 
     def close(self):
@@ -286,11 +303,63 @@ class GeoIPTools:
         if self.geoip_reader:
             self.geoip_reader.close()
 
+# 域名分类器
+class DomainClassifier:
+    def __init__(self, geo_tools: GeoIPTools):
+        self.geo_tools = geo_tools
+        self.china_domains = set()
+        self.global_domains = set()
+        self.unknown_domains = set()
+        
+        # 常见中国域名后缀
+        self.china_tlds = {
+            'cn', 'com.cn', 'net.cn', 'org.cn', 'gov.cn', 'edu.cn',
+            'ac.cn', 'mil.cn', '公司', '网络', '中国', '台灣', '台湾', '香港', '澳门'
+        }
+        
+        # 常见中国域名关键词
+        self.china_keywords = {
+            'baidu', 'taobao', 'alibaba', 'tencent', 'qq', 'weixin', 'sina',
+            'sohu', '163', '126', 'jd', '360', 'xiaomi', 'huawei', 'oppo',
+            'vivo', 'meituan', 'douyin', 'bytedance', 'kuaishou', 'bilibili',
+            'weibo', 'zhihu', 'douban', 'ximalaya', 'ctrip', 'qunar', '58',
+            'ganji', 'autohome', 'dianping', 'eleme', 'didiglobal', 'ke'
+        }
+
+    def classify_domain(self, domain: str) -> str:
+        """
+        分类域名：china, global 或 unknown
+        """
+        # 检查域名后缀
+        for tld in self.china_tlds:
+            if domain.endswith('.' + tld) or domain == tld:
+                self.china_domains.add(domain)
+                return 'china'
+        
+        # 检查域名关键词
+        for keyword in self.china_keywords:
+            if keyword in domain:
+                self.china_domains.add(domain)
+                return 'china'
+                
+        # 无法确定的域名标记为unknown，后续通过DNS解析确定
+        self.unknown_domains.add(domain)
+        return 'unknown'
+
+    def get_stats(self):
+        """获取分类统计"""
+        return {
+            'china': len(self.china_domains),
+            'global': len(self.global_domains),
+            'unknown': len(self.unknown_domains)
+        }
+
 # SmartDNS管理器
 class SmartDNSManager:
     def __init__(self):
         self.process = None
         self.port = Config.SMARTDNS_PORT
+        self.is_running = False
 
     def generate_config(self):
         """生成SmartDNS配置文件"""
@@ -344,6 +413,10 @@ server-https https://dns.google/dns-query
         self.generate_config()
 
         try:
+            # 检查是否已有进程在运行
+            if self.is_running:
+                self.stop()
+
             cmd = [
                 Config.SMARTDNS_BIN,
                 "-c", str(Config.SMARTDNS_CONFIG_FILE),
@@ -358,15 +431,25 @@ server-https https://dns.google/dns-query
             )
 
             # 等待服务启动
-            time.sleep(2)
+            time.sleep(3)
 
             # 测试服务是否正常
             test_result = self.test_connection()
             if test_result:
                 logger.info("SmartDNS服务启动成功")
+                self.is_running = True
                 return True
             else:
                 logger.error("SmartDNS服务启动失败")
+                # 输出错误信息
+                try:
+                    stdout, stderr = self.process.communicate(timeout=2)
+                    if stdout:
+                        logger.error(f"SmartDNS stdout: {stdout}")
+                    if stderr:
+                        logger.error(f"SmartDNS stderr: {stderr}")
+                except:
+                    pass
                 return False
 
         except Exception as e:
@@ -376,53 +459,58 @@ server-https https://dns.google/dns-query
     def stop(self):
         """停止SmartDNS服务"""
         if self.process:
-            self.process.terminate()
-            self.process.wait()
-            logger.info("SmartDNS服务已停止")
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=5)
+                logger.info("SmartDNS服务已停止")
+            except:
+                try:
+                    self.process.kill()
+                    self.process.wait()
+                    logger.info("SmartDNS服务已被强制停止")
+                except:
+                    pass
+            finally:
+                self.process = None
+                self.is_running = False
 
     def test_connection(self):
         """测试SmartDNS连接"""
-        try:
-            # 使用dig测试连接
-            cmd = [
-                "dig", "@127.0.0.1", "-p", str(self.port),
-                "google.com", "+short", "+time=3", "+tries=2"
-            ]
-
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-
-            return result.returncode == 0 and len(result.stdout.strip()) > 0
-        except:
-            return False
-
-    async def query_domain_async(self, domain):
-        """异步查询域名解析结果"""
-        try:
-            # 使用aiodns进行异步DNS查询
-            resolver = aiodns.DNSResolver()
-            resolver.nameservers = ['127.0.0.1']
-            resolver.port = self.port
-            
+        test_domains = ['www.baidu.com', 'www.google.com', 'www.cloudflare.com']
+        success_count = 0
+        
+        for domain in test_domains:
             try:
-                result = await asyncio.wait_for(
-                    resolver.query(domain, 'A'),
-                    timeout=Config.DNS_TIMEOUT
+                # 使用dig测试连接
+                cmd = [
+                    "dig", "@127.0.0.1", "-p", str(self.port),
+                    domain, "+short", "+time=5", "+tries=2"
+                ]
+
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=10
                 )
-                return bool(result)
-            except (aiodns.error.DNSError, asyncio.TimeoutError):
-                return False
-        except Exception:
-            return False
+
+                if result.returncode == 0 and len(result.stdout.strip()) > 0:
+                    success_count += 1
+                    logger.debug(f"SmartDNS测试 {domain} 成功")
+                else:
+                    logger.warning(f"SmartDNS测试 {domain} 失败: {result.stderr}")
+            except Exception as e:
+                logger.warning(f"SmartDNS测试 {domain} 异常: {e}")
+
+        # 至少成功两个测试才认为服务正常
+        return success_count >= 2
 
 # DNS验证器
 class DNSValidator:
-    def __init__(self, smartdns_manager):
+    def __init__(self, smartdns_manager: Optional[SmartDNSManager], geo_tools: GeoIPTools):
         self.smartdns = smartdns_manager
+        self.geo_tools = geo_tools
+        self.classifier = DomainClassifier(geo_tools)
         self.cache = {}
         self.stats = {
             'total': 0,
@@ -430,10 +518,12 @@ class DNSValidator:
             'invalid': 0,
             'cached': 0,
             'smartdns_queries': 0,
-            'fallback_queries': 0
+            'direct_queries': 0,
+            'china_domains': 0,
+            'global_domains': 0
         }
 
-    async def validate_domain(self, domain):
+    async def validate_domain(self, domain: str) -> bool:
         """验证域名有效性"""
         self.stats['total'] += 1
 
@@ -442,14 +532,21 @@ class DNSValidator:
             self.stats['cached'] += 1
             return self.cache[domain]
 
-        # 使用SmartDNS验证
-        if Config.USE_SMARTDNS and self.smartdns:
-            self.stats['smartdns_queries'] += 1
-            result = await self.smartdns.query_domain_async(domain)
-        else:
-            # 备用验证方法
-            self.stats['fallback_queries'] += 1
-            result = await self.fallback_validate(domain)
+        # 分类域名
+        domain_type = self.classifier.classify_domain(domain)
+        
+        # 根据域名类型选择验证方式
+        if domain_type == 'china':
+            self.stats['china_domains'] += 1
+            result = await self.validate_china_domain(domain)
+        elif domain_type == 'global':
+            self.stats['global_domains'] += 1
+            result = await self.validate_global_domain(domain)
+        else:  # unknown
+            # 先尝试用国内DNS验证，失败再用国外DNS
+            result = await self.validate_china_domain(domain)
+            if not result:
+                result = await self.validate_global_domain(domain)
 
         # 缓存结果
         self.cache[domain] = result
@@ -461,22 +558,77 @@ class DNSValidator:
 
         return result
 
-    async def fallback_validate(self, domain):
-        """备用域名验证方法"""
-        try:
-            # 使用系统DNS解析
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None, 
-                lambda: socket.getaddrinfo(domain, None, family=socket.AF_INET)
-            )
-            return bool(result)
-        except:
-            return False
+    async def validate_china_domain(self, domain: str) -> bool:
+        """使用国内DNS验证域名"""
+        if Config.USE_SMARTDNS and self.smartdns and self.smartdns.is_running:
+            self.stats['smartdns_queries'] += 1
+            return await self.query_smartdns(domain)
+        else:
+            self.stats['direct_queries'] += 1
+            return await self.query_direct(domain, Config.CHINA_DNS_SERVERS)
+
+    async def validate_global_domain(self, domain: str) -> bool:
+        """使用国外DNS验证域名"""
+        if Config.USE_SMARTDNS and self.smartdns and self.smartdns.is_running:
+            self.stats['smartdns_queries'] += 1
+            return await self.query_smartdns(domain)
+        else:
+            self.stats['direct_queries'] += 1
+            return await self.query_direct(domain, Config.GLOBAL_DNS_SERVERS)
+
+    async def query_smartdns(self, domain: str) -> bool:
+        """使用SmartDNS查询域名"""
+        for attempt in range(Config.DNS_RETRIES):
+            try:
+                # 使用aiodns进行异步DNS查询
+                resolver = aiodns.DNSResolver()
+                resolver.nameservers = ['127.0.0.1']
+                resolver.port = Config.SMARTDNS_PORT
+
+                result = await asyncio.wait_for(
+                    resolver.query(domain, 'A'),
+                    timeout=Config.DNS_TIMEOUT
+                )
+                return bool(result)
+            except (aiodns.error.DNSError, asyncio.TimeoutError):
+                if attempt < Config.DNS_RETRIES - 1:
+                    await asyncio.sleep(0.1)  # 短暂等待后重试
+                continue
+            except Exception as e:
+                logger.debug(f"SmartDNS查询异常 {domain}: {e}")
+                break
+                
+        return False
+
+    async def query_direct(self, domain: str, dns_servers: List[str]) -> bool:
+        """直接使用指定DNS服务器查询域名"""
+        for attempt in range(Config.DNS_RETRIES):
+            try:
+                # 随机选择一个DNS服务器
+                dns_server = random.choice(dns_servers)
+                
+                # 使用aiodns进行异步DNS查询
+                resolver = aiodns.DNSResolver()
+                resolver.nameservers = [dns_server]
+                
+                result = await asyncio.wait_for(
+                    resolver.query(domain, 'A'),
+                    timeout=Config.DNS_TIMEOUT
+                )
+                return bool(result)
+            except (aiodns.error.DNSError, asyncio.TimeoutError):
+                if attempt < Config.DNS_RETRIES - 1:
+                    await asyncio.sleep(0.1)  # 短暂等待后重试
+                continue
+            except Exception as e:
+                logger.debug(f"直接DNS查询异常 {domain}@{dns_server}: {e}")
+                break
+                
+        return False
 
     def get_stats(self):
         """获取统计信息"""
-        return self.stats
+        return {**self.stats, **self.classifier.get_stats()}
 
 # 主处理器
 class RuleCleaner:
@@ -486,7 +638,7 @@ class RuleCleaner:
         Config.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         Config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
         Config.EXTRA_DATA_DIR.mkdir(parents=True, exist_ok=True)
-        
+
         # 初始化其他组件
         self.smartdns = SmartDNSManager()
         self.validator = None
@@ -497,12 +649,12 @@ class RuleCleaner:
         """异步初始化方法"""
         # 下载额外文件
         await FileDownloader.download_extra_files()
-        
+
         # 加载地理位置工具
         self.geo_tools.load_data()
-        
+
         # 初始化验证器
-        self.validator = DNSValidator(self.smartdns)
+        self.validator = DNSValidator(self.smartdns, self.geo_tools)
 
     async def process(self):
         """处理规则文件"""
@@ -517,7 +669,7 @@ class RuleCleaner:
         if Config.USE_SMARTDNS:
             smartdns_started = self.smartdns.start()
             if not smartdns_started:
-                logger.warning("SmartDNS启动失败，将使用备用验证方法")
+                logger.warning("SmartDNS启动失败，将使用直接DNS验证方法")
 
         try:
             # 处理黑名单文件
@@ -543,13 +695,13 @@ class RuleCleaner:
             # 关闭地理位置工具
             self.geo_tools.close()
 
-    def read_rules(self, file_path):
+    def read_rules(self, file_path: Path) -> List[str]:
         """读取规则文件"""
         rules = []
         if file_path.exists():
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    rules = f.readlines()
+                    rules = [line.rstrip('\n') + '\n' for line in f]  # 确保每行有换行符
                 logger.info(f"从 {file_path.name} 读取 {len(rules)} 条规则")
             except Exception as e:
                 logger.error(f"读取文件 {file_path} 失败: {e}")
@@ -558,7 +710,7 @@ class RuleCleaner:
 
         return rules
 
-    async def validate_rules(self, rules):
+    async def validate_rules(self, rules: List[str]) -> List[str]:
         """验证规则有效性"""
         valid_rules = []
         domains_to_validate = set()
@@ -587,7 +739,7 @@ class RuleCleaner:
 
         return valid_rules
 
-    async def validate_domains_batch(self, domains):
+    async def validate_domains_batch(self, domains: List[str]) -> Set[str]:
         """批量验证域名"""
         valid_domains = set()
         total = len(domains)
@@ -600,7 +752,7 @@ class RuleCleaner:
 
         async def validate_with_semaphore(domain):
             async with semaphore:
-                return await self.validator.validate_domain(domain)
+                return domain, await self.validator.validate_domain(domain)
 
         # 分批处理
         for i in range(0, total, Config.BATCH_SIZE):
@@ -608,27 +760,29 @@ class RuleCleaner:
             tasks = [validate_with_semaphore(domain) for domain in batch]
             results = await asyncio.gather(*tasks)
 
-            for j, result in enumerate(results):
+            for domain, result in results:
                 if result:
-                    valid_domains.add(batch[j])
+                    valid_domains.add(domain)
 
             # 输出进度
             processed = min(i + Config.BATCH_SIZE, total)
-            logger.info(f"进度: {processed}/{total} 域名")
+            logger.info(f"进度: {processed}/{total} 域名, 有效: {len(valid_domains)}")
 
         logger.info(f"验证完成: 有效 {len(valid_domains)}/{total} 域名")
         return valid_domains
 
-    def save_rules(self, rules, output_path, input_path):
+    def save_rules(self, rules: List[str], output_path: Path, input_path: Path):
         """保存规则到文件"""
         try:
             # 创建备份
             if input_path.exists():
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup_file = Config.BACKUP_DIR / f"{input_path.stem}_backup_{timestamp}.txt"
-                backup_file.write_text(input_path.read_text())
+                backup_file.parent.mkdir(parents=True, exist_ok=True)
+                backup_file.write_text(input_path.read_text(encoding='utf-8'), encoding='utf-8')
 
             # 保存新规则
+            output_path.parent.mkdir(parents=True, exist_ok=True)
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.writelines(rules)
 
@@ -636,7 +790,7 @@ class RuleCleaner:
         except Exception as e:
             logger.error(f"保存规则失败: {e}")
 
-    def print_stats(self, elapsed):
+    def print_stats(self, elapsed: float):
         """输出统计信息"""
         stats = self.validator.get_stats()
 
@@ -647,7 +801,10 @@ class RuleCleaner:
         logger.info(f"无效域名: {stats['invalid']} 个")
         logger.info(f"缓存命中: {stats['cached']} 次")
         logger.info(f"SmartDNS查询: {stats['smartdns_queries']} 次")
-        logger.info(f"备用查询: {stats['fallback_queries']} 次")
+        logger.info(f"直接DNS查询: {stats['direct_queries']} 次")
+        logger.info(f"中国域名: {stats['china_domains']} 个")
+        logger.info(f"国际域名: {stats['global_domains']} 个")
+        logger.info(f"未知域名: {stats['unknown']} 个")
 
 # 主函数
 async def main():
