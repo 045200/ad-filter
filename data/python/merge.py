@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-AdGuard规则处理器 - 优化版
-GitHub Actions环境专用，支持完整AdGuard语法，输出纯净规则文件
+AdGuard规则处理器 - 宽容模式优化版
+采用宽松的语法识别逻辑，最大化保留有效规则
 """
 
 import os
@@ -34,46 +34,30 @@ class AdBlockConfig:
 
     # 性能配置
     MAX_CONCURRENT = 2
-    RULE_LEN_LIMIT = 10000  # 增加长度限制
+    RULE_LEN_LIMIT = 15000  # 增加长度限制
     BATCH_SIZE = 5000
     MAX_RULES_PER_FILE = 300000
-
-    # 内存管理配置
-    MAX_MEMORY_PERCENT = 80
-    MEMORY_CHECK_INTERVAL = 10000
 
     # 语法支持配置
     SUPPORT_HOSTS_CONVERT = True
     SUPPORT_PLAIN_DOMAIN = True
-    MIN_DOMAIN_LENGTH = 3
-
-# ==================== 环境检测 ====================
-def check_environment():
-    """检查GitHub Actions环境"""
-    is_github_actions = os.getenv('GITHUB_ACTIONS') == 'true'
-    if is_github_actions:
-        # GitHub Actions环境优化
-        AdBlockConfig.MAX_CONCURRENT = 2
-        AdBlockConfig.BATCH_SIZE = 3000
+    MIN_DOMAIN_LENGTH = 2  # 降低最小域名长度限制
+    LENIENT_PARSING = True  # 启用宽容解析模式
 
 # ==================== 日志初始化 ====================
 def setup_logging() -> logging.Logger:
-    """日志初始化 - GitHub Actions友好格式"""
+    """日志初始化"""
     logger = logging.getLogger('AdBlockProcessor')
     logger.setLevel(logging.INFO)
-
-    # 清除现有处理器
+    
     if logger.hasHandlers():
         logger.handlers.clear()
-
-    # 创建格式化器 - GitHub Actions友好格式
+        
     formatter = logging.Formatter('%(levelname)s: %(message)s')
-
-    # 控制台处理器
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
-
+    
     return logger
 
 logger = setup_logging()
@@ -89,28 +73,53 @@ except ImportError:
 # ==================== 规则解析器 ====================
 class AdBlockRuleParser:
     """
-    AdGuard规则解析器
-    完整支持AdGuard和AdGuard Home语法
+    AdGuard规则解析器 - 宽容模式
+    采用宽松的语法识别逻辑，最大化保留有效规则
     """
 
-    # 预编译正则表达式 - 完整AdGuard语法支持
-    COMMENT_REGEX = re.compile(r'^\s*[!#;]|^\[Adblock|^!\s*')
-    HOSTS_REGEX = re.compile(r'^\s*(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|::1)\s+([a-zA-Z0-9.-]+)\s*(?:#.*)?$')
-    DOMAIN_RULE_REGEX = re.compile(r'^(@@?)?(\|\||\|)([a-zA-Z0-9.*_-]+)\^?(\$[^#]*)?(?:#.*)?$')  # 修改：支持单竖线
-    ELEMENT_HIDE_REGEX = re.compile(r'^#@?#(.+)$')
-    MODIFIER_REGEX = re.compile(r'\$([a-zA-Z-]+(?:=[^,]+)?(?:,[a-zA-Z-]+(?:=[^,]+)?)*)$')
-    REGEX_RULE_REGEX = re.compile(r'^/(.*)/\$?[^#]*(?:#.*)?$')
-    PLAIN_DOMAIN_REGEX = re.compile(r'^(?!.*[/*^|$@#%]).*[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$')
+    # 预编译正则表达式 - 宽松模式
+    COMMENT_REGEX = re.compile(r'^\s*[!#;]|^!\s*\[Adblock|^!\s*Title|^!\s*Version|^!\s*Expires', re.IGNORECASE)
+    HOSTS_REGEX = re.compile(r'^\s*(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|::1)\s+([a-zA-Z0-9.*_-]+)\s*(?:#.*)?$')
+    
+    # 宽松的域名规则匹配
+    DOMAIN_RULE_REGEX = re.compile(r'^(@@?)?(\|\||\|)?([^#\s]+?)(\^?|\$?[^#\s]*)?\s*(?:#.*)?$')
+    
+    # 元素隐藏规则 - 宽松匹配
+    ELEMENT_HIDE_REGEX = re.compile(r'^#@?#([^#\s].*)$')
+    
+    # 修饰符解析 - 宽松匹配
+    MODIFIER_REGEX = re.compile(r'\$([a-zA-Z0-9-]+(?:=[^,\s]+)?(?:,[a-zA-Z0-9-]+(?:=[^,\s]+)?)*)\s*$')
+    
+    # 正则表达式规则 - 宽松匹配
+    REGEX_RULE_REGEX = re.compile(r'^/(.+)/\$?[^#]*(?:#.*)?$')
+    
+    # 纯域名检测 - 宽松条件
+    PLAIN_DOMAIN_REGEX = re.compile(r'^[a-zA-Z0-9.*_-]+\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})*$')
 
-    # 完整AdGuard修饰符列表
+    # 支持的修饰符列表 - 扩展版
     SUPPORTED_MODIFIERS = {
-        'document', 'script', 'image', 'stylesheet', 'xmlhttprequest',
-        'subdocument', 'third-party', 'first-party', 'collapse', 'generichide',
-        'genericblock', 'elemhide', 'important', 'badfilter', 'redirect',
-        'dnsrewrite', 'popup', 'to', 'domain', 'all', 'https', 'http', 'mp4',
-        'inline-font', 'media', 'object', 'other', 'ping', 'websocket', 'webrtc',
-        'frame', 'cookie', 'header', 'removeheader', 'removeparam', 'jsonprune',
-        'replace', 'cname', 'network', 'app', 'method', 'redirect-rule'
+        # 基础内容类型
+        'document', 'script', 'image', 'stylesheet', 'object', 'xmlhttprequest',
+        'subdocument', 'websocket', 'webrtc', 'media', 'font', 'other',
+        
+        # 高级选项
+        'third-party', 'first-party', 'popup', 'collapse', 'generichide',
+        'genericblock', 'elemhide', 'jsinject', 'content', 'extension',
+        
+        # 特殊功能
+        'important', 'badfilter', 'redirect', 'redirect-rule', 'removeparam',
+        'removeheader', 'cname', 'dnsrewrite', 'dnstype', 'max-age',
+        
+        # 网络请求选项
+        'all', 'to', 'from', 'method', 'domain', 'denyallow',
+        
+        # AdGuard Home特定
+        'client', 'ctag', 'app',
+        
+        # 其他常见修饰符
+        'match-case', '~third-party', '~first-party', '~image', '~script',
+        '~object', '~xmlhttprequest', '~websocket', '~webrtc', '~media',
+        '~font', '~other', '~document', '~stylesheet', '~subdocument'
     }
 
     def __init__(self):
@@ -130,7 +139,7 @@ class AdBlockRuleParser:
         self.stats = {
             'total_processed': 0, 'valid_rules': 0, 'invalid_rules': 0,
             'duplicates': 0, 'bloom_false_positives': 0, 'hosts_converted': 0,
-            'plain_domain_converted': 0
+            'plain_domain_converted': 0, 'lenient_accepted': 0
         }
 
     def _generate_rule_hash(self, rule: str) -> str:
@@ -138,24 +147,43 @@ class AdBlockRuleParser:
         return hashlib.sha256(rule.encode('utf-8')).hexdigest()
 
     def is_comment_or_empty(self, line: str) -> bool:
-        """检查是否为注释或空行"""
-        return not line or not line.strip() or self.COMMENT_REGEX.match(line.strip()) is not None
+        """检查是否为注释或空行 - 宽松模式"""
+        line = line.strip()
+        if not line:
+            return True
+            
+        # 检查标准注释
+        if line.startswith(('!', '#', ';')):
+            # 检查是否是特殊注释（可能包含规则）
+            if line.startswith('!#') or line.startswith('!+') or line.startswith('! '):
+                return False
+            return True
+            
+        # 检查Adblock Plus头部
+        if line.startswith('[Adblock') or '[Adblock Plus' in line:
+            return True
+            
+        return False
 
     def normalize_rule(self, rule: str) -> str:
-        """规则标准化处理"""
+        """规则标准化处理 - 宽松模式"""
         rule = rule.strip()
         if not rule:
             return ""
 
-        # 分离规则主体和注释
+        # 分离规则主体和注释 - 宽松处理
         if '#' in rule and not rule.startswith('#'):
-            rule = rule.split('#')[0].strip()
+            parts = rule.split('#', 1)
+            rule = parts[0].strip()
+            # 保留可能包含重要信息的注释部分
+            if len(parts) > 1 and parts[1].strip() and len(parts[1].strip()) < 20:
+                rule += ' #' + parts[1].strip()
 
         # 对于非元素隐藏规则，转换为小写
         if not rule.startswith(('##', '#@#')):
             rule = rule.lower()
 
-        # 处理修饰符标准化
+        # 处理修饰符标准化 - 宽松处理
         if '$' in rule:
             parts = rule.split('$', 1)
             base_rule = parts[0].rstrip()
@@ -163,12 +191,19 @@ class AdBlockRuleParser:
 
             # 处理修饰符中的注释
             if '#' in modifiers:
-                modifiers = modifiers.split('#')[0].strip()
+                mod_parts = modifiers.split('#', 1)
+                modifiers = mod_parts[0].strip()
+                # 保留简短的注释
+                if len(mod_parts) > 1 and mod_parts[1].strip() and len(mod_parts[1].strip()) < 10:
+                    modifiers += ' #' + mod_parts[1].strip()
 
-            # 分割修饰符并排序
+            # 分割修饰符并排序 - 宽松处理未知修饰符
             mod_list = []
             for mod in modifiers.split(','):
                 mod = mod.strip()
+                if not mod:
+                    continue
+                    
                 if '=' in mod:
                     key, value = mod.split('=', 1)
                     key = key.strip()
@@ -178,20 +213,31 @@ class AdBlockRuleParser:
                         domains = sorted(set(value.split('|')))
                         value = '|'.join(domains)
                     mod_list.append(f"{key}={value}")
-                elif mod in self.SUPPORTED_MODIFIERS:
+                else:
+                    # 即使是不认识的修饰符也保留
                     mod_list.append(mod)
 
             # 排序修饰符以确保一致性
-            mod_list.sort()
+            try:
+                mod_list.sort()
+            except:
+                # 如果排序失败，保持原顺序
+                pass
+                
             rule = f"{base_rule}${','.join(mod_list)}"
 
         return rule
 
     def validate_modifiers(self, modifiers: str) -> bool:
-        """验证修饰符有效性"""
+        """验证修饰符有效性 - 宽松模式"""
         if not modifiers:
-            return True  # 修改：允许没有修饰符的规则
+            return True
 
+        # 宽松模式：允许任何修饰符
+        if AdBlockConfig.LENIENT_PARSING:
+            return True
+
+        # 严格模式：只检查已知修饰符
         for mod in modifiers.split(','):
             mod = mod.strip()
             if '=' in mod:
@@ -236,13 +282,13 @@ class AdBlockRuleParser:
             return False
 
     def validate_rule(self, rule: str) -> bool:
-        """验证规则基本有效性"""
+        """验证规则基本有效性 - 宽松模式"""
         if not rule or len(rule) > AdBlockConfig.RULE_LEN_LIMIT:
             self.stats['invalid_rules'] += 1
             return False
 
-        # 检查修饰符有效性
-        if '$' in rule:
+        # 宽松模式下不严格验证修饰符
+        if not AdBlockConfig.LENIENT_PARSING and '$' in rule:
             parts = rule.split('$', 1)
             if len(parts) > 1 and not self.validate_modifiers(parts[1]):
                 self.stats['invalid_rules'] += 1
@@ -268,8 +314,57 @@ class AdBlockRuleParser:
         self.stats['hosts_converted'] += 1
         return f"||{domain}^"
 
+    def lenient_rule_conversion(self, rule: str) -> Optional[Tuple[str, bool]]:
+        """宽容模式下的规则转换"""
+        # 尝试处理可能被误判的规则
+        original_rule = rule
+        
+        # 处理可能包含注释的规则
+        if '#' in rule and not rule.startswith('#'):
+            rule = rule.split('#')[0].strip()
+            
+        # 处理可能包含多余空格的规则
+        rule = re.sub(r'\s+', ' ', rule).strip()
+        
+        # 尝试识别白名单规则
+        is_allow = rule.startswith('@@')
+        if is_allow:
+            rule = rule[2:]
+            
+        # 尝试识别元素隐藏规则
+        if rule.startswith('##') or rule.startswith('#@#'):
+            if self.validate_rule(rule) and not self.is_duplicate(rule):
+                return (rule, is_allow)
+                
+        # 尝试识别域名规则
+        if re.match(r'^(\|\|)?[a-zA-Z0-9.*_-]+\^?$', rule):
+            if not rule.startswith('||'):
+                rule = '||' + rule
+            if not rule.endswith('^'):
+                rule += '^'
+                
+            if self.validate_rule(rule) and not self.is_duplicate(rule):
+                self.stats['lenient_accepted'] += 1
+                return (rule, is_allow)
+                
+        # 尝试识别包含修饰符的规则
+        if '$' in rule:
+            if self.validate_rule(rule) and not self.is_duplicate(rule):
+                self.stats['lenient_accepted'] += 1
+                return (rule, is_allow)
+                
+        # 尝试识别纯域名
+        if AdBlockConfig.SUPPORT_PLAIN_DOMAIN and self.PLAIN_DOMAIN_REGEX.match(rule):
+            converted_rule = f"@@||{rule}^" if is_allow else f"||{rule}^"
+            if self.validate_rule(converted_rule) and not self.is_duplicate(converted_rule):
+                self.stats['lenient_accepted'] += 1
+                self.stats['plain_domain_converted'] += 1
+                return (converted_rule, is_allow)
+                
+        return None
+
     def parse_rule(self, line: str, is_hosts: bool = False) -> Optional[Tuple[str, bool]]:
-        """解析单行规则，返回(规则, 是否白名单)"""
+        """解析单行规则，返回(规则, 是否白名单) - 宽容模式"""
         if self.is_comment_or_empty(line):
             return None
 
@@ -291,12 +386,20 @@ class AdBlockRuleParser:
         if rule.startswith('##') or rule.startswith('#@#'):
             if self.validate_rule(rule) and not self.is_duplicate(rule):
                 return (rule, is_allow)
+            # 宽容模式：即使验证失败也尝试保留
+            if AdBlockConfig.LENIENT_PARSING:
+                self.stats['lenient_accepted'] += 1
+                return (rule, is_allow)
             return None
 
         # 域名规则 (支持单竖线和双竖线)
         domain_match = self.DOMAIN_RULE_REGEX.match(rule)
         if domain_match:
             if self.validate_rule(rule) and not self.is_duplicate(rule):
+                return (rule, is_allow)
+            # 宽容模式：即使验证失败也尝试保留
+            if AdBlockConfig.LENIENT_PARSING:
+                self.stats['lenient_accepted'] += 1
                 return (rule, is_allow)
             return None
 
@@ -305,21 +408,39 @@ class AdBlockRuleParser:
         if regex_match:
             if self.validate_rule(rule) and not self.is_duplicate(rule):
                 return (rule, is_allow)
+            # 宽容模式：即使验证失败也尝试保留
+            if AdBlockConfig.LENIENT_PARSING:
+                self.stats['lenient_accepted'] += 1
+                return (rule, is_allow)
             return None
 
         # AdGuard修饰符规则
         if '$' in rule:
             if self.validate_rule(rule) and not self.is_duplicate(rule):
                 return (rule, is_allow)
+            # 宽容模式：即使验证失败也尝试保留
+            if AdBlockConfig.LENIENT_PARSING:
+                self.stats['lenient_accepted'] += 1
+                return (rule, is_allow)
             return None
 
         # 纯域名规则 (自动转换为白名单)
         if AdBlockConfig.SUPPORT_PLAIN_DOMAIN and self.PLAIN_DOMAIN_REGEX.match(rule):
-            converted_rule = f"@@||{rule}^"
+            converted_rule = f"@@||{rule}^" if is_allow else f"||{rule}^"
             self.stats['plain_domain_converted'] += 1
             if self.validate_rule(converted_rule) and not self.is_duplicate(converted_rule):
-                return (converted_rule, True)
+                return (converted_rule, is_allow)
+            # 宽容模式：即使验证失败也尝试保留
+            if AdBlockConfig.LENIENT_PARSING:
+                self.stats['lenient_accepted'] += 1
+                return (converted_rule, is_allow)
             return None
+
+        # 宽容模式：尝试其他转换方法
+        if AdBlockConfig.LENIENT_PARSING:
+            result = self.lenient_rule_conversion(rule)
+            if result:
+                return result
 
         # 无法识别的规则类型
         self.stats['invalid_rules'] += 1
@@ -334,7 +455,7 @@ class AdBlockProcessor:
         self.block_rules: Set[str] = set()
         self.allow_rules: Set[str] = set()
         self.processed_files = 0
-        self.file_stats: Dict[str, Dict[str, int]] = {}  # 记录每个文件的统计信息
+        self.file_stats: Dict[str, Dict[str, int]] = {}
 
     async def process_file(self, file_path: Path, is_hosts: bool = False) -> int:
         """处理单个文件"""
@@ -350,13 +471,13 @@ class AdBlockProcessor:
         try:
             # 尝试多种编码
             encodings = ['utf-8', 'gbk', 'latin-1', 'iso-8859-1', 'utf-8-sig']
-            
+
             for encoding in encodings:
                 try:
-                    async with aiofiles.open(file_path, 'r', encoding=encoding, errors='strict') as f:
+                    async with aiofiles.open(file_path, 'r', encoding=encoding) as f:
                         async for line in f:
                             file_stats['total_lines'] += 1
-                            
+
                             # 限制单文件最大规则数
                             if rule_count > AdBlockConfig.MAX_RULES_PER_FILE:
                                 logger.warning(f"文件 {file_path.name} 超过最大规则限制，停止处理")
@@ -378,19 +499,43 @@ class AdBlockProcessor:
                                 file_stats['valid_rules'] += 1
                             else:
                                 file_stats['invalid_rules'] += 1
-                        
+
                         # 如果成功读取，跳出编码循环
                         logger.debug(f"使用编码 {encoding} 成功读取文件 {file_path.name}")
                         break
                 except UnicodeDecodeError:
-                    if encoding == encodings[-1]:  # 如果是最后一个编码
+                    if encoding == encodings[-1]:
                         logger.error(f"无法解码文件 {file_path.name}，尝试所有编码后仍失败")
-                        raise
-                    continue  # 尝试下一个编码
+                        # 宽容模式：尝试使用错误忽略模式读取
+                        try:
+                            async with aiofiles.open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                content = await f.read()
+                                lines = content.split('\n')
+                                for line in lines:
+                                    file_stats['total_lines'] += 1
+                                    if self.parser.is_comment_or_empty(line):
+                                        file_stats['comments_empty'] += 1
+                                        continue
+                                        
+                                    result = self.parser.parse_rule(line, is_hosts=is_hosts)
+                                    if result:
+                                        rule, is_allow = result
+                                        if is_allow:
+                                            self.allow_rules.add(rule)
+                                        else:
+                                            self.block_rules.add(rule)
+                                        rule_count += 1
+                                        file_stats['valid_rules'] += 1
+                                    else:
+                                        file_stats['invalid_rules'] += 1
+                        except Exception as e:
+                            logger.error(f"即使使用错误忽略模式也无法读取文件 {file_path.name}: {str(e)}")
+                            raise
+                    continue
 
             self.processed_files += 1
-            self.file_stats[file_path.name] = file_stats  # 保存文件统计信息
-            
+            self.file_stats[file_path.name] = file_stats
+
             # 记录详细统计信息
             logger.info(f"处理完成: {file_path.name} → {rule_count} 条规则")
             if rule_count == 0:
@@ -401,7 +546,6 @@ class AdBlockProcessor:
 
         except Exception as e:
             logger.error(f"处理文件 {file_path.name} 时出错: {str(e)}")
-            # 记录错误文件统计
             self.file_stats[file_path.name] = {
                 'total_lines': 0,
                 'comments_empty': 0,
@@ -425,14 +569,13 @@ class AdBlockProcessor:
         for pattern in AdBlockConfig.ADBLOCK_PATTERNS:
             for file_path in AdBlockConfig.INPUT_DIR.glob(pattern):
                 if file_path.is_file():
-                    # 检查文件是否为空
                     if file_path.stat().st_size == 0:
                         logger.warning(f"跳过空文件: {file_path.name}")
                         continue
                     task = self.process_file_with_semaphore(file_path, False, semaphore)
                     tasks.append(task)
 
-        # 处理白名单规则文件 - 优先处理白名单文件
+        # 处理白名单规则文件
         for pattern in AdBlockConfig.ALLOW_PATTERNS:
             for file_path in AdBlockConfig.INPUT_DIR.glob(pattern):
                 if file_path.is_file():
@@ -477,7 +620,6 @@ class AdBlockProcessor:
 
     def get_sorted_rules(self) -> Tuple[List[str], List[str]]:
         """获取排序后的规则列表"""
-        # 按规则类型和字母顺序排序
         def rule_sort_key(r):
             if r.startswith('##'):
                 return (3, r)  # 元素隐藏规则
@@ -502,7 +644,7 @@ class AdBlockProcessor:
                 stats['bloom_false_positives'] / stats['total_processed'] * 100 
                 if stats['total_processed'] > 0 else 0
             ),
-            'file_stats': self.file_stats  # 添加文件级统计信息
+            'file_stats': self.file_stats
         })
         return stats
 
@@ -515,12 +657,11 @@ def ensure_directories():
     logger.info(f"输出目录: {AdBlockConfig.OUTPUT_DIR.absolute()}")
 
 async def write_rules(block_rules: List[str], allow_rules: List[str]):
-    """写入规则到文件 - 纯净输出，无文件头"""
+    """写入规则到文件"""
     # 写入拦截规则
     output_block = AdBlockConfig.OUTPUT_DIR / AdBlockConfig.OUTPUT_BLOCK
     try:
         async with aiofiles.open(output_block, 'w', encoding='utf-8', newline='\n') as f:
-            # 分批写入规则
             for i in range(0, len(block_rules), AdBlockConfig.BATCH_SIZE):
                 batch = block_rules[i:i + AdBlockConfig.BATCH_SIZE]
                 await f.write('\n'.join(batch) + '\n')
@@ -547,10 +688,8 @@ async def write_rules(block_rules: List[str], allow_rules: List[str]):
 async def main():
     """主处理函数"""
     start_time = datetime.now()
-    logger.info("AdGuard规则处理开始")
+    logger.info("AdGuard规则处理开始 - 宽容模式")
 
-    # 检查环境
-    check_environment()
     ensure_directories()
 
     # 初始化处理器
@@ -579,6 +718,7 @@ async def main():
     logger.info(f"布隆过滤器假阳性: {stats['bloom_false_positives']} ({stats['bloom_false_positive_rate']:.6f}%)")
     logger.info(f"Hosts规则转换: {stats['hosts_converted']}")
     logger.info(f"纯域名转换: {stats['plain_domain_converted']}")
+    logger.info(f"宽容模式接受: {stats['lenient_accepted']}")
     logger.info(f"最终拦截规则: {stats['final_block_rules']}")
     logger.info(f"最终允许规则: {stats['final_allow_rules']}")
 
