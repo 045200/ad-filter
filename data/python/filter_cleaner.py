@@ -35,7 +35,7 @@ class Config:
     # 输入输出路径 - 统一为/data/filter/
     FILTER_DIR = BASE_DIR / "data" / "filter"
     INPUT_BLOCKLIST = FILTER_DIR / "adblock_filter.txt"
-    INPUT_ALLOWLIST = FILTER_DIR / "filter_allow.txt"
+    INPUT_ALLOWLIST = FILTER_DIR / "allow_filter.txt"
     OUTPUT_BLOCKLIST = FILTER_DIR / "adblock.txt"
     OUTPUT_ALLOWLIST = FILTER_DIR / "allow.txt"
     
