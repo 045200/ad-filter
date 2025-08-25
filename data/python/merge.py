@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-AdGuard规则处理器 - 宽容模式优化版
-采用宽松的语法识别逻辑，最大化保留有效规则
+AdGuard规则处理器 - 白名单规则优化版
+专门处理包含大量白名单规则的文件
 """
 
 import os
@@ -17,7 +17,7 @@ from datetime import datetime
 
 # ==================== 环境配置 ====================
 class AdBlockConfig:
-    """配置类 - GitHub Actions环境优化"""
+    """配置类 - 白名单规则优化"""
     # 基础路径配置
     INPUT_DIR = Path(os.getenv('INPUT_DIR', './data/filter'))
     OUTPUT_DIR = Path(os.getenv('OUTPUT_DIR', './data/filter'))
@@ -34,15 +34,15 @@ class AdBlockConfig:
 
     # 性能配置
     MAX_CONCURRENT = 2
-    RULE_LEN_LIMIT = 15000  # 增加长度限制
+    RULE_LEN_LIMIT = 15000
     BATCH_SIZE = 5000
     MAX_RULES_PER_FILE = 300000
 
     # 语法支持配置
     SUPPORT_HOSTS_CONVERT = True
     SUPPORT_PLAIN_DOMAIN = True
-    MIN_DOMAIN_LENGTH = 2  # 降低最小域名长度限制
-    LENIENT_PARSING = True  # 启用宽容解析模式
+    MIN_DOMAIN_LENGTH = 2
+    LENIENT_PARSING = True
 
 # ==================== 日志初始化 ====================
 def setup_logging() -> logging.Logger:
@@ -73,15 +73,15 @@ except ImportError:
 # ==================== 规则解析器 ====================
 class AdBlockRuleParser:
     """
-    AdGuard规则解析器 - 宽容模式
-    采用宽松的语法识别逻辑，最大化保留有效规则
+    AdGuard规则解析器 - 白名单优化版
+    专门优化处理白名单规则
     """
 
-    # 预编译正则表达式 - 宽松模式
+    # 预编译正则表达式 - 白名单规则优化
     COMMENT_REGEX = re.compile(r'^\s*[!#;]|^!\s*\[Adblock|^!\s*Title|^!\s*Version|^!\s*Expires', re.IGNORECASE)
     HOSTS_REGEX = re.compile(r'^\s*(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|::1)\s+([a-zA-Z0-9.*_-]+)\s*(?:#.*)?$')
     
-    # 宽松的域名规则匹配
+    # 宽松的域名规则匹配 - 特别优化白名单规则
     DOMAIN_RULE_REGEX = re.compile(r'^(@@?)?(\|\||\|)?([^#\s]+?)(\^?|\$?[^#\s]*)?\s*(?:#.*)?$')
     
     # 元素隐藏规则 - 宽松匹配
@@ -98,25 +98,14 @@ class AdBlockRuleParser:
 
     # 支持的修饰符列表 - 扩展版
     SUPPORTED_MODIFIERS = {
-        # 基础内容类型
         'document', 'script', 'image', 'stylesheet', 'object', 'xmlhttprequest',
         'subdocument', 'websocket', 'webrtc', 'media', 'font', 'other',
-        
-        # 高级选项
         'third-party', 'first-party', 'popup', 'collapse', 'generichide',
         'genericblock', 'elemhide', 'jsinject', 'content', 'extension',
-        
-        # 特殊功能
         'important', 'badfilter', 'redirect', 'redirect-rule', 'removeparam',
         'removeheader', 'cname', 'dnsrewrite', 'dnstype', 'max-age',
-        
-        # 网络请求选项
         'all', 'to', 'from', 'method', 'domain', 'denyallow',
-        
-        # AdGuard Home特定
         'client', 'ctag', 'app',
-        
-        # 其他常见修饰符
         'match-case', '~third-party', '~first-party', '~image', '~script',
         '~object', '~xmlhttprequest', '~websocket', '~webrtc', '~media',
         '~font', '~other', '~document', '~stylesheet', '~subdocument'
@@ -139,7 +128,8 @@ class AdBlockRuleParser:
         self.stats = {
             'total_processed': 0, 'valid_rules': 0, 'invalid_rules': 0,
             'duplicates': 0, 'bloom_false_positives': 0, 'hosts_converted': 0,
-            'plain_domain_converted': 0, 'lenient_accepted': 0
+            'plain_domain_converted': 0, 'lenient_accepted': 0,
+            'whitelist_rules': 0  # 新增白名单规则统计
         }
 
     def _generate_rule_hash(self, rule: str) -> str:
@@ -314,9 +304,9 @@ class AdBlockRuleParser:
         self.stats['hosts_converted'] += 1
         return f"||{domain}^"
 
-    def lenient_rule_conversion(self, rule: str) -> Optional[Tuple[str, bool]]:
-        """宽容模式下的规则转换"""
-        # 尝试处理可能被误判的规则
+    def lenient_whitelist_conversion(self, rule: str) -> Optional[Tuple[str, bool]]:
+        """宽容模式下的白名单规则转换 - 专门处理白名单规则"""
+        # 处理白名单规则的特殊情况
         original_rule = rule
         
         # 处理可能包含注释的规则
@@ -326,45 +316,58 @@ class AdBlockRuleParser:
         # 处理可能包含多余空格的规则
         rule = re.sub(r'\s+', ' ', rule).strip()
         
-        # 尝试识别白名单规则
+        # 确保规则以@@开头
+        if not rule.startswith('@@'):
+            # 尝试添加@@前缀
+            rule = '@@' + rule
+            
+        # 分离白名单标记和规则内容
         is_allow = rule.startswith('@@')
         if is_allow:
-            rule = rule[2:]
+            rule_content = rule[2:]
+        else:
+            rule_content = rule
             
-        # 尝试识别元素隐藏规则
-        if rule.startswith('##') or rule.startswith('#@#'):
+        # 处理元素隐藏规则
+        if rule_content.startswith('##') or rule_content.startswith('#@#'):
             if self.validate_rule(rule) and not self.is_duplicate(rule):
+                self.stats['whitelist_rules'] += 1
                 return (rule, is_allow)
                 
-        # 尝试识别域名规则
-        if re.match(r'^(\|\|)?[a-zA-Z0-9.*_-]+\^?$', rule):
-            if not rule.startswith('||'):
-                rule = '||' + rule
-            if not rule.endswith('^'):
-                rule += '^'
+        # 处理域名规则
+        if re.match(r'^(\|\|)?[a-zA-Z0-9.*_-]+\^?$', rule_content) or re.match(r'^[a-zA-Z0-9.*_-]+\^?$', rule_content):
+            if not rule_content.startswith('||') and not rule_content.startswith('|'):
+                rule_content = '||' + rule_content
+            if not rule_content.endswith('^'):
+                rule_content += '^'
                 
-            if self.validate_rule(rule) and not self.is_duplicate(rule):
+            final_rule = f"@@{rule_content}" if is_allow else rule_content
+            if self.validate_rule(final_rule) and not self.is_duplicate(final_rule):
                 self.stats['lenient_accepted'] += 1
-                return (rule, is_allow)
+                self.stats['whitelist_rules'] += 1
+                return (final_rule, is_allow)
                 
-        # 尝试识别包含修饰符的规则
-        if '$' in rule:
-            if self.validate_rule(rule) and not self.is_duplicate(rule):
+        # 处理包含修饰符的规则
+        if '$' in rule_content:
+            final_rule = f"@@{rule_content}" if is_allow else rule_content
+            if self.validate_rule(final_rule) and not self.is_duplicate(final_rule):
                 self.stats['lenient_accepted'] += 1
-                return (rule, is_allow)
+                self.stats['whitelist_rules'] += 1
+                return (final_rule, is_allow)
                 
-        # 尝试识别纯域名
-        if AdBlockConfig.SUPPORT_PLAIN_DOMAIN and self.PLAIN_DOMAIN_REGEX.match(rule):
-            converted_rule = f"@@||{rule}^" if is_allow else f"||{rule}^"
-            if self.validate_rule(converted_rule) and not self.is_duplicate(converted_rule):
+        # 处理纯域名
+        if AdBlockConfig.SUPPORT_PLAIN_DOMAIN and self.PLAIN_DOMAIN_REGEX.match(rule_content):
+            final_rule = f"@@||{rule_content}^" if is_allow else f"||{rule_content}^"
+            if self.validate_rule(final_rule) and not self.is_duplicate(final_rule):
                 self.stats['lenient_accepted'] += 1
                 self.stats['plain_domain_converted'] += 1
-                return (converted_rule, is_allow)
+                self.stats['whitelist_rules'] += 1
+                return (final_rule, is_allow)
                 
         return None
 
     def parse_rule(self, line: str, is_hosts: bool = False) -> Optional[Tuple[str, bool]]:
-        """解析单行规则，返回(规则, 是否白名单) - 宽容模式"""
+        """解析单行规则，返回(规则, 是否白名单) - 白名单优化"""
         if self.is_comment_or_empty(line):
             return None
 
@@ -380,15 +383,19 @@ class AdBlockRuleParser:
         # 确定规则类型和处理方式
         if rule.startswith('@@'):
             is_allow = True
-            rule = rule[2:]
+            rule_content = rule[2:]
+        else:
+            rule_content = rule
 
         # 元素隐藏规则
-        if rule.startswith('##') or rule.startswith('#@#'):
+        if rule_content.startswith('##') or rule_content.startswith('#@#'):
             if self.validate_rule(rule) and not self.is_duplicate(rule):
+                self.stats['whitelist_rules'] += is_allow
                 return (rule, is_allow)
             # 宽容模式：即使验证失败也尝试保留
             if AdBlockConfig.LENIENT_PARSING:
                 self.stats['lenient_accepted'] += 1
+                self.stats['whitelist_rules'] += is_allow
                 return (rule, is_allow)
             return None
 
@@ -396,10 +403,12 @@ class AdBlockRuleParser:
         domain_match = self.DOMAIN_RULE_REGEX.match(rule)
         if domain_match:
             if self.validate_rule(rule) and not self.is_duplicate(rule):
+                self.stats['whitelist_rules'] += is_allow
                 return (rule, is_allow)
             # 宽容模式：即使验证失败也尝试保留
             if AdBlockConfig.LENIENT_PARSING:
                 self.stats['lenient_accepted'] += 1
+                self.stats['whitelist_rules'] += is_allow
                 return (rule, is_allow)
             return None
 
@@ -407,38 +416,44 @@ class AdBlockRuleParser:
         regex_match = self.REGEX_RULE_REGEX.match(rule)
         if regex_match:
             if self.validate_rule(rule) and not self.is_duplicate(rule):
+                self.stats['whitelist_rules'] += is_allow
                 return (rule, is_allow)
             # 宽容模式：即使验证失败也尝试保留
             if AdBlockConfig.LENIENT_PARSING:
                 self.stats['lenient_accepted'] += 1
+                self.stats['whitelist_rules'] += is_allow
                 return (rule, is_allow)
             return None
 
         # AdGuard修饰符规则
         if '$' in rule:
             if self.validate_rule(rule) and not self.is_duplicate(rule):
+                self.stats['whitelist_rules'] += is_allow
                 return (rule, is_allow)
             # 宽容模式：即使验证失败也尝试保留
             if AdBlockConfig.LENIENT_PARSING:
                 self.stats['lenient_accepted'] += 1
+                self.stats['whitelist_rules'] += is_allow
                 return (rule, is_allow)
             return None
 
         # 纯域名规则 (自动转换为白名单)
-        if AdBlockConfig.SUPPORT_PLAIN_DOMAIN and self.PLAIN_DOMAIN_REGEX.match(rule):
-            converted_rule = f"@@||{rule}^" if is_allow else f"||{rule}^"
+        if AdBlockConfig.SUPPORT_PLAIN_DOMAIN and self.PLAIN_DOMAIN_REGEX.match(rule_content):
+            converted_rule = f"@@||{rule_content}^" if is_allow else f"||{rule_content}^"
             self.stats['plain_domain_converted'] += 1
             if self.validate_rule(converted_rule) and not self.is_duplicate(converted_rule):
+                self.stats['whitelist_rules'] += is_allow
                 return (converted_rule, is_allow)
             # 宽容模式：即使验证失败也尝试保留
             if AdBlockConfig.LENIENT_PARSING:
                 self.stats['lenient_accepted'] += 1
+                self.stats['whitelist_rules'] += is_allow
                 return (converted_rule, is_allow)
             return None
 
-        # 宽容模式：尝试其他转换方法
+        # 宽容模式：尝试白名单专用转换方法
         if AdBlockConfig.LENIENT_PARSING:
-            result = self.lenient_rule_conversion(rule)
+            result = self.lenient_whitelist_conversion(line)
             if result:
                 return result
 
@@ -465,7 +480,8 @@ class AdBlockProcessor:
             'comments_empty': 0,
             'invalid_rules': 0,
             'duplicates': 0,
-            'valid_rules': 0
+            'valid_rules': 0,
+            'whitelist_rules': 0
         }
 
         try:
@@ -497,6 +513,8 @@ class AdBlockProcessor:
                                     self.block_rules.add(rule)
                                 rule_count += 1
                                 file_stats['valid_rules'] += 1
+                                if is_allow:
+                                    file_stats['whitelist_rules'] += 1
                             else:
                                 file_stats['invalid_rules'] += 1
 
@@ -526,6 +544,8 @@ class AdBlockProcessor:
                                             self.block_rules.add(rule)
                                         rule_count += 1
                                         file_stats['valid_rules'] += 1
+                                        if is_allow:
+                                            file_stats['whitelist_rules'] += 1
                                     else:
                                         file_stats['invalid_rules'] += 1
                         except Exception as e:
@@ -537,7 +557,7 @@ class AdBlockProcessor:
             self.file_stats[file_path.name] = file_stats
 
             # 记录详细统计信息
-            logger.info(f"处理完成: {file_path.name} → {rule_count} 条规则")
+            logger.info(f"处理完成: {file_path.name} → {rule_count} 条规则 (白名单: {file_stats['whitelist_rules']})")
             if rule_count == 0:
                 logger.warning(f"文件 {file_path.name} 详细统计:")
                 logger.warning(f"  总行数: {file_stats['total_lines']}")
@@ -552,6 +572,7 @@ class AdBlockProcessor:
                 'invalid_rules': 0,
                 'duplicates': 0,
                 'valid_rules': 0,
+                'whitelist_rules': 0,
                 'error': str(e)
             }
 
@@ -575,7 +596,7 @@ class AdBlockProcessor:
                     task = self.process_file_with_semaphore(file_path, False, semaphore)
                     tasks.append(task)
 
-        # 处理白名单规则文件
+        # 处理白名单规则文件 - 优先处理白名单文件
         for pattern in AdBlockConfig.ALLOW_PATTERNS:
             for file_path in AdBlockConfig.INPUT_DIR.glob(pattern):
                 if file_path.is_file():
@@ -688,7 +709,7 @@ async def write_rules(block_rules: List[str], allow_rules: List[str]):
 async def main():
     """主处理函数"""
     start_time = datetime.now()
-    logger.info("AdGuard规则处理开始 - 宽容模式")
+    logger.info("AdGuard规则处理开始 - 白名单优化模式")
 
     ensure_directories()
 
@@ -719,6 +740,7 @@ async def main():
     logger.info(f"Hosts规则转换: {stats['hosts_converted']}")
     logger.info(f"纯域名转换: {stats['plain_domain_converted']}")
     logger.info(f"宽容模式接受: {stats['lenient_accepted']}")
+    logger.info(f"白名单规则: {stats['whitelist_rules']}")
     logger.info(f"最终拦截规则: {stats['final_block_rules']}")
     logger.info(f"最终允许规则: {stats['final_allow_rules']}")
 
