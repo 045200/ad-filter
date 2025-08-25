@@ -167,16 +167,16 @@ jobs:
       - name: Run SmartDNS Rule Cleaner
         run: |
           echo "开始清理SmartDNS规则..."
-          timeout 600s python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py || \
-          (echo "第一次超时，重试..." && timeout 1200s python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py)
+          timeout 21600s python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py || \
+          (echo "第一次超时，重试..." && timeout 43200s python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py)
           echo "SmartDNS规则清理完成"
         env:
-          MAX_WORKERS: 8
-          DNS_WORKERS: 30
-          BATCH_SIZE: 500
+          MAX_WORKERS: 16
+          DNS_WORKERS: 100
+          BATCH_SIZE: 2000
           MAX_MEMORY_PERCENT: 80
-          DNS_TIMEOUT: 8
-          DNS_RETRIES: 2
+          DNS_TIMEOUT: 3
+          DNS_RETRIES: 1
           USE_SMARTDNS: "true"
           PROCESS_SMARTDNS_RULES: "true"
 
