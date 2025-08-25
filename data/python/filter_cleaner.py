@@ -57,6 +57,7 @@ class Config:
     # 功能开关
     USE_SMARTDNS = os.getenv('USE_SMARTDNS', 'true').lower() == 'true'
 
+
 # 日志配置
 def setup_logger():
     logger = logging.getLogger('SmartDNSCleaner')
@@ -69,30 +70,36 @@ def setup_logger():
 
     return logger
 
+
 logger = setup_logger()
+
 
 # 规则处理器
 class RuleProcessor:
     def __init__(self):
+        # 增加对AdGuard Home语法的支持
         self.patterns = {
             'domain': re.compile(r'^(?:@@)?\|{1,2}([\w.-]+)[\^\$\|\/]'),
             'hosts': re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1|::1)\s+([\w.-]+)$'),
             'comment': re.compile(r'^[!#]'),
             'adguard_domain': re.compile(r'^@@?\|\|?([\w.-]+)[\^\$\|\/]'),
+            'adguard_ip_domain': re.compile(r'^\d+\.\d+\.\d+\.\d+\s+([\w.-]+)$'),  # 匹配如1.2.3.4 example.org的语法
+            'wildcard_domain': re.compile(r'^\*\.([\w.-]+)$')  # 匹配通配符语法如*.example.org
         }
 
     def parse_rule(self, rule: str) -> Optional[str]:
         rule = rule.strip()
-        
+
         if not rule or self.patterns['comment'].match(rule):
             return None
-            
-        for pattern_name in ['domain', 'hosts', 'adguard_domain']:
+
+        for pattern_name in ['domain', 'hosts', 'adguard_domain', 'adguard_ip_domain', 'wildcard_domain']:
             match = self.patterns[pattern_name].match(rule)
             if match:
                 return match.group(1)
-                
+
         return None
+
 
 # DNS验证器
 class DNSValidator:
@@ -104,81 +111,82 @@ class DNSValidator:
             'invalid': 0,
             'cached': 0
         }
-        
+
     async def validate_domain(self, domain):
         self.stats['total'] += 1
-        
+
         if domain in self.cache:
             self.stats['cached'] += 1
             return self.cache[domain]
-            
+
         # 使用系统DNS进行验证
         valid = await self._validate_with_system_dns(domain)
-        
+
         self.cache[domain] = valid
-        
+
         if valid:
             self.stats['valid'] += 1
         else:
             self.stats['invalid'] += 1
-            
+
         return valid
-        
+
     async def _validate_with_system_dns(self, domain):
         """使用系统DNS验证域名"""
         loop = asyncio.get_event_loop()
-        
+
         for _ in range(Config.DNS_RETRIES):
             try:
                 # 尝试解析A记录
                 result = await loop.run_in_executor(
-                    None, 
+                    None,
                     lambda: socket.getaddrinfo(domain, None, family=socket.AF_INET)
                 )
                 if result:
                     return True
-                    
+
                 # 尝试解析AAAA记录
                 result = await loop.run_in_executor(
-                    None, 
+                    None,
                     lambda: socket.getaddrinfo(domain, None, family=socket.AF_INET6)
                 )
                 if result:
                     return True
-                    
+
             except (socket.gaierror, OSError, Exception):
                 pass
-                
+
             # 短暂等待后重试
             await asyncio.sleep(0.1)
-            
+
         return False
+
 
 # SmartDNS管理器
 class SmartDNSManager:
     def __init__(self):
         self.process = None
-        
+
     def generate_config(self):
         """生成SmartDNS配置文件"""
         config_content = f"""bind 127.0.0.1:{Config.SMARTDNS_PORT}
-bind-tcp 127.0.0.1:{Config.SMARTDNS_PORT}
-cache-size 2048
-prefetch-domain yes
-serve-expired yes
-rr-ttl-min 300
-log-level error
-log-size 128K
-speed-check-mode none
+bind - tcp 127.0.0.1:{Config.SMARTDNS_PORT}
+cache - size 2048
+prefetch - domain yes
+serve - expired yes
+rr - ttl - min 300
+log - level error
+log - size 128K
+speed - check - mode none
 
 # 国内DNS服务器
 server 223.5.5.5
 server 119.29.29.29
-server-tls 1.12.12.12
+server - tls 1.12.12.12
 
 # 国际DNS服务器
-server-tls 1.1.1.1 -group overseas -exclude-default-group
-server-tls 8.8.8.8 -group overseas -exclude-default-group
+server - tls 1.1.1.1 - group overseas - exclude - default - group
+server - tls 8.8.8.8 - group overseas - exclude - default - group
 
 # 域名分流规则
 nameserver /cn/223.5.5.5
@@ -246,7 +254,7 @@ nameserver /youtube.com/overseas
         try:
             # 使用nslookup测试连接
             cmd = [
-                "nslookup", "-timeout=3", 
+                "nslookup", "-timeout=3",
                 "google.com", "127.0.0.1", str(Config.SMARTDNS_PORT)
             ]
 
@@ -260,6 +268,7 @@ nameserver /youtube.com/overseas
             return result.returncode == 0 and "Name:" in result.stdout
         except:
             return False
+
 
 # 主处理器
 class RuleCleaner:
@@ -341,7 +350,7 @@ class RuleCleaner:
         # 批量验证域名
         valid_domains = await self.validate_domains_batch(list(domains_to_validate))
 
-        # 构建有效规则列表
+        # 构建有效规则列表，去除包含无效域名的规则
         for domain in valid_domains:
             valid_rules.extend(domain_to_rules[domain])
 
@@ -407,10 +416,12 @@ class RuleCleaner:
         logger.info(f"无效域名: {stats['invalid']} 个")
         logger.info(f"缓存命中: {stats['cached']} 次")
 
+
 # 主函数
 async def main():
     cleaner = RuleCleaner()
     await cleaner.process()
+
 
 if __name__ == '__main__':
     asyncio.run(main())
