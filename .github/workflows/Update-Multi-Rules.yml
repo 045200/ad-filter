@@ -172,13 +172,11 @@ jobs:
           echo "SmartDNS规则清理完成"
         env:
           MAX_WORKERS: 16
-          DNS_WORKERS: 100
-          BATCH_SIZE: 2000
-          MAX_MEMORY_PERCENT: 80
-          DNS_TIMEOUT: 3
-          DNS_RETRIES: 1
+          DNS_WORKERS: 50
+          BATCH_SIZE: 1000
+          DNS_TIMEOUT: 5
+          DNS_RETRIES: 2
           USE_SMARTDNS: "true"
-          PROCESS_SMARTDNS_RULES: "true"
 
       # 13. 并行生成多格式规则- 核心步骤
       - name: Generate multi-format rules in parallel
@@ -208,7 +206,7 @@ jobs:
       - name: Unified cleanup process
         run: |
           echo "开始统一清理..."
-          # 清理备份文件（路径修正为mod/backups）
+          # 清理备份文件（路径修正为mod/backups")
           BACKUP_DIR="${{ env.DATA_DIR }}/mod/backups"
           if [ -d "$BACKUP_DIR" ]; then
             echo "清理备份文件..."
