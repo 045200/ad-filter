@@ -13,8 +13,8 @@ class AdFilterConfig:
     # 文件模式（覆盖AdBlock/AdGuard常见命名）
     BLOCKPATTERNS = ['adblock*.txt', 'adguard*.txt', 'filter*.txt']
     ALLOWPATTERNS = ['allow*.txt', 'whitelist*.txt']
-    OUTPUTBLOCK = 'adblock_ag_filter.txt'
-    OUTPUTALLOW = 'allow_ag_filter.txt'
+    OUTPUTBLOCK = 'adblock.txt'
+    OUTPUTALLOW = 'allow.txt'
 
     # 布隆过滤器参数
     BLOOMINITCAP = 1000000
