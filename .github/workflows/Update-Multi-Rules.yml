@@ -83,14 +83,14 @@ jobs:
       - name: Run merge.py
         run: |
           echo "开始合并广告规则..."
-          python ${{ env.PYTHON_SCRIPTS }}/merge.py
+          python ${{ env.PYTHON_SCRIPTS }}/merge.py &
+          python ${{ env.PYTHON_SCRIPTS }}/filter_adh.py &
           echo "广告规则合并完成"
       
       # 12. 并行生成多格式规则- 核心步骤
       - name: Generate multi-format rules in parallel
         run: |
           echo "开始生成多格式规则..."
-          python ${{ env.PYTHON_SCRIPTS }}/filter_adh.py &
           python ${{ env.PYTHON_SCRIPTS }}/filter_adp.py &
           python ${{ env.PYTHON_SCRIPTS }}/filter_pihole.py &
           python ${{ env.PYTHON_SCRIPTS }}/filter_hosts.py &
