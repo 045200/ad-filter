@@ -50,9 +50,6 @@ class HostsConfig:
     # 重试配置
     MAX_RETRIES = 3
     RETRY_DELAY = 1  # 秒
-    
-    # 进度显示配置
-    PROGRESS_UPDATE_INTERVAL = 1000  # 每处理多少行更新一次进度
 
 # ==================== 初始化日志 ====================
 def setup_logging():
@@ -99,7 +96,6 @@ class HostsProcessor:
             'files_processed': 0,
             'files_failed': 0
         }
-        self.last_progress_update = 0
     
     def is_comment_or_empty(self, line: str) -> bool:
         """检查是否是注释或空行"""
@@ -221,14 +217,6 @@ class HostsProcessor:
                     return 0
         return 0
     
-    def update_progress(self, current: int, total: int = None):
-        """更新进度显示"""
-        if total is None or current % HostsConfig.PROGRESS_UPDATE_INTERVAL == 0 or current == total:
-            if total:
-                logger.info(f"处理进度: {current}/{total} ({current/total*100:.1f}%)")
-            else:
-                logger.info(f"已处理: {current} 行")
-    
     async def process_file(self, file_path: Path, is_hosts: bool = True, is_async: bool = True) -> int:
         """处理单个文件（支持同步和异步）"""
         logger.info(f"处理文件: {file_path}")
@@ -238,14 +226,8 @@ class HostsProcessor:
             nonlocal count
             try:
                 async with aiofiles.open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    line_count = 0
                     async for line in f:
-                        line_count += 1
                         self.stats['total_processed'] += 1
-                        
-                        # 更新进度
-                        if line_count % HostsConfig.PROGRESS_UPDATE_INTERVAL == 0:
-                            self.update_progress(line_count)
                         
                         if self.is_comment_or_empty(line):
                             continue
@@ -258,14 +240,8 @@ class HostsProcessor:
             except UnicodeDecodeError:
                 try:
                     async with aiofiles.open(file_path, 'r', encoding='latin-1', errors='ignore') as f:
-                        line_count = 0
                         async for line in f:
-                            line_count += 1
                             self.stats['total_processed'] += 1
-                            
-                            # 更新进度
-                            if line_count % HostsConfig.PROGRESS_UPDATE_INTERVAL == 0:
-                                self.update_progress(line_count)
                             
                             if self.is_comment_or_empty(line):
                                 continue
@@ -281,22 +257,14 @@ class HostsProcessor:
             except Exception as e:
                 logger.error(f"处理文件 {file_path} 时发生未知错误: {e}")
                 raise
-            finally:
-                self.update_progress(line_count, line_count)
 
         async def process_adblock_async():
             nonlocal count
             try:
                 async with aiofiles.open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    line_count = 0
                     async for line in f:
-                        line_count += 1
                         self.stats['total_processed'] += 1
                         self.stats['adblock_processed'] += 1
-                        
-                        # 更新进度
-                        if line_count % HostsConfig.PROGRESS_UPDATE_INTERVAL == 0:
-                            self.update_progress(line_count)
                         
                         # 解析AdBlock行
                         domain = self.parse_adblock_line(line)
@@ -307,15 +275,9 @@ class HostsProcessor:
             except UnicodeDecodeError:
                 try:
                     async with aiofiles.open(file_path, 'r', encoding='latin-1', errors='ignore') as f:
-                        line_count = 0
                         async for line in f:
-                            line_count += 1
                             self.stats['total_processed'] += 1
                             self.stats['adblock_processed'] += 1
-                            
-                            # 更新进度
-                            if line_count % HostsConfig.PROGRESS_UPDATE_INTERVAL == 0:
-                                self.update_progress(line_count)
                             
                             # 解析AdBlock行
                             domain = self.parse_adblock_line(line)
@@ -329,21 +291,13 @@ class HostsProcessor:
             except Exception as e:
                 logger.error(f"处理文件 {file_path} 时发生未知错误: {e}")
                 raise
-            finally:
-                self.update_progress(line_count, line_count)
 
         def process_hosts_sync():
             nonlocal count
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    line_count = 0
                     for line in f:
-                        line_count += 1
                         self.stats['total_processed'] += 1
-                        
-                        # 更新进度
-                        if line_count % HostsConfig.PROGRESS_UPDATE_INTERVAL == 0:
-                            self.update_progress(line_count)
                         
                         if self.is_comment_or_empty(line):
                             continue
@@ -356,14 +310,8 @@ class HostsProcessor:
             except UnicodeDecodeError:
                 try:
                     with open(file_path, 'r', encoding='latin-1', errors='ignore') as f:
-                        line_count = 0
                         for line in f:
-                            line_count += 1
                             self.stats['total_processed'] += 1
-                            
-                            # 更新进度
-                            if line_count % HostsConfig.PROGRESS_UPDATE_INTERVAL == 0:
-                                self.update_progress(line_count)
                             
                             if self.is_comment_or_empty(line):
                                 continue
@@ -379,22 +327,14 @@ class HostsProcessor:
             except Exception as e:
                 logger.error(f"处理文件 {file_path} 时发生未知错误: {e}")
                 raise
-            finally:
-                self.update_progress(line_count, line_count)
 
         def process_adblock_sync():
             nonlocal count
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    line_count = 0
                     for line in f:
-                        line_count += 1
                         self.stats['total_processed'] += 1
                         self.stats['adblock_processed'] += 1
-                        
-                        # 更新进度
-                        if line_count % HostsConfig.PROGRESS_UPDATE_INTERVAL == 0:
-                            self.update_progress(line_count)
                         
                         # 解析AdBlock行
                         domain = self.parse_adblock_line(line)
@@ -405,15 +345,9 @@ class HostsProcessor:
             except UnicodeDecodeError:
                 try:
                     with open(file_path, 'r', encoding='latin-1', errors='ignore') as f:
-                        line_count = 0
                         for line in f:
-                            line_count += 1
                             self.stats['total_processed'] += 1
                             self.stats['adblock_processed'] += 1
-                            
-                            # 更新进度
-                            if line_count % HostsConfig.PROGRESS_UPDATE_INTERVAL == 0:
-                                self.update_progress(line_count)
                             
                             # 解析AdBlock行
                             domain = self.parse_adblock_line(line)
@@ -427,8 +361,6 @@ class HostsProcessor:
             except Exception as e:
                 logger.error(f"处理文件 {file_path} 时发生未知错误: {e}")
                 raise
-            finally:
-                self.update_progress(line_count, line_count)
 
         try:
             if is_async:
@@ -551,11 +483,8 @@ async def write_hosts_async(entries: List[str]) -> bool:
     """异步将hosts条目写入文件（无文件头）"""
     try:
         async with aiofiles.open(HostsConfig.OUTPUT_DIR / HostsConfig.OUTPUT_HOSTS, 'w', encoding='utf-8', newline='\n') as f:
-            for i, entry in enumerate(entries):
+            for entry in entries:
                 await f.write(f"{entry}\n")
-                # 每1000行更新一次进度
-                if (i + 1) % HostsConfig.PROGRESS_UPDATE_INTERVAL == 0:
-                    logger.info(f"写入进度: {i + 1}/{len(entries)} ({(i + 1)/len(entries)*100:.1f}%)")
     except Exception as e:
         logger.error(f"写入hosts文件时出错: {e}")
         return False
@@ -582,11 +511,8 @@ def write_hosts_sync(entries: List[str]) -> bool:
     """同步将hosts条目写入文件（无文件头）"""
     try:
         with open(HostsConfig.OUTPUT_DIR / HostsConfig.OUTPUT_HOSTS, 'w', encoding='utf-8', newline='\n') as f:
-            for i, entry in enumerate(entries):
+            for entry in entries:
                 f.write(f"{entry}\n")
-                # 每1000行更新一次进度
-                if (i + 1) % HostsConfig.PROGRESS_UPDATE_INTERVAL == 0:
-                    logger.info(f"写入进度: {i + 1}/{len(entries)} ({(i + 1)/len(entries)*100:.1f}%)")
     except Exception as e:
         logger.error(f"写入hosts文件时出错: {e}")
         return False
