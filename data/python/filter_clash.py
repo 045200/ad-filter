@@ -12,42 +12,41 @@ import logging
 import hashlib
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Iterable, Any, Union
+from typing import List, Dict, Iterable, Any, Union, Optional
 from concurrent.futures import ThreadPoolExecutor
 
 
 # ==================== 常量定义 ====================
-CLASH_BLOCK_HEADER = "#RULE-SET,ad-filter,REJECT"
-CLASH_ALLOW_HEADER = "#RULE-SET,ad-filter,DIRECT"
+# Clash 规则集头部标识
+CLASH_BLOCK_HEADER = "#RULE-SET,ad-filter,REJECT"  # 拦截规则集
+CLASH_ALLOW_HEADER = "#RULE-SET,ad-filter,DIRECT"   # 放行（白名单）规则集
 
+# Clash 规则类型到 Mihomo 规则类型的映射（聚焦域名和IP匹配）
 CLASH_TO_MIHOMO_TYPE = {
-    "DOMAIN": "domain",
-    "DOMAIN-SUFFIX": "domain-suffix",
-    "DOMAIN-KEYWORD": "domain-keyword",
-    "IP-CIDR": "ip-cidr",
-    "IP-CIDR6": "ip-cidr6",
-    "GEOIP": "geoip",
-    "SRC-IP-CIDR": "src-ip-cidr",
-    "SRC-PORT": "src-port",
-    "DST-PORT": "dst-port",
-    "PROCESS-NAME": "process-name",
-    "PROCESS-PATH": "process-path"
-}
+    "DOMAIN": "domain",           # 完整域名匹配
+    "DOMAIN-SUFFIX": "domain-suffix", # 域名后缀匹配
+    "DOMAIN-KEYWORD": "domain-keyword", # 域名关键词匹配
+    "IP-CIDR": "ip-cidr",         # IPv4 CIDR
+    "IP-CIDR6": "ip-cidr6",       # IPv6 CIDR
+# 动作映射
 ACTION_MAP = {
-    "REJECT": "reject",
-    "DIRECT": "direct",
-    "PROXY": "proxy"
+    "REJECT": "reject",  # 拦截
+    "DIRECT": "direct",  # 放行（直连）
 }
 
-DEFAULT_PRIORITY = 100
-WHITELIST_PRIORITY = DEFAULT_PRIORITY - 10
+# 规则优先级
+DEFAULT_PRIORITY = 100        # 默认优先级（拦截规则）
+WHITELIST_PRIORITY = DEFAULT_PRIORITY - 10  # 白名单规则优先级（更高）
 
+# 规则匹配模式（用于解析源规则）
 DOMAIN_PATTERN = re.compile(
     r'^\|\|([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\^?$',
     re.IGNORECASE | re.ASCII
-)
-IP_PATTERN = re.compile(r'^0\.0\.0\.0\s+([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})$', re.ASCII)
-REGEX_PATTERN = re.compile(r'^\/([^\/]+?)\/$')
+) # 匹配 ||example.com^ 格式
+IP_PATTERN = re.compile(r'^0\.0\.0\.0\s+([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})$', re.ASCII) # 匹配 0.0.0.0 example.com 格式
+REGEX_PATTERN = re.compile(r'^\/([^\/]+?)\/$') # 匹配 /regex/ 格式
+DOMAIN_SUFFIX_PATTERN = re.compile(r'^\|\|([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\^$') # 优化后的域名后缀匹配
+DOMAIN_PLAIN_PATTERN = re.compile(r'^([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})$') # 匹配 example.com 格式
 
 
 # ==================== 配置管理 ====================
@@ -165,18 +164,42 @@ logger = setup_logger()
 # ==================== 核心工具函数 ====================
 def load_rules(file_path: Path) -> Iterable[str]:
     try:
-        with file_path.open("r", encoding="utf-8", errors="strict") as f:
+        with file_path.open("r", encoding="utf-8", errors="ignore") as f:
             for line_num, line in enumerate(f, 1):
                 line = line.strip()
-                if not line or line.startswith(("!", "#")):
+                if not line or line.startswith(("!", "#", "[", "/*")):
                     continue
                 yield line
-    except UnicodeDecodeError as e:
-        logger.error(f"文件编码错误（仅支持UTF-8）：{file_path}，行{line_num}：{e}")
-        sys.exit(1)
     except Exception as e:
         logger.error(f"读取文件失败：{file_path}，原因：{str(e)}")
         sys.exit(1)
+
+def extract_domain_from_rule(rule_line: str) -> Optional[str]:
+    """从AdGuard规则中提取域名"""
+    # 处理@@开头的白名单规则
+    clean_rule = rule_line[2:] if rule_line.startswith("@@") else rule_line
+    
+    # 1. 域名后缀规则 (||example.com^)
+    if domain_match := DOMAIN_SUFFIX_PATTERN.match(clean_rule):
+        return domain_match.group(1)
+    
+    # 2. 普通域名规则 (example.com)
+    if domain_match := DOMAIN_PLAIN_PATTERN.match(clean_rule):
+        return domain_match.group(1)
+    
+    # 3. 包含路径的规则 (example.com/path)
+    if "/" in clean_rule and not clean_rule.startswith("/"):
+        domain_part = clean_rule.split("/")[0]
+        if "." in domain_part and not domain_part.startswith(("http:", "https:")):
+            return domain_part
+    
+    # 4. URL规则 (http://example.com/path)
+    if "://" in clean_rule:
+        domain_part = clean_rule.split("://")[1].split("/")[0]
+        if "." in domain_part:
+            return domain_part
+    
+    return None
 
 def convert_adg_to_rule(rule_line: str, is_allow: bool, target_format: str) -> List[Union[str, Dict]]:
     converted = []
@@ -184,9 +207,9 @@ def convert_adg_to_rule(rule_line: str, is_allow: bool, target_format: str) -> L
     clean_rule = rule_line[2:] if is_exception else rule_line
     action = "DIRECT" if (is_allow or is_exception) else "REJECT"
 
-    # 1. 域名规则
-    if domain_match := DOMAIN_PATTERN.match(clean_rule):
-        domain = clean_rule.strip("||^")
+    # 1. 域名后缀规则 (||example.com^)
+    if domain_match := DOMAIN_SUFFIX_PATTERN.match(clean_rule):
+        domain = domain_match.group(1)
         if target_format == "clash":
             converted.append(f"+.{domain}")
         elif target_format == "surge":
@@ -200,7 +223,23 @@ def convert_adg_to_rule(rule_line: str, is_allow: bool, target_format: str) -> L
             })
         return converted
 
-    # 2. IP规则
+    # 2. 普通域名规则 (example.com)
+    if domain_match := DOMAIN_PLAIN_PATTERN.match(clean_rule):
+        domain = domain_match.group(1)
+        if target_format == "clash":
+            converted.append(f"+.{domain}")
+        elif target_format == "surge":
+            converted.append(f"DOMAIN-SUFFIX,{domain},{action}")
+        elif target_format == "mihomo":
+            converted.append({
+                "type": "domain-suffix",
+                "value": domain,
+                "action": ACTION_MAP[action],
+                "priority": WHITELIST_PRIORITY if is_allow else DEFAULT_PRIORITY
+            })
+        return converted
+
+    # 3. IP规则 (0.0.0.0 example.com)
     if ip_match := IP_PATTERN.match(clean_rule):
         ip = ip_match.group(1)
         cidr_ip = f"{ip}/32"
@@ -216,7 +255,7 @@ def convert_adg_to_rule(rule_line: str, is_allow: bool, target_format: str) -> L
             })
         return converted
 
-    # 3. 正则规则
+    # 4. 正则规则 (/regex/)
     if regex_match := REGEX_PATTERN.match(clean_rule):
         keyword = regex_match.group(1)
         base_rule = f"DOMAIN-KEYWORD,{keyword},{action}"
@@ -229,6 +268,38 @@ def convert_adg_to_rule(rule_line: str, is_allow: bool, target_format: str) -> L
                 "action": ACTION_MAP[action],
                 "priority": DEFAULT_PRIORITY
             })
+        return converted
+
+    # 5. 尝试从复杂规则中提取域名
+    if extracted_domain := extract_domain_from_rule(rule_line):
+        if target_format == "clash":
+            converted.append(f"+.{extracted_domain}")
+        elif target_format == "surge":
+            converted.append(f"DOMAIN-SUFFIX,{extracted_domain},{action}")
+        elif target_format == "mihomo":
+            converted.append({
+                "type": "domain-suffix",
+                "value": extracted_domain,
+                "action": ACTION_MAP[action],
+                "priority": WHITELIST_PRIORITY if is_allow else DEFAULT_PRIORITY
+            })
+        logger.debug(f"从复杂规则中提取域名：{rule_line} -> {extracted_domain}")
+        return converted
+
+    # 6. 关键字规则 (包含任意文本)
+    if len(clean_rule) > 3 and not any(c in clean_rule for c in ["$", "^", "*", "|", "/"]):
+        if target_format == "clash":
+            converted.append(f"{clean_rule}")
+        elif target_format == "surge":
+            converted.append(f"DOMAIN-KEYWORD,{clean_rule},{action}")
+        elif target_format == "mihomo":
+            converted.append({
+                "type": "domain-keyword",
+                "value": clean_rule,
+                "action": ACTION_MAP[action],
+                "priority": DEFAULT_PRIORITY
+            })
+        logger.debug(f"将规则视为关键字：{rule_line}")
         return converted
 
     # 未匹配规则
@@ -340,7 +411,6 @@ def write_github_output(config: Config, counts: Dict[str, int]) -> None:
 
     with open(github_output, "a", encoding="utf-8") as f:
         for key, value in outputs.items():
-            # 修复：避免在 f-string 表达式中直接使用反斜杠
             escaped_value = value.replace('\n', '\\n')
             f.write(f"{key}={escaped_value}\n")
     logger.info("GitHub Action输出变量已写入")
