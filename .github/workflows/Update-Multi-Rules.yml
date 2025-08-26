@@ -84,6 +84,10 @@ jobs:
         run: |
           echo "开始合并广告规则..."
           python ${{ env.PYTHON_SCRIPTS }}/merge.py &
+          echo "广告规则合并完成"
+      - name: Run adguard home
+        run: |
+          echo "开始合并广告规则..."
           python ${{ env.PYTHON_SCRIPTS }}/filter_adh.py &
           echo "广告规则合并完成"
       
