@@ -23,7 +23,6 @@ jobs:
       MAIN_BRANCH: multi
       CACHE_DIR: ${{ github.workspace }}/data/cache
       TEMP_DIR: ${{ github.workspace }}/tmp
-      SMARTDNS_PORT: 5354  # 使用5354端口避免冲突
       SMARTDNS_RULE_SOURCES: ${{ github.workspace }}/data/smartdns_sources.txt
 
     steps:
@@ -72,7 +71,7 @@ jobs:
         run: |
           echo "开始并行下载规则..."
           python ${{ env.PYTHON_SCRIPTS }}/dl.py &
-          python ${{ env.PYTHON_SCRIPts }}/dl_smartdns.py &
+          python ${{ env.PYTHON_SCRIPTS }}/dl_smartdns.py &
           wait
           echo "规则下载完成"
 
@@ -83,21 +82,15 @@ jobs:
           python ${{ env.PYTHON_SCRIPTS }}/merge.py
           echo "广告规则合并完成"
 
-      # 12. 清理临时生成的adblock和allow文件- 核心步骤
+      # 12. 清理临时生成的adblock和allow文件- 核心步骤（已修改：去除判定条件，直接删除所有匹配文件）
       - name: Cleanup temporary filter files
         run: |
           cd ${{ env.DATA_DIR }}/filter
           echo "清理临时文件..."
-          for file in adblock*.txt; do
-            if [ "$file" != "adblock_filter.txt" ] && [ "$file" != "adblock.txt" ]; then
-              rm -f "$file"
-            fi
-          done
-          for file in allow*.txt; do
-            if [ "$file" != "allow_filter.txt" ] && [ "$file" != "allow.txt" ]; then
-              rm -f "$file"
-            fi
-          done
+          # 直接删除所有adblock*.txt文件
+          rm -f adblock*.txt
+          # 直接删除所有allow*.txt文件
+          rm -f allow*.txt
           echo "临时文件清理完成"
 
       
