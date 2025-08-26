@@ -329,7 +329,9 @@ def write_github_output(config: Config, counts: Dict[str, int]) -> None:
 
     with open(github_output, "a", encoding="utf-8") as f:
         for key, value in outputs.items():
-            f.write(f"{key}={value.replace('\\n', '\\\\n')}\n")
+            # 修复：避免在 f-string 表达式中直接使用反斜杠
+            escaped_value = value.replace('\n', '\\n')
+            f.write(f"{key}={escaped_value}\n")
     logger.info("GitHub Action输出变量已写入")
 
 
