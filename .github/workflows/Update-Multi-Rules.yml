@@ -87,9 +87,9 @@ jobs:
           echo "广告规则合并完成"
       - name: Run adguard home
         run: |
-          echo "开始合并广告规则..."
+          echo "开始处理adguard home规则..."
           python ${{ env.PYTHON_SCRIPTS }}/filter_adh.py &
-          echo "广告规则合并完成"
+          echo "广告规则处理完成"
       
       # 12. 并行生成多格式规则- 核心步骤
       - name: Generate multi-format rules in parallel
