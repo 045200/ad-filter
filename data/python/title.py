@@ -36,9 +36,9 @@ def get_beijing_time() -> str:
         return beijing_time.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def count_valid_lines(lines: List[str], comment_char: str) -> int:
-    """统计有效行数（排除空行和注释行）"""
-    return sum(1 for line in lines if line.strip() and not line.strip().startswith(comment_char))
+def count_valid_lines(lines: List[str]) -> int:
+    """统计有效行数（仅跳过空行，因输入为纯净规则文件，无注释需处理）"""
+    return sum(1 for line in lines if line.strip())  # 仅判断“非空行”
 
 
 def detect_files(base_dir: Path) -> Dict[str, Dict[str, Path]]:
@@ -79,9 +79,9 @@ def process_file(
     try:
         with open(path, "r+", encoding="utf-8") as f:
             lines = f.readlines()
-            valid_lines = count_valid_lines(lines, comment_char)
+            valid_lines = count_valid_lines(lines)  # 调用修改后的统计函数，无需传comment_char
 
-            # 生成头信息
+            # 生成头信息（仍保留comment_char，用于头信息的注释符号）
             header = HEADER_TEMPLATE.format(
                 comment=comment_char,
                 title=title,
