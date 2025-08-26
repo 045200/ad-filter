@@ -22,7 +22,7 @@ class AdBlockConfig:
     
     # 布隆过滤器配置
     BLOOM_INIT_CAP: int = 1000000
-    BLOOM_ERROR_RATE: float = 0.0001
+    BLOOM_ERROR_RATE: float = 0.005
     
     # 规则处理配置
     MAX_RULE_LENGTH: int = 2000  # 规则最大长度限制
