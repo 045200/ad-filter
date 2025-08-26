@@ -156,7 +156,7 @@ class SmartDNSValidator:
         # 初始化解析器（默认公共DNS）
         self.resolver = aiodns.DNSResolver()
         self.resolver.nameservers = ['8.8.8.8', '1.1.1.1', '223.5.5.5', '119.29.29.29']
-        self.smartdns_available = None
+        self.smartdns_available = False
 
     async def test_smartdns(self) -> bool:
         """异步测试SmartDNS可用性"""
@@ -449,11 +449,14 @@ class AdblockCleaner:
             if not self.check_port_available(Config.SMARTDNS_PORT):
                 logger.error(f"错误：SmartDNS端口 {Config.SMARTDNS_PORT} 已被占用，无法启动服务")
                 sys.exit(1)
-            # 2. 测试SmartDNS可用性
-            await self.validator.test_smartdns()
-            # 3. 启动SmartDNS
+            # 2. 启动SmartDNS
             smartdns_started = await self.smartdns.start()
-            if not smartdns_started:
+            # 3. 测试SmartDNS可用性（在启动后）
+            if smartdns_started:
+                # 给SmartDNS更多时间初始化
+                await asyncio.sleep(2)
+                await self.validator.test_smartdns()
+            else:
                 logger.warning("SmartDNS启动失败，将使用公共DNS完成验证")
         
         try:
