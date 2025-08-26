@@ -69,9 +69,7 @@ jobs:
       - name: Download rules in parallel
         run: |
           echo "开始并行下载规则..."
-          python ${{ env.PYTHON_SCRIPTS }}/dl.py &
-          python ${{ env.PYTHON_SCRIPTS }}/dl_smartdns.py &
-          wait
+          python ${{ env.PYTHON_SCRIPTS }}/dl.py
           echo "规则下载完成"
 
       # 11. 运行merge.py（广告规则合并去重）- 核心步骤
