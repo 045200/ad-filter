@@ -60,7 +60,13 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install aiohttp aiodns psutil xxhash maxminddb pyyaml requests chardet adblockparser IPy pytz pybloom-live aiofiles idna
-
+      
+      - name: Run 脚本依赖检查
+        run: |
+          echo "开始检查依赖..."
+          python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py
+          echo "依赖检查完成"
+      
       # 10. 并行下载规则- 核心步骤
       - name: Download rules in parallel
         run: |
