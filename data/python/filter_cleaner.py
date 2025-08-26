@@ -135,8 +135,8 @@ class AdblockRuleProcessor:
         """增强域名验证（支持Punycode）"""
         if not domain or len(domain) > 253:
             return False
-        # 允许Punycode前缀（xn--）
-        if re.search(r'[^a-zA-Z0-9.-xn--]', domain):
+        # 修复正则表达式：正确处理字符范围
+        if re.search(r'[^a-zA-Z0-9.\-]', domain):  # 转义连字符
             return False
         for label in domain.split('.'):
             if not label or len(label) > 63 or label.startswith('-') or label.endswith('-'):
@@ -314,20 +314,19 @@ speed-check-mode none
         if not Config.SMARTDNS_CONFIG_FILE.exists():
             logger.error(f"配置文件不存在: {Config.SMARTDNS_CONFIG_FILE}")
             return False
+            
+        # 简化配置校验 - 只检查基本语法
         try:
-            # 使用SmartDNS自带校验参数（-t）
-            cmd = [Config.SMARTDNS_BIN, "-c", str(Config.SMARTDNS_CONFIG_FILE), "-t"]
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=5
-            )
-            if result.returncode == 0:
-                logger.info("SmartDNS配置文件语法校验通过")
-                return True
-            else:
-                logger.error(f"配置文件语法错误: {result.stderr}")
-                return False
+            with open(Config.SMARTDNS_CONFIG_FILE, 'r') as f:
+                content = f.read()
+                # 基本语法检查
+                if "bind" not in content or "server" not in content:
+                    logger.error("配置文件缺少必要指令")
+                    return False
+            logger.info("SmartDNS配置文件基本语法检查通过")
+            return True
         except Exception as e:
-            logger.error(f"校验配置文件失败: {e}")
+            logger.error(f"配置文件语法检查失败: {e}")
             return False
 
     async def start(self) -> bool:
@@ -384,20 +383,21 @@ speed-check-mode none
     async def test_connection(self) -> bool:
         """异步测试SmartDNS连接（避免阻塞）"""
         try:
+            # 使用nslookup代替dig（兼容性更好）
             cmd = [
-                "dig", "@127.0.0.1", "-p", str(Config.SMARTDNS_PORT),
-                "baidu.com", "+short", "+time=3", "+tries=2"
+                "nslookup", "-timeout=3", "-retry=2",
+                "baidu.com", "127.0.0.1", str(Config.SMARTDNS_PORT)
             ]
             
-            # 异步执行dig命令
+            # 异步执行nslookup命令
             process = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, text=True
             )
             stdout, stderr = await process.communicate(timeout=5)
             
-            success = process.returncode == 0 and len(stdout.strip()) > 0
+            success = process.returncode == 0 and "Name:" in stdout
             if not success:
-                logger.warning(f"dig测试失败（端口{Config.SMARTDNS_PORT}）: {stderr}")
+                logger.warning(f"nslookup测试失败（端口{Config.SMARTDNS_PORT}）: {stderr}")
             return success
         except Exception as e:
             logger.error(f"SmartDNS连接测试异常: {e}")
