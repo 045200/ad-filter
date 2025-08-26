@@ -22,8 +22,7 @@ jobs:
       MIHOMO_BIN: ${{ github.workspace }}/data/mihomo-tool
       MAIN_BRANCH: multi
       CACHE_DIR: ${{ github.workspace }}/data/cache
-      TEMP_DIR: ${{ github.workspace }}/tmp
-      SMARTDNS_RULE_SOURCES: ${{ github.workspace }}/data/smartdns_sources.txt
+      TEMP_DIR: ${{ github.workspace }}/data/filter
 
     steps:
       # 1. 拉取代码（multi分支）- 核心步骤
@@ -81,20 +80,8 @@ jobs:
           echo "开始合并广告规则..."
           python ${{ env.PYTHON_SCRIPTS }}/merge.py
           echo "广告规则合并完成"
-
-      # 12. 清理临时生成的adblock和allow文件- 核心步骤（已修改：去除判定条件，直接删除所有匹配文件）
-      - name: Cleanup temporary filter files
-        run: |
-          cd ${{ env.DATA_DIR }}/filter
-          echo "清理临时文件..."
-          # 直接删除所有adblock*.txt文件
-          rm -f adblock*.txt
-          # 直接删除所有allow*.txt文件
-          rm -f allow*.txt
-          echo "临时文件清理完成"
-
       
-      # 14. 并行生成多格式规则- 核心步骤
+      # 12. 并行生成多格式规则- 核心步骤
       - name: Generate multi-format rules in parallel
         run: |
           echo "开始生成多格式规则..."
@@ -105,11 +92,10 @@ jobs:
           python ${{ env.PYTHON_SCRIPTS }}/filter_ubo.py &
           python ${{ env.PYTHON_SCRIPTS }}/filter_clash.py &
           python ${{ env.PYTHON_SCRIPTS }}/filter_mihomo.py &
-          python ${{ env.PYTHON_SCRIPTS }}/filter_smartdns.py &
           wait
           echo "多格式规则生成完成"
 
-      # 15. 更新文档- 核心步骤
+      # 13. 更新文档- 核心步骤
       - name: Update documentation
         run: |
           echo "更新文档..."
@@ -117,31 +103,15 @@ jobs:
           python ${{ env.PYTHON_SCRIPTS }}/readme.py
           echo "文档更新完成"
 
-      # 16. 统一清理步骤- 修正：备份目录路径与步骤6一致
+      # 14. 统一清理步骤- 修正：备份目录路径与步骤6一致
       - name: Unified cleanup process
         run: |
           echo "开始统一清理..."
-          # 清理备份文件（路径修正为mod/backups")
-          BACKUP_DIR="${{ env.DATA_DIR }}/mod/backups"
-          if [ -d "$BACKUP_DIR" ]; then
-            echo "清理备份文件..."
-            for type in adblock allow; do
-              files=$(find "$BACKUP_DIR" -type f -name "${type}_filter_backup_*.txt" -printf '%T@ %p\n' | sort -nr)
-              if [ -n "$files" ]; then
-                count=$(echo "$files" | wc -l)
-                if [ $count -gt 1 ]; then
-                  echo "$files" | tail -n +2 | cut -d' ' -f2- | xargs -r rm -f
-                  echo "删除 $((count-1)) 个旧备份文件"
-                fi
-              fi
-            done
-          fi
-          
           # 清理临时目录
           rm -rf ${{ env.TEMP_DIR }}
           echo "统一清理完成"
 
-      # 17. 提交变更- 核心步骤
+      # 15. 提交变更- 核心步骤
       - name: Commit changes
         id: commit
         run: |
@@ -162,7 +132,7 @@ jobs:
             touch ${{ github.workspace }}/.smartdns-cache-marker
           fi
 
-      # 18. 推送变更- 优化：先判断远程差异，避免无意义merge
+      # 16. 推送变更- 优化：先判断远程差异，避免无意义merge
       - name: Push changes
         if: steps.commit.outputs.has_changes == 'true'
         run: |
@@ -195,24 +165,14 @@ jobs:
             fi
           done
 
-      # 19. 创建工作流摘要- 核心步骤（便于查看运行结果）
-      - name: Create workflow summary
-        if: always()
-        run: |
-          echo "## 工作流运行摘要" >> $GITHUB_STEP_SUMMARY
-          echo "- 运行状态: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
-          echo "- 变更提交: ${{ steps.commit.outputs.has_changes }}" >> $GITHUB_STEP_SUMMARY
-          echo "## 详细日志" >> $GITHUB_STEP_SUMMARY
-          echo "查看完整日志：[View workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
-
-      # 20. 清理旧工作流- 核心步骤（减少存储占用）
+      # 17. 清理旧工作流- 核心步骤（减少存储占用）
       - name: Cleanup old workflows
         uses: Mattraks/delete-workflow-runs@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           retain_days: 0
-          keep_minimum_runs: 3
+          keep_minimum_runs: 2
 
       # 21. 清理旧工件- 核心步骤（减少存储占用）
       - name: Cleanup old artifacts
