@@ -13,12 +13,12 @@ from typing import List, Optional, Dict, Any, Tuple, Set
 # ==================== 配置区 ====================
 class HostsConfig:
     # 输入输出路径
-    INPUT_DIR = Path(os.getenv('INPUT_DIR', './data/filter'))
+    INPUT_DIR = Path(os.getenv('INPUT_DIR', './'))
     OUTPUT_DIR = Path(os.getenv('OUTPUT_DIR', './'))
     
     # 输入文件模式
     HOSTS_PATTERNS = ['hosts*', '*-hosts*']
-    ADBLOCK_PATTERNS = ['adblock_adh.txt']  # 也处理AdBlock文件
+    ADBLOCK_PATTERNS = ['adblock_adg.txt']  # 也处理AdBlock文件
     
     # 输出文件名
     OUTPUT_HOSTS = 'hosts.txt'
