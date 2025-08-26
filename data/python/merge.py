@@ -21,8 +21,8 @@ class AdBlockConfig:
     
     # 文件模式配置
     ADBLOCK_PATTERNS: List[str] = None
-    OUTPUT_BLOCK: str = 'adblock.txt'
-    OUTPUT_ALLOW: str = 'allow.txt'
+    OUTPUT_BLOCK: str = 'adblock_adg.txt'
+    OUTPUT_ALLOW: str = 'allow_adg.txt'
     
     # 布隆过滤器配置
     BLOOM_INIT_CAP: int = 1000000
