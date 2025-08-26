@@ -17,7 +17,7 @@ class HostsConfig:
     OUTPUT_DIR = Path(os.getenv('OUTPUT_DIR', './'))
     
     # 输入文件模式
-    HOSTS_PATTERNS = ['hosts*', '*-hosts*']
+    HOSTS_PATTERNS = []
     ADBLOCK_PATTERNS = ['adblock_adg.txt']  # 也处理AdBlock文件
     
     # 输出文件名
