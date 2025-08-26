@@ -1,12 +1,16 @@
 import os
 import re
 import json
-import sys
 import requests
 from pathlib import Path
 from typing import Set, Dict, List, Tuple, Optional, Any
 from pybloom_live import ScalableBloomFilter
 from dataclasses import dataclass
+import logging
+
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 @dataclass
 class AdBlockConfig:
@@ -17,19 +21,18 @@ class AdBlockConfig:
     
     # 文件模式配置
     ADBLOCK_PATTERNS: List[str] = None
-    OUTPUT_BLOCK: str = 'adblock.txt'
-    OUTPUT_ALLOW: str = 'allow.txt'
+    OUTPUT_BLOCK: str = 'adblock_merged.txt'
+    OUTPUT_ALLOW: str = 'allow_merged.txt'
     
     # 布隆过滤器配置
     BLOOM_INIT_CAP: int = 1000000
-    BLOOM_ERROR_RATE: float = 0.005
+    BLOOM_ERROR_RATE: float = 0.0001
     
     # 规则处理配置
     MAX_RULE_LENGTH: int = 2000  # 规则最大长度限制
     MIN_RULE_LENGTH: int = 3     # 规则最小长度限制
     
     # 语法数据库配置
-    SYNTAX_DB_URL: str = "https://raw.githubusercontent.com/AdguardTeam/AdguardFilters/master/AdBlockSyntax.md"
     SYNTAX_DB_FILE: str = "adblock_syntax_db.json"
     
     def __post_init__(self):
@@ -47,9 +50,10 @@ class AdBlockSyntaxDatabase:
     
     def load_syntax_database(self):
         """加载语法数据库"""
-        db_path = self.config.INPUT_DIR / self.config.SYNTAX_DB_FILE
+        # 首先尝试从脚本同目录加载语法数据库
+        script_dir = Path(__file__).parent
+        db_path = script_dir / self.config.SYNTAX_DB_FILE
         
-        # 尝试从本地加载语法数据库
         if db_path.exists():
             try:
                 with open(db_path, 'r', encoding='utf-8') as f:
@@ -57,47 +61,54 @@ class AdBlockSyntaxDatabase:
                     self.syntax_patterns = db_data.get('syntax_patterns', {})
                     self.rule_types = db_data.get('rule_types', {})
                     self.modifiers = db_data.get('modifiers', {})
-                print(f"从本地加载语法数据库: {len(self.syntax_patterns)} 个模式")
+                logger.info(f"从脚本目录加载语法数据库: {len(self.syntax_patterns)} 个模式")
                 return
             except Exception as e:
-                print(f"加载本地语法数据库失败: {e}")
+                logger.error(f"加载脚本目录语法数据库失败: {e}")
         
-        # 从网络下载语法数据库
-        self.download_syntax_database()
-    
-    def download_syntax_database(self):
-        """从网络下载语法数据库"""
+        # 然后尝试从输入目录加载语法数据库
+        db_path = self.config.INPUT_DIR / self.config.SYNTAX_DB_FILE
+        
+        if db_path.exists():
+            try:
+                with open(db_path, 'r', encoding='utf-8') as f:
+                    db_data = json.load(f)
+                    self.syntax_patterns = db_data.get('syntax_patterns', {})
+                    self.rule_types = db_data.get('rule_types', {})
+                    self.modifiers = db_data.get('modifiers', {})
+                logger.info(f"从输入目录加载语法数据库: {len(self.syntax_patterns)} 个模式")
+                return
+            except Exception as e:
+                logger.error(f"加载输入目录语法数据库失败: {e}")
+        
+        # 如果都没有找到，使用内置的基本语法规则
+        logger.warning("未找到语法数据库文件，使用内置基本语法规则")
+        self.load_basic_syntax()
+        
+        # 尝试保存基本语法数据库到脚本目录
         try:
-            print(f"从 {self.config.SYNTAX_DB_URL} 下载语法数据库...")
-            response = requests.get(self.config.SYNTAX_DB_URL, timeout=30)
-            response.raise_for_status()
-            
-            # 解析AdBlock语法文档
-            content = response.text
-            self.parse_syntax_document(content)
-            
-            # 保存到本地
-            db_data = {
-                'syntax_patterns': self.syntax_patterns,
-                'rule_types': self.rule_types,
-                'modifiers': self.modifiers
-            }
-            
-            db_path = self.config.INPUT_DIR / self.config.SYNTAX_DB_FILE
-            with open(db_path, 'w', encoding='utf-8') as f:
-                json.dump(db_data, f, ensure_ascii=False, indent=2)
-                
-            print(f"语法数据库已保存到: {db_path}")
-            
+            self.save_syntax_database(script_dir / self.config.SYNTAX_DB_FILE)
         except Exception as e:
-            print(f"下载语法数据库失败: {e}")
-            # 使用内置的基本语法规则
-            self.load_basic_syntax()
+            logger.error(f"保存基本语法数据库失败: {e}")
     
-    def parse_syntax_document(self, content: str):
-        """解析AdBlock语法文档"""
-        # 这里简化处理，实际应根据AdBlockSyntax.md的格式进行解析
-        # 提取基本规则模式
+    def save_syntax_database(self, db_path: Path):
+        """保存语法数据库到文件"""
+        db_data = {
+            'syntax_patterns': self.syntax_patterns,
+            'rule_types': self.rule_types,
+            'modifiers': self.modifiers,
+            'version': '1.0',
+            'description': 'AdBlock/AdGuard 语法数据库'
+        }
+        
+        with open(db_path, 'w', encoding='utf-8') as f:
+            json.dump(db_data, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"语法数据库已保存到: {db_path}")
+    
+    def load_basic_syntax(self):
+        """加载基本语法规则（备用）"""
+        # 基本规则模式
         self.syntax_patterns = {
             'domain_rule': r'^\|\|([^\^]+)\^',
             'url_rule': r'^\|([^\|]+)\|',
@@ -139,48 +150,7 @@ class AdBlockSyntaxDatabase:
             'webrtc': r'webrtc'
         }
         
-        print(f"从文档解析了 {len(self.syntax_patterns)} 个语法模式")
-    
-    def load_basic_syntax(self):
-        """加载基本语法规则（备用）"""
-        self.syntax_patterns = {
-            'domain_rule': r'^\|\|([^\^]+)\^',
-            'url_rule': r'^\|([^\|]+)\|',
-            'element_hiding': r'^([^#]+)##([^#]+)',
-            'exception_rule': r'^@@',
-            'regex_rule': r'^/(.+)/$',
-            'comment': r'^!',
-            'options': r'\$(.+)$'
-        }
-        
-        self.rule_types = {
-            'domain_rule': 'block',
-            'url_rule': 'block',
-            'element_hiding': 'block',
-            'exception_rule': 'allow',
-            'regex_rule': 'block',
-            'comment': 'invalid',
-            'options': 'modifier'
-        }
-        
-        self.modifiers = {
-            'domain': r'domain=([^\s,]+)',
-            'script': r'script',
-            'image': r'image',
-            'stylesheet': r'stylesheet',
-            'object': r'object',
-            'xmlhttprequest': r'xmlhttprequest',
-            'subdocument': r'subdocument',
-            'document': r'document',
-            'elemhide': r'elemhide',
-            'other': r'other',
-            'third-party': r'third-party',
-            'match-case': r'match-case',
-            'collapse': r'collapse',
-            'donottrack': r'donottrack'
-        }
-        
-        print("使用内置基本语法规则")
+        logger.info("使用内置基本语法规则")
 
 class AdBlockMerger:
     def __init__(self, config: AdBlockConfig):
@@ -230,12 +200,16 @@ class AdBlockMerger:
             
         # 使用语法数据库匹配规则类型
         for pattern_name, pattern in self.syntax_db.syntax_patterns.items():
-            match = re.match(pattern, rule)
-            if match:
-                result['pattern_type'] = pattern_name
-                result['type'] = self.syntax_db.rule_types.get(pattern_name, 'unknown')
-                result['is_valid'] = result['type'] not in ['invalid', 'comment', 'empty']
-                break
+            try:
+                match = re.match(pattern, rule)
+                if match:
+                    result['pattern_type'] = pattern_name
+                    result['type'] = self.syntax_db.rule_types.get(pattern_name, 'unknown')
+                    result['is_valid'] = result['type'] not in ['invalid', 'comment', 'empty']
+                    break
+            except re.error:
+                logger.warning(f"正则表达式模式错误: {pattern_name} - {pattern}")
+                continue
         
         # 提取修饰符
         if '$' in rule:
@@ -244,8 +218,12 @@ class AdBlockMerger:
             modifiers_str = parts[1].strip()
             
             for mod_name, mod_pattern in self.syntax_db.modifiers.items():
-                if re.search(mod_pattern, modifiers_str):
-                    result['modifiers'].append(mod_name)
+                try:
+                    if re.search(mod_pattern, modifiers_str):
+                        result['modifiers'].append(mod_name)
+                except re.error:
+                    logger.warning(f"修饰符正则表达式错误: {mod_name} - {mod_pattern}")
+                    continue
             
             # 对修饰符进行排序以确保一致性
             result['modifiers'].sort()
@@ -270,28 +248,37 @@ class AdBlockMerger:
         # 根据规则类型进行特定标准化
         if analysis['pattern_type'] == 'domain_rule':
             # 域名规则标准化: ||example.com^ -> ||example.com^
-            match = re.match(r'^\|\|([^\^]+)\^', normalized)
-            if match:
-                domain = match.group(1).lower()  # 域名转换为小写
-                normalized = f'||{domain}^'
+            try:
+                match = re.match(r'^\|\|([^\^]+)\^', normalized)
+                if match:
+                    domain = match.group(1).lower()  # 域名转换为小写
+                    normalized = f'||{domain}^'
+            except re.error:
+                pass  # 保持原样
                 
         elif analysis['pattern_type'] == 'url_rule':
             # URL规则标准化: |http://example.com| -> |http://example.com|
-            match = re.match(r'^\|([^\|]+)\|', normalized)
-            if match:
-                url = match.group(1)
-                # 对URL进行基本清理
-                url = re.sub(r'^https?://', '', url)  # 移除协议
-                url = re.sub(r'^www\.', '', url)      # 移除www前缀
-                normalized = f'|{url}|'
+            try:
+                match = re.match(r'^\|([^\|]+)\|', normalized)
+                if match:
+                    url = match.group(1)
+                    # 对URL进行基本清理
+                    url = re.sub(r'^https?://', '', url)  # 移除协议
+                    url = re.sub(r'^www\.', '', url)      # 移除www前缀
+                    normalized = f'|{url}|'
+            except re.error:
+                pass  # 保持原样
                 
         elif analysis['pattern_type'] == 'element_hiding':
             # 元素隐藏规则标准化: example.com##.ad -> example.com##.ad
-            match = re.match(r'^([^#]+)##([^#]+)', normalized)
-            if match:
-                domain = match.group(1).lower()  # 域名转换为小写
-                selector = match.group(2).strip()
-                normalized = f'{domain}##{selector}'
+            try:
+                match = re.match(r'^([^#]+)##([^#]+)', normalized)
+                if match:
+                    domain = match.group(1).lower()  # 域名转换为小写
+                    selector = match.group(2).strip()
+                    normalized = f'{domain}##{selector}'
+            except re.error:
+                pass  # 保持原样
         
         # 添加排序后的修饰符
         if analysis['modifiers']:
@@ -360,7 +347,7 @@ class AdBlockMerger:
         all_rules = []
         
         if not directory.exists():
-            print(f"警告：目录 {directory} 不存在，正在创建...")
+            logger.warning(f"目录 {directory} 不存在，正在创建...")
             directory.mkdir(parents=True, exist_ok=True)
             return all_rules
             
@@ -371,30 +358,15 @@ class AdBlockMerger:
                         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                             rules = f.read().splitlines()
                             all_rules.extend(rules)
-                            print(f"从 {file_path} 读取了 {len(rules)} 条规则")
+                            logger.info(f"从 {file_path} 读取了 {len(rules)} 条规则")
                     except Exception as e:
-                        print(f"读取文件 {file_path} 失败: {e}")
+                        logger.error(f"读取文件 {file_path} 失败: {e}")
                     
-        return all_rules
-
-    def download_network_rules(self, urls: List[str]) -> List[str]:
-        """从网络下载规则列表"""
-        all_rules = []
-        for url in urls:
-            try:
-                print(f"从 {url} 下载规则...")
-                response = requests.get(url, timeout=30)
-                response.raise_for_status()
-                rules = response.text.splitlines()
-                all_rules.extend(rules)
-                print(f"从 {url} 下载了 {len(rules)} 条规则")
-            except Exception as e:
-                print(f"下载规则失败 {url}: {e}")
         return all_rules
 
     def merge_and_deduplicate(self):
         """主函数：合并和去重所有规则"""
-        print("开始处理本地规则...")
+        logger.info("开始处理本地规则...")
         
         # 读取本地所有规则文件
         local_rules = self.recursive_read_files(
@@ -405,14 +377,14 @@ class AdBlockMerger:
         # 处理本地规则
         added, skipped = self.process_rules(local_rules, "local")
         
-        print(f"本地规则处理完成:")
-        print(f"  总处理规则: {self.rule_stats['total_processed']}")
-        print(f"  有效规则: {self.rule_stats['valid_rules']}")
-        print(f"  重复规则: {self.rule_stats['duplicate_rules']}")
-        print(f"  无效规则: {self.rule_stats['invalid_rules']}")
-        print(f"  黑名单规则: {self.rule_stats['block_rules']}")
-        print(f"  白名单规则: {self.rule_stats['allow_rules']}")
-        print(f"  未知类型规则: {self.rule_stats['unknown_rules']}")
+        logger.info(f"本地规则处理完成:")
+        logger.info(f"  总处理规则: {self.rule_stats['total_processed']}")
+        logger.info(f"  有效规则: {self.rule_stats['valid_rules']}")
+        logger.info(f"  重复规则: {self.rule_stats['duplicate_rules']}")
+        logger.info(f"  无效规则: {self.rule_stats['invalid_rules']}")
+        logger.info(f"  黑名单规则: {self.rule_stats['block_rules']}")
+        logger.info(f"  白名单规则: {self.rule_stats['allow_rules']}")
+        logger.info(f"  未知类型规则: {self.rule_stats['unknown_rules']}")
 
     def save_rules(self):
         """保存去重后的规则到文件"""
@@ -443,9 +415,9 @@ class AdBlockMerger:
         with open(allow_output_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(allow_rules))
         
-        print(f"\n规则保存完成:")
-        print(f"  {len(block_rules)} 条黑名单规则保存到 {block_output_path}")
-        print(f"  {len(allow_rules)} 条白名单规则保存到 {allow_output_path}")
+        logger.info(f"\n规则保存完成:")
+        logger.info(f"  {len(block_rules)} 条黑名单规则保存到 {block_output_path}")
+        logger.info(f"  {len(allow_rules)} 条白名单规则保存到 {allow_output_path}")
 
 
 def main():
