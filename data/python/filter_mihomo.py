@@ -272,7 +272,9 @@ def main():
 
         # 2. 生成Mihomo YAML（打印前5条预览）
         yaml_content = generate_mihomo_yaml(rules)
-        logger.debug(f"Mihomo YAML预览（前5条规则）:\n{yaml_content.split('\n')[0:16]}")  # 每条规则占4行，5条占20行
+        # 修复：提前计算拆分后的预览内容，避开f-string内用反斜杠
+        yaml_preview = yaml_content.split('\n')[0:16]
+        logger.debug(f"Mihomo YAML预览（前5条规则）:\n{yaml_preview}")  # 每条规则占4行，5条占20行
 
         # 3. 编译为MRS规则集
         if not compile_ruleset(config.compiler_path, yaml_content, config.output_path):
