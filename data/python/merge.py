@@ -17,7 +17,7 @@ class AdBlockConfig:
     """配置类 - 白名单规则优化"""
     # 基础路径配置
     INPUT_DIR: Path = Path(os.getenv('INPUT_DIR', './data/filter'))
-    OUTPUT_DIR: Path = Path(os.getenv('OUTPUT_DIR', './data/filter'))
+    OUTPUT_DIR: Path = Path(os.getenv('OUTPUT_DIR', './'))
     
     # 文件模式配置
     ADBLOCK_PATTERNS: List[str] = None
