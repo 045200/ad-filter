@@ -61,89 +61,6 @@ jobs:
           pip install --upgrade pip
           pip install aiohttp aiodns psutil xxhash maxminddb pyyaml requests chardet adblockparser IPy pytz pybloom-live aiofiles idna
 
-      # 6. 创建必要的目录- 修正：确保备份目录路径统一
-      - name: Create directories
-        run: |
-          mkdir -p ${{ env.DATA_DIR }}/filter
-          mkdir -p ${{ env.DATA_DIR }}/mod/backups  # 备份目录统一在mod下
-          mkdir -p ${{ env.DATA_DIR }}/smartdns
-          mkdir -p ${{ env.CACHE_DIR }}
-          mkdir -p ${{ env.TEMP_DIR }}
-          mkdir -p ${{ env.DATA_DIR }}/sources
-
-      # 7. 下载SmartDNS（使用缓存）- 优化：缓存key依赖固定文件，避免首次失效
-      - name: Install SmartDNS with cache
-        id: cache-smartdns
-        uses: actions/cache@v3
-        with:
-          path: /usr/local/bin/smartdns
-          # 依赖仓库根目录的.smartdns-cache-marker（需手动添加空文件，避免首次运行key为空）
-          key: ${{ runner.os }}-smartdns-${{ hashFiles('**/.smartdns-cache-marker') }}
-          restore-keys: |
-            ${{ runner.os }}-smartdns-
-
-      # 8. 如果没有缓存，下载SmartDNS（已修复版本获取问题）- 核心步骤
-      - name: Download SmartDNS
-        if: steps.cache-smartdns.outputs.cache-hit != 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 避免API速率限制
-        run: |
-          echo "获取SmartDNS最新版本信息..."
-          API_URL="https://api.github.com/repos/pymumu/smartdns/releases/latest"
-          LATEST_RELEASE=$(curl -sL -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github.v3+json" $API_URL)
-          
-          # 检测JSON有效性
-          if ! echo "$LATEST_RELEASE" | jq -e . > /dev/null 2>&1; then
-              echo "错误：API响应不是有效JSON"
-              echo "API响应：$LATEST_RELEASE"
-              exit 1
-          fi
-
-          # 检测仓库不存在/速率限制
-          RESPONSE_MSG=$(echo "$LATEST_RELEASE" | jq -r '.message // "no_message"')
-          if echo "$RESPONSE_MSG" | grep -q -E "Not Found|rate limit exceeded"; then
-              echo "错误：API请求失败，原因：$RESPONSE_MSG"
-              exit 1
-          fi
-
-          # 提取版本标签
-          RELEASE_TAG=$(echo "$LATEST_RELEASE" | jq -r '.tag_name // ""')
-          if [ -z "$RELEASE_TAG" ]; then
-              echo "错误：无有效tag_name"
-              echo "API响应：$LATEST_RELEASE"
-              exit 1
-          fi
-          echo "最新版本: $RELEASE_TAG"
-          echo "$RELEASE_TAG" > ${{ github.workspace }}/smartdns-version.txt
-
-          # 获取下载链接
-          DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name | test("smartdns-x86_64$")) | .browser_download_url' | head -n 1)
-          if [ -z "$DOWNLOAD_URL" ]; then
-              DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | jq -r '.assets[] | select(.name | contains("x86_64")) | .browser_download_url' | head -n 1)
-          fi
-          if [ -z "$DOWNLOAD_URL" ]; then
-              echo "错误：未找到x86_64二进制文件"
-              exit 1
-          fi
-          
-          curl -L -o "/usr/local/bin/smartdns" --progress-bar "$DOWNLOAD_URL"
-          sudo chmod +x "/usr/local/bin/smartdns"
-          echo "SmartDNS安装完成"
-
-      # 9. SmartDNS诊断步骤 - 新增
-      - name: Diagnose SmartDNS
-        run: |
-          echo "=== SmartDNS诊断 ==="
-          echo "1. 检查二进制文件..."
-          ls -la /usr/local/bin/smartdns
-          echo "2. 检查文件类型..."
-          file /usr/local/bin/smartdns
-          echo "3. 测试版本查询..."
-          /usr/local/bin/smartdns -v || echo "版本检查失败"
-          echo "4. 检查端口占用..."
-          netstat -tulpn | grep :${{ env.SMARTDNS_PORT }} || echo "端口 ${{ env.SMARTDNS_PORT }} 未被占用"
-          echo "=== 诊断完成 ==="
-
       # 10. 并行下载规则- 核心步骤
       - name: Download rules in parallel
         run: |
@@ -177,20 +94,7 @@ jobs:
           done
           echo "临时文件清理完成"
 
-      # 13. 运行SmartDNS规则清理器（带超时和重试）- 核心步骤
-      - name: Run SmartDNS Rule Cleaner
-        run: |
-          echo "开始清理SmartDNS规则..."
-          timeout 21600s python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py || \
-          (echo "第一次超时，重试..." && timeout 43200s python ${{ env.PYTHON_SCRIPTS }}/filter_cleaner.py)
-          echo "SmartDNS规则清理完成"
-        env:
-          DNS_WORKERS: 30
-          BATCH_SIZE: 500
-          DNS_TIMEOUT: 5
-          DNS_RETRIES: 3
-          USE_SMARTDNS: "true"
-
+      
       # 14. 并行生成多格式规则- 核心步骤
       - name: Generate multi-format rules in parallel
         run: |
