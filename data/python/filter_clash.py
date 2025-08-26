@@ -129,15 +129,22 @@ class Config:
 
 # ==================== 日志系统 ====================
 class RequestContextFilter(logging.Filter):
+    def __init__(self):
+        super().__init__()
+        self.request_id = uuid.uuid4().hex[:8]
+    
     def filter(self, record):
         if not hasattr(record, "request_id"):
-            record.request_id = uuid.uuid4().hex[:8]
+            record.request_id = self.request_id
         return True
 
 def setup_logger() -> logging.Logger:
     logger = logging.getLogger("AdblockConverter")
     logger.setLevel(logging.INFO)
-    logger.addFilter(RequestContextFilter())
+    
+    # 创建过滤器实例
+    context_filter = RequestContextFilter()
+    logger.addFilter(context_filter)
 
     formatter = logging.Formatter(
         "[%(asctime)s] [%(request_id)s] %(levelname)s: %(message)s",
@@ -146,6 +153,10 @@ def setup_logger() -> logging.Logger:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
     logger.handlers = [handler]
+    
+    # 保存过滤器引用以便后续访问
+    logger.context_filter = context_filter
+    
     return logger
 
 logger = setup_logger()
@@ -221,7 +232,7 @@ def convert_adg_to_rule(rule_line: str, is_allow: bool, target_format: str) -> L
         return converted
 
     # 未匹配规则
-    logger.warning(f"跳过不支持的规则：{rule_line}", extra={"request_id": logger.handlers[0].filter.request_id})
+    logger.warning(f"跳过不支持的规则：{rule_line}")
     return converted
 
 def process_rules(file_path: Path, is_allow: bool, target_format: str) -> List[Union[str, Dict]]:
