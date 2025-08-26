@@ -23,6 +23,7 @@ jobs:
       MAIN_BRANCH: multi
       CACHE_DIR: ${{ github.workspace }}/data/cache
       TEMP_DIR: ${{ github.workspace }}/data/filter
+      FILTER_DIR: ${{ github.workspace }}
 
     steps:
       # 1. 拉取代码（multi分支）- 核心步骤
@@ -105,7 +106,9 @@ jobs:
         run: |
           echo "开始统一清理..."
           # 清理临时目录
-          rm -rf ${{ env.TEMP_DIR }}
+          rm -rf ${{ env.TEMP_DIR }} 
+          rm -f ${{ github.workspace }}/*.txt ${{ github.workspace }}/*.conf ${{ github.workspace }}/*.yaml
+
           echo "统一清理完成"
 
       # 15. 提交变更- 核心步骤
