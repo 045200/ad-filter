@@ -1,6 +1,6 @@
 {
   "version": "2.1",
-  "description": "Comprehensive AdBlock/AdGuard syntax database covering AdBlock basic rules, AdGuard extended rules, DNS filtering, and cosmetic filtering rules. Designed for accurate rule parsing and deduplication.",
+  "description": "Comprehensive AdBlock/AdGuard syntax database covering AdBlock basic rules, AdGuard extended rules, DNS filtering (including AdGuard Home specific syntax), and cosmetic filtering rules. Designed for accurate rule parsing and deduplication. Note: AdGuard Home primarily supports DNS-level blocking rules and does not support cosmetic filtering or scriptlet rules.",
   "last_updated": "2025-08-26",
   "syntax_patterns": {
     "comment": "^[!#]",
@@ -21,7 +21,10 @@
     "adguard_replace_rule": "\\\\$replace=",
     "adguard_cookie_rule": "\\\\$cookie=",
     "adguard_generichide": "\\\\$generichide",
-    "adguard_specific_domain": "^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$"
+    "adguard_specific_domain": "^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$",
+    "adguard_home_dns_rewrite": "\\^\\$dnsrewrite=",
+    "adguard_home_client": "\\^\\$client=",
+    "adguard_home_dnstype": "\\^\\$dnstype="
   },
   "rule_types": {
     "comment": "invalid",
@@ -42,7 +45,10 @@
     "adguard_replace_rule": "block",
     "adguard_cookie_rule": "block",
     "adguard_generichide": "cosmetic",
-    "adguard_specific_domain": "block"
+    "adguard_specific_domain": "block",
+    "adguard_home_dns_rewrite": "dns_rewrite",
+    "adguard_home_client": "client_block",
+    "adguard_home_dnstype": "dns_type_block"
   },
   "modifiers": {
     "domain": "domain=([^\\s,]+)",
@@ -81,19 +87,23 @@
     "denyallow": "denyallow=([^\\s,]+)",
     "app": "app=([^\\s,]+)",
     "network": "network=([^\\s,]+)",
-    "method": "method=([^\\s,]+)"
+    "method": "method=([^\\s,]+)",
+    "adguard_home_noerror": "noerror",
+    "adguard_home_answer": "answer=([^\\s,]+)"
   },
   "common_patterns": {
     "ad_keywords": ["ad", "ads", "advert", "advertising", "adv", "banner", "promo", "popup", "track", "tracking", "analytics", "affiliate", "doubleclick", "googlead", "adsense"],
     "element_selectors": [".ad-", "#ad-", "[class*=\"ad\"]", "[id*=\"ad\"]", ".banner", ".popup", ".modal", ".overlay", ".newsletter", ".subscribe", ".cookie", ".gdpr"],
-    "known_trackers": ["google-analytics", "googletagmanager", "facebook.net", "scorecardresearch", "hotjar", "amplitude", "mixpanel", "matomo", "piwik"]
+    "known_trackers": ["google-analytics", "googletagmanager", "facebook.net", "scorecardresearch", "hotjar", "amplitude", "mixpanel", "matomo", "piwik"],
+    "adguard_home_dns_rewrite_types": ["A", "AAAA", "CNAME", "TXT", "MX", "PTR", "SRV", "SOA", "NS"]
   },
   "normalization_rules": {
     "domain_to_lowercase": true,
     "sort_modifiers": true,
     "remove_redundant_wildcards": true,
     "standardize_protocols": true,
-    "canonicalize_domains": true
+    "canonicalize_domains": true,
+    "adguard_home_normalize_dns_rewrite": true
   },
   "validation_rules": {
     "max_rule_length": 2000,
@@ -103,7 +113,26 @@
       "document": ["domain", "important", "badfilter"],
       "elemhide": ["domain", "generichide", "specifichide"],
       "redirect": ["domain", "important", "script", "image"],
-      "removeparam": ["domain", "important", "third-party"]
+      "removeparam": ["domain", "important", "third-party"],
+      "dnsrewrite": ["domain", "client", "dnstype", "important"],
+      "dnstype": ["domain", "client", "important"]
+    },
+    "adguard_home_specific_validation": {
+      "max_dns_rewrite_length": 1000,
+      "valid_dns_rewrite_types": ["A", "AAAA", "CNAME", "TXT", "MX", "PTR", "SRV", "SOA", "NS"],
+      "client_modifier_pattern": "^([0-9a-fA-F.:]+|[a-zA-Z0-9.-]+)$"
     }
+  },
+  "adguard_home_specific": {
+    "supported_rule_types": ["domain_rule", "exception_rule", "adguard_dns_rule", "adguard_home_dns_rewrite", "adguard_home_client", "adguard_home_dnstype", "hosts_rule", "regex_rule"],
+    "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule"],
+    "special_modifiers": ["client", "dnstype", "dnsrewrite", "important", "badfilter"],
+    "dns_rewrite_syntax": "^\\|\\|([^\\^]+)\\^\\$dnsrewrite=([^\\s]+)$",
+    "client_syntax": "^\\|\\|([^\\^]+)\\^\\$client=([^\\s]+)$"
+  },
+  "coverage_notes": {
+    "general": "This syntax library aims to cover the core functionalities of both AdGuard (browser extension) and AdGuard Home (DNS filter).",
+    "adguard_home_coverage": "The library covers all major AdGuard Home specific syntax elements, including DNS rewriting, client-based filtering, and DNS type filtering. Rules unsupported by AdGuard Home (like cosmetic filters) are marked accordingly for clarity during processing.",
+    "recommendation": "When generating rules for AdGuard Home, filter out rules of types listed in 'unsupported_rule_types' to avoid errors and ensure optimal performance."
   }
 }
