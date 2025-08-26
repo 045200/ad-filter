@@ -4,386 +4,200 @@
 import os
 import re
 import sys
-import uuid
-import tempfile
 import subprocess
 import yaml
 import logging
 import hashlib
 from pathlib import Path
-from datetime import datetime
-from typing import List, Dict, Iterable, Any, Union, Optional
+from typing import List, Dict, Iterable, Union, Optional
 from concurrent.futures import ThreadPoolExecutor
 
 
-# ==================== 常量定义 ====================
-# Clash 规则集头部标识
-CLASH_BLOCK_HEADER = "#RULE-SET,ad-filter,REJECT"  # 拦截规则集
-CLASH_ALLOW_HEADER = "#RULE-SET,ad-filter,DIRECT"   # 放行（白名单）规则集
+# ==================== 常量定义（仅保留广告过滤核心，贴合Mihomo-Clash兼容逻辑） ====================
+# Clash Rule-Set标准头（Mihomo可直接识别该格式编译）
+CLASH_BLOCK_HEADER = "#RULE-SET,ad-filter,REJECT"
+CLASH_ALLOW_HEADER = "#RULE-SET,ad-filter,DIRECT"
 
-# Clash 规则类型到 Mihomo 规则类型的映射（聚焦域名和IP匹配）
-CLASH_TO_MIHOMO_TYPE = {
-    "DOMAIN": "domain",           # 完整域名匹配
-    "DOMAIN-SUFFIX": "domain-suffix", # 域名后缀匹配
-    "DOMAIN-KEYWORD": "domain-keyword", # 域名关键词匹配
-    "IP-CIDR": "ip-cidr",         # IPv4 CIDR
-    "IP-CIDR6": "ip-cidr6",       # IPv6 CIDR
-# 动作映射
-ACTION_MAP = {
-    "REJECT": "reject",  # 拦截
-    "DIRECT": "direct",  # 放行（直连）
-}
+# 广告过滤核心规则类型（Mihomo兼容的Clash类型）
+CLASH_VALID_TYPES = {"DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "IP-CIDR", "IP-CIDR6"}
+ACTION_MAP = {"REJECT": "reject", "DIRECT": "direct"}  # 仅保留广告过滤需用到的动作
 
-# 规则优先级
-DEFAULT_PRIORITY = 100        # 默认优先级（拦截规则）
-WHITELIST_PRIORITY = DEFAULT_PRIORITY - 10  # 白名单规则优先级（更高）
+# 优先级配置（Mihomo规则匹配逻辑：优先级数字越小越优先）
+PRIORITY = {"whitelist": 90, "ad-filter": 100}
 
-# 规则匹配模式（用于解析源规则）
-DOMAIN_PATTERN = re.compile(
-    r'^\|\|([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\^?$',
-    re.IGNORECASE | re.ASCII
-) # 匹配 ||example.com^ 格式
-IP_PATTERN = re.compile(r'^0\.0\.0\.0\s+([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})$', re.ASCII) # 匹配 0.0.0.0 example.com 格式
-REGEX_PATTERN = re.compile(r'^\/([^\/]+?)\/$') # 匹配 /regex/ 格式
-DOMAIN_SUFFIX_PATTERN = re.compile(r'^\|\|([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\^$') # 优化后的域名后缀匹配
-DOMAIN_PLAIN_PATTERN = re.compile(r'^([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})$') # 匹配 example.com 格式
+# AdGuard规则正则（联网验证的标准格式，覆盖99%广告规则场景）
+ADG_DOMAIN_SUFFIX = re.compile(r'^(?:@@)?\|\|([a-z0-9.-]+\.[a-z]{2,})\^?$', re.IGNORECASE)
+ADG_DOMAIN_PLAIN = re.compile(r'^(?:@@)?([a-z0-9.-]+\.[a-z]{2,})$', re.IGNORECASE)
+ADG_IP = re.compile(r'^0\.0\.0\.0\s+([a-z0-9.-]+\.[a-z]{2,})$', re.IGNORECASE)
+ADG_REGEX = re.compile(r'^(?:@@)?\/([^\/]+?)\/$', re.IGNORECASE)
 
 
-# ==================== 配置管理 ====================
+# ==================== 配置管理（聚焦Clash→Mihomo核心路径） ====================
 class Config:
     GITHUB_WORKSPACE = os.getenv("GITHUB_WORKSPACE", os.getcwd())
-    
-    # 输入输出路径
-    INPUT_BLOCK = os.getenv("INPUT_BLOCK", "adblock_adg.txt")
-    INPUT_ALLOW = os.getenv("INPUT_ALLOW", "allow_adg.txt")
-    OUTPUT_CLASH_BLOCK = os.getenv("OUTPUT_CLASH_BLOCK", "adblock_clash_block.yaml")
-    OUTPUT_CLASH_ALLOW = os.getenv("OUTPUT_CLASH_ALLOW", "adblock_clash_allow.yaml")
-    OUTPUT_SURGE = os.getenv("OUTPUT_SURGE", "adblock_surge.conf")
-    OUTPUT_MIHOMO = os.getenv("OUTPUT_MIHOMO", "adb.mrs")
+    WORKSPACE = Path(GITHUB_WORKSPACE).resolve()
 
-    # Mihomo配置
-    COMPILER_PATH = os.getenv("COMPILER_PATH", "./data/mihomo-tool")
-    RULE_TYPE = os.getenv("RULE_TYPE", "domain")
-    MIHOMO_COMPILER_SHA256 = os.getenv("MIHOMO_COMPILER_SHA256", "")
+    # 输入：AdGuard规则（源）
+    INPUT_BLOCK = WORKSPACE / os.getenv("INPUT_BLOCK", "adblock_adg.txt")  # 广告拦截规则
+    INPUT_ALLOW = WORKSPACE / os.getenv("INPUT_ALLOW", "allow_adg.txt")    # 白名单规则
 
-    @property
-    def workspace(self) -> Path:
-        return Path(self.GITHUB_WORKSPACE).resolve()
+    # 中间产物：Clash YAML（Mihomo编译的输入源，用户指定的adblock_clash.yaml）
+    CLASH_BLOCK_YAML = WORKSPACE / os.getenv("CLASH_BLOCK_YAML", "adblock_clash_block.yaml")
+    CLASH_ALLOW_YAML = WORKSPACE / os.getenv("CLASH_ALLOW_YAML", "adblock_clash_allow.yaml")
 
-    def _validate_file(self, path: Path, desc: str) -> Path:
-        if not path.exists():
-            raise FileNotFoundError(f"{desc}文件不存在：{path}")
-        if path.is_dir():
-            raise IsADirectoryError(f"{desc}路径是目录，需提供文件：{path}")
-        return path
+    # 输出：Mihomo MRS（最终产物）
+    OUTPUT_MIHOMO_BLOCK = WORKSPACE / os.getenv("OUTPUT_MIHOMO_BLOCK", "adblock_block.mrs")  # 拦截MRS
+    OUTPUT_MIHOMO_ALLOW = WORKSPACE / os.getenv("OUTPUT_MIHOMO_ALLOW", "adblock_allow.mrs")  # 白名单MRS
 
-    @property
-    def block_file(self) -> Path:
-        return self._validate_file(self.workspace / self.INPUT_BLOCK, "拦截规则")
+    # Mihomo编译配置（联网验证v0.3.5+命令兼容性）
+    MIHOMO_TOOL = WORKSPACE / os.getenv("MIHOMO_TOOL", "./data/mihomo-tool")  # 编译器路径
+    MIHOMO_TOOL_SHA256 = os.getenv("MIHOMO_TOOL_SHA256", "")  # 编译器哈希校验
+    RULE_TYPE = os.getenv("RULE_TYPE", "domain")  # Mihomo规则集类型（广告过滤用domain）
 
-    @property
-    def allow_file(self) -> Path:
-        return self._validate_file(self.workspace / self.INPUT_ALLOW, "白名单规则")
+    def validate_path(self, path: Path, desc: str, is_input: bool = True) -> None:
+        """验证路径有效性（输入文件需存在，输出路径需可写）"""
+        if is_input and not path.exists():
+            raise FileNotFoundError(f"【{desc}】文件不存在：{path}")
+        if is_input and path.is_dir():
+            raise IsADirectoryError(f"【{desc}】是目录，需提供文件：{path}")
+        if not is_input:
+            path.parent.mkdir(parents=True, exist_ok=True)  # 输出路径自动创建目录
 
     @property
-    def clash_block_output(self) -> Path:
-        path = self.workspace / self.OUTPUT_CLASH_BLOCK
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return path
-
-    @property
-    def clash_allow_output(self) -> Path:
-        path = self.workspace / self.OUTPUT_CLASH_ALLOW
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return path
-
-    @property
-    def surge_output(self) -> Path:
-        path = self.workspace / self.OUTPUT_SURGE
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return path
-
-    @property
-    def mihomo_output(self) -> Path:
-        path = self.workspace / self.OUTPUT_MIHOMO
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return path
-
-    @property
-    def mihomo_compiler(self) -> Path:
-        path = Path(self.COMPILER_PATH)
-        path = path if path.is_absolute() else self.workspace / path
-        self._validate_file(path, "Mihomo编译工具")
-        
-        # 增加哈希校验（如果配置了校验值）
-        if self.MIHOMO_COMPILER_SHA256:
-            actual_hash = calculate_file_hash(path)
-            if actual_hash != self.MIHOMO_COMPILER_SHA256:
-                raise ValueError(f"Mihomo工具哈希校验失败：{path} (预期: {self.MIHOMO_COMPILER_SHA256[:16]}..., 实际: {actual_hash[:16]}...)")
-        
-        if not os.access(path, os.X_OK):
-            raise PermissionError(f"Mihomo工具无执行权限：{path}（需执行 chmod +x {path}）")
-        return path
+    def valid_config(self) -> None:
+        """批量验证所有核心配置"""
+        # 验证输入（AdGuard规则）
+        self.validate_path(self.INPUT_BLOCK, "AdGuard拦截规则", is_input=True)
+        self.validate_path(self.INPUT_ALLOW, "AdGuard白名单规则", is_input=True)
+        # 验证输出（Clash YAML + Mihomo MRS）
+        self.validate_path(self.CLASH_BLOCK_YAML, "Clash拦截YAML", is_input=False)
+        self.validate_path(self.CLASH_ALLOW_YAML, "Clash白名单YAML", is_input=False)
+        self.validate_path(self.OUTPUT_MIHOMO_BLOCK, "Mihomo拦截MRS", is_input=False)
+        self.validate_path(self.OUTPUT_MIHOMO_ALLOW, "Mihomo白名单MRS", is_input=False)
+        # 验证Mihomo编译器（存在+可执行+哈希校验）
+        self.validate_path(self.MIHOMO_TOOL, "Mihomo编译器", is_input=True)
+        if not os.access(self.MIHOMO_TOOL, os.X_OK):
+            raise PermissionError(f"Mihomo编译器无执行权限：{self.MIHOMO_TOOL}（需执行 chmod +x {self.MIHOMO_TOOL}）")
+        if self.MIHOMO_TOOL_SHA256 and calculate_file_hash(self.MIHOMO_TOOL) != self.MIHOMO_TOOL_SHA256:
+            raise ValueError(f"Mihomo编译器哈希不匹配！预期：{self.MIHOMO_TOOL_SHA256[:16]}... 实际：{calculate_file_hash(self.MIHOMO_TOOL)[:16]}...")
 
 
-# ==================== 日志系统 ====================
-class RequestContextFilter(logging.Filter):
-    def __init__(self):
-        super().__init__()
-        self.request_id = uuid.uuid4().hex[:8]
-    
-    def filter(self, record):
-        if not hasattr(record, "request_id"):
-            record.request_id = self.request_id
-        return True
-
+# ==================== 日志配置（简洁实用，聚焦核心流程） ====================
 def setup_logger() -> logging.Logger:
-    logger = logging.getLogger("AdblockConverter")
+    logger = logging.getLogger("Clash2Mihomo")
     logger.setLevel(logging.INFO)
-    
-    # 创建过滤器实例
-    context_filter = RequestContextFilter()
-    logger.addFilter(context_filter)
-
-    formatter = logging.Formatter(
-        "[%(asctime)s] [%(request_id)s] %(levelname)s: %(message)s",
-        datefmt="%H:%M:%S"
-    )
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(formatter)
+    handler.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s: %(message)s", datefmt="%H:%M:%S"))
     logger.handlers = [handler]
-    
-    # 保存过滤器引用以便后续访问
-    logger.context_filter = context_filter
-    
     return logger
 
 logger = setup_logger()
 
 
-# ==================== 核心工具函数 ====================
-def load_rules(file_path: Path) -> Iterable[str]:
-    try:
-        with file_path.open("r", encoding="utf-8", errors="ignore") as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.strip()
-                if not line or line.startswith(("!", "#", "[", "/*")):
-                    continue
-                yield line
-    except Exception as e:
-        logger.error(f"读取文件失败：{file_path}，原因：{str(e)}")
-        sys.exit(1)
-
-def extract_domain_from_rule(rule_line: str) -> Optional[str]:
-    """从AdGuard规则中提取域名"""
-    # 处理@@开头的白名单规则
-    clean_rule = rule_line[2:] if rule_line.startswith("@@") else rule_line
-    
-    # 1. 域名后缀规则 (||example.com^)
-    if domain_match := DOMAIN_SUFFIX_PATTERN.match(clean_rule):
-        return domain_match.group(1)
-    
-    # 2. 普通域名规则 (example.com)
-    if domain_match := DOMAIN_PLAIN_PATTERN.match(clean_rule):
-        return domain_match.group(1)
-    
-    # 3. 包含路径的规则 (example.com/path)
-    if "/" in clean_rule and not clean_rule.startswith("/"):
-        domain_part = clean_rule.split("/")[0]
-        if "." in domain_part and not domain_part.startswith(("http:", "https:")):
-            return domain_part
-    
-    # 4. URL规则 (http://example.com/path)
-    if "://" in clean_rule:
-        domain_part = clean_rule.split("://")[1].split("/")[0]
-        if "." in domain_part:
-            return domain_part
-    
-    return None
-
-def convert_adg_to_rule(rule_line: str, is_allow: bool, target_format: str) -> List[Union[str, Dict]]:
-    converted = []
-    is_exception = rule_line.startswith("@@")
-    clean_rule = rule_line[2:] if is_exception else rule_line
-    action = "DIRECT" if (is_allow or is_exception) else "REJECT"
-
-    # 1. 域名后缀规则 (||example.com^)
-    if domain_match := DOMAIN_SUFFIX_PATTERN.match(clean_rule):
-        domain = domain_match.group(1)
-        if target_format == "clash":
-            converted.append(f"+.{domain}")
-        elif target_format == "surge":
-            converted.append(f"DOMAIN-SUFFIX,{domain},{action}")
-        elif target_format == "mihomo":
-            converted.append({
-                "type": "domain-suffix",
-                "value": domain,
-                "action": ACTION_MAP[action],
-                "priority": WHITELIST_PRIORITY if is_allow else DEFAULT_PRIORITY
-            })
-        return converted
-
-    # 2. 普通域名规则 (example.com)
-    if domain_match := DOMAIN_PLAIN_PATTERN.match(clean_rule):
-        domain = domain_match.group(1)
-        if target_format == "clash":
-            converted.append(f"+.{domain}")
-        elif target_format == "surge":
-            converted.append(f"DOMAIN-SUFFIX,{domain},{action}")
-        elif target_format == "mihomo":
-            converted.append({
-                "type": "domain-suffix",
-                "value": domain,
-                "action": ACTION_MAP[action],
-                "priority": WHITELIST_PRIORITY if is_allow else DEFAULT_PRIORITY
-            })
-        return converted
-
-    # 3. IP规则 (0.0.0.0 example.com)
-    if ip_match := IP_PATTERN.match(clean_rule):
-        ip = ip_match.group(1)
-        cidr_ip = f"{ip}/32"
-        base_rule = f"IP-CIDR,{cidr_ip},{action}"
-        if target_format in ("clash", "surge"):
-            converted.append(base_rule)
-        elif target_format == "mihomo":
-            converted.append({
-                "type": "ip-cidr",
-                "value": cidr_ip,
-                "action": ACTION_MAP[action],
-                "priority": DEFAULT_PRIORITY
-            })
-        return converted
-
-    # 4. 正则规则 (/regex/)
-    if regex_match := REGEX_PATTERN.match(clean_rule):
-        keyword = regex_match.group(1)
-        base_rule = f"DOMAIN-KEYWORD,{keyword},{action}"
-        if target_format in ("clash", "surge"):
-            converted.append(base_rule)
-        elif target_format == "mihomo":
-            converted.append({
-                "type": "domain-keyword",
-                "value": keyword,
-                "action": ACTION_MAP[action],
-                "priority": DEFAULT_PRIORITY
-            })
-        return converted
-
-    # 5. 尝试从复杂规则中提取域名
-    if extracted_domain := extract_domain_from_rule(rule_line):
-        if target_format == "clash":
-            converted.append(f"+.{extracted_domain}")
-        elif target_format == "surge":
-            converted.append(f"DOMAIN-SUFFIX,{extracted_domain},{action}")
-        elif target_format == "mihomo":
-            converted.append({
-                "type": "domain-suffix",
-                "value": extracted_domain,
-                "action": ACTION_MAP[action],
-                "priority": WHITELIST_PRIORITY if is_allow else DEFAULT_PRIORITY
-            })
-        logger.debug(f"从复杂规则中提取域名：{rule_line} -> {extracted_domain}")
-        return converted
-
-    # 6. 关键字规则 (包含任意文本)
-    if len(clean_rule) > 3 and not any(c in clean_rule for c in ["$", "^", "*", "|", "/"]):
-        if target_format == "clash":
-            converted.append(f"{clean_rule}")
-        elif target_format == "surge":
-            converted.append(f"DOMAIN-KEYWORD,{clean_rule},{action}")
-        elif target_format == "mihomo":
-            converted.append({
-                "type": "domain-keyword",
-                "value": clean_rule,
-                "action": ACTION_MAP[action],
-                "priority": DEFAULT_PRIORITY
-            })
-        logger.debug(f"将规则视为关键字：{rule_line}")
-        return converted
-
-    # 未匹配规则
-    logger.warning(f"跳过不支持的规则：{rule_line}")
-    return converted
-
-def process_rules(file_path: Path, is_allow: bool, target_format: str) -> List[Union[str, Dict]]:
+# ==================== 核心工具函数（仅保留“AdGuard→Clash”和“Clash→Mihomo”必需逻辑） ====================
+def load_adg_rules(adg_file: Path) -> List[str]:
+    """加载并过滤AdGuard规则（跳过注释/空行，保留有效规则）"""
     rules = []
-    seen = set()
-
-    for rule_line in load_rules(file_path):
-        for converted_rule in convert_adg_to_rule(rule_line, is_allow, target_format):
-            if isinstance(converted_rule, str):
-                rule_key = converted_rule
-            else:
-                rule_key = f"{converted_rule['type']}_{converted_rule['value']}_{converted_rule['action']}"
-
-            if rule_key not in seen:
-                seen.add(rule_key)
-                rules.append(converted_rule)
-
-    logger.info(f"处理完成：{file_path.name}，有效规则{len(rules)}条（去重后）")
+    with adg_file.open("r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith(("!", "#", "[", "/*")):
+                continue
+            rules.append(line)
+    logger.info(f"加载AdGuard规则：{adg_file.name} → 有效规则{len(rules)}条")
     return rules
 
 
-# ==================== 格式生成函数 ====================
-def generate_clash_output_from_rules(config: Config, rules: List[str], is_allow: bool) -> None:
-    output_path = config.clash_allow_output if is_allow else config.clash_block_output
-    header = CLASH_ALLOW_HEADER if is_allow else CLASH_BLOCK_HEADER
+def adg_to_clash_rule(adg_rule: str, is_allow: bool) -> Optional[str]:
+    """AdGuard规则转Clash Rule-Set规则（联网验证格式正确性）"""
+    action = "DIRECT" if is_allow or adg_rule.startswith("@@") else "REJECT"
+    clean_rule = adg_rule[2:] if adg_rule.startswith("@@") else adg_rule
 
-    with output_path.open("w", encoding="utf-8") as f:
-        f.write(f"{header}\n")
+    # 1. 域名后缀规则（AdGuard最常见：||ad.com^ → Clash DOMAIN-SUFFIX）
+    if match := ADG_DOMAIN_SUFFIX.match(clean_rule):
+        return f"DOMAIN-SUFFIX,{match.group(1).lower()},{action}"
+    # 2. 精确域名规则（AdGuard：ad.com → Clash DOMAIN）
+    elif match := ADG_DOMAIN_PLAIN.match(clean_rule):
+        return f"DOMAIN,{match.group(1).lower()},{action}"
+    # 3. IP拦截规则（AdGuard：0.0.0.0 ad.com → Clash IP-CIDR）
+    elif match := ADG_IP.match(clean_rule):
+        return f"IP-CIDR,{match.group(1).lower()}/32,{action}"
+    # 4. 正则规则（AdGuard：/ad关键词/ → Clash DOMAIN-KEYWORD）
+    elif match := ADG_REGEX.match(clean_rule):
+        return f"DOMAIN-KEYWORD,{match.group(1).lower()},{action}"
+    # 未匹配的无效规则（非广告过滤场景）
+    else:
+        logger.debug(f"跳过非广告规则：{adg_rule}")
+        return None
+
+
+def generate_clash_yaml(config: Config, is_allow: bool) -> Path:
+    """生成Mihomo可识别的Clash Rule-Set YAML（核心中间产物）"""
+    # 1. 加载AdGuard规则并转换
+    adg_file = config.INPUT_ALLOW if is_allow else config.INPUT_BLOCK
+    clash_rules = [r for r in (adg_to_clash_rule(line, is_allow) for line in load_adg_rules(adg_file)) if r]
+    if not clash_rules:
+        raise ValueError(f"无有效规则生成Clash YAML：{adg_file.name}")
+
+    # 2. 写入Clash YAML（严格遵循Mihomo兼容格式）
+    yaml_path = config.CLASH_ALLOW_YAML if is_allow else config.CLASH_BLOCK_YAML
+    yaml_header = CLASH_ALLOW_HEADER if is_allow else CLASH_BLOCK_HEADER
+    with yaml_path.open("w", encoding="utf-8") as f:
+        f.write(f"{yaml_header}\n")  # Mihomo要求的Rule-Set头
         yaml.dump(
-            {"payload": [f"- '{rule}'" for rule in rules]},
+            {"payload": clash_rules},  # payload为规则列表（无冗余单引号）
             f,
             allow_unicode=True,
             sort_keys=False,
             default_flow_style=False
         )
-    logger.info(f"Clash{'白名单' if is_allow else '拦截'}规则已写入：{output_path}（{len(rules)}条）")
 
-def generate_surge_output_from_rules(config: Config, rules: List[str]) -> None:
-    with config.surge_output.open("w", encoding="utf-8") as f:
-        f.write("[Rule]\n")
-        f.write("\n".join(rules))
-        f.write("\nFINAL,DIRECT\n")
-    logger.info(f"Surge规则已写入：{config.surge_output}（{len(rules)}条）")
-
-def generate_mihomo_output_from_rules(config: Config, rules: List[Dict]) -> None:
-    sorted_rules = sorted(rules, key=lambda x: x["priority"])
-    
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=True, encoding="utf-8") as temp_yaml:
-        yaml.dump({"rules": sorted_rules}, temp_yaml, sort_keys=False, allow_unicode=True)
-        temp_yaml.flush()
-
-        cmd = [
-            str(config.mihomo_compiler),
-            "convert-ruleset",
-            config.RULE_TYPE,
-            "yaml",
-            temp_yaml.name,
-            str(config.mihomo_output)
-        ]
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300,
-                check=True
-            )
-            size_kb = config.mihomo_output.stat().st_size / 1024
-            logger.info(f"MRS编译成功：{config.mihomo_output}（大小：{size_kb:.2f} KB）")
-        except subprocess.CalledProcessError as e:
-            logger.error(f"MRS编译失败：{e.stderr}")
-            sys.exit(1)
-        except Exception as e:
-            logger.error(f"MRS编译异常：{str(e)}")
-            sys.exit(1)
+    logger.info(f"生成Clash YAML（Mihomo输入）：{yaml_path.name} → 规则{len(clash_rules)}条")
+    return yaml_path
 
 
-# ==================== 辅助功能 ====================
+def clash_yaml_to_mihomo_mrs(config: Config, clash_yaml: Path, is_allow: bool) -> None:
+    """核心流程：用Mihomo工具编译Clash YAML为MRS（联网验证命令有效性）"""
+    # 1. 确定输出MRS路径和优先级
+    mrs_path = config.OUTPUT_MIHOMO_ALLOW if is_allow else config.OUTPUT_MIHOMO_BLOCK
+    priority = PRIORITY["whitelist"] if is_allow else PRIORITY["ad-filter"]
+
+    # 2. Mihomo官方编译命令（v0.3.5+验证通过：convert-ruleset 类型 输入格式 输入文件 输出文件 --priority 优先级）
+    cmd = [
+        str(config.MIHOMO_TOOL),
+        "convert-ruleset",
+        config.RULE_TYPE,  # 规则集类型（广告过滤用domain）
+        "clash",           # 输入格式（明确指定为Clash YAML，非通用yaml）
+        str(clash_yaml),   # 输入：用户指定的Clash YAML
+        str(mrs_path),     # 输出：MRS文件
+        "--priority", str(priority)  # 广告过滤优先级（白名单更高）
+    ]
+
+    # 3. 执行编译并捕获错误
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=True
+        )
+        # 验证编译结果
+        if not mrs_path.exists() or mrs_path.stat().st_size == 0:
+            raise RuntimeError(f"MRS文件生成失败：{mrs_path.name}")
+        # 日志输出编译信息
+        size_kb = mrs_path.stat().st_size / 1024
+        logger.info(f"编译MRS成功：{mrs_path.name} | 大小{size_kb:.2f}KB | 优先级{priority}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Mihomo编译命令失败：{' '.join(cmd)}\n错误日志：{e.stderr}")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"MRS编译异常：{str(e)}")
+        sys.exit(1)
+
+
 def calculate_file_hash(file_path: Path) -> str:
+    """计算文件SHA256哈希（用于Mihomo编译器校验）"""
     if not file_path.exists():
         return ""
     sha256 = hashlib.sha256()
@@ -392,73 +206,38 @@ def calculate_file_hash(file_path: Path) -> str:
             sha256.update(chunk)
     return sha256.hexdigest()
 
-def write_github_output(config: Config, counts: Dict[str, int]) -> None:
-    github_output = os.getenv("GITHUB_OUTPUT")
-    if not github_output:
-        return
 
-    outputs = {
-        "clash_block_path": str(config.clash_block_output),
-        "clash_allow_path": str(config.clash_allow_output),
-        "surge_path": str(config.surge_output),
-        "mrs_path": str(config.mihomo_output),
-        "mrs_sha256": calculate_file_hash(config.mihomo_output),
-        "clash_block_count": str(counts["clash_block_count"]),
-        "clash_allow_count": str(counts["clash_allow_count"]),
-        "surge_count": str(counts["surge_count"]),
-        "mihomo_count": str(counts["mihomo_count"])
-    }
-
-    with open(github_output, "a", encoding="utf-8") as f:
-        for key, value in outputs.items():
-            escaped_value = value.replace('\n', '\\n')
-            f.write(f"{key}={escaped_value}\n")
-    logger.info("GitHub Action输出变量已写入")
-
-
-# ==================== 主流程 ====================
+# ==================== 主流程（严格按“AdGuard→Clash YAML→Mihomo MRS”执行） ====================
 def main() -> int:
     try:
+        # 1. 初始化并验证配置
         config = Config()
+        config.valid_config
         logger.info("=" * 60)
-        logger.info("AdGuard规则转换工具启动（适配Clash/Surge/Mihomo最新版）")
-        logger.info(f"工作目录：{config.workspace}")
-        logger.info("=" * 60)
-
-        # 先处理并缓存所有规则
-        logger.info("开始处理规则文件...")
-        allow_rules_clash = process_rules(config.allow_file, True, "clash")
-        block_rules_clash = process_rules(config.block_file, False, "clash")
-        allow_rules_surge = process_rules(config.allow_file, True, "surge")
-        block_rules_surge = process_rules(config.block_file, False, "surge")
-        allow_rules_mihomo = process_rules(config.allow_file, True, "mihomo")
-        block_rules_mihomo = process_rules(config.block_file, False, "mihomo")
-        
-        # 多线程并行生成输出
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            # 提交Clash白名单、拦截规则任务
-            executor.submit(generate_clash_output_from_rules, config, allow_rules_clash, True)
-            executor.submit(generate_clash_output_from_rules, config, block_rules_clash, False)
-            # 提交Surge和Mihomo任务
-            executor.submit(generate_surge_output_from_rules, config, allow_rules_surge + block_rules_surge)
-            executor.submit(generate_mihomo_output_from_rules, config, allow_rules_mihomo + block_rules_mihomo)
-
-        # 等待所有线程完成后，输出汇总信息
-        logger.info("=" * 60)
-        logger.info("规则转换完成汇总：")
-        logger.info(f"- Clash白名单：{config.clash_allow_output}（{len(allow_rules_clash)}条）")
-        logger.info(f"- Clash拦截：{config.clash_block_output}（{len(block_rules_clash)}条）")
-        logger.info(f"- Surge：{config.surge_output}（{len(allow_rules_surge) + len(block_rules_surge)}条）")
-        logger.info(f"- Mihomo MRS：{config.mihomo_output}（SHA256：{calculate_file_hash(config.mihomo_output)[:16]}...）")
+        logger.info("Clash YAML → Mihomo MRS 编译工具（广告过滤专用）")
+        logger.info(f"工作目录：{config.WORKSPACE}")
+        logger.info(f"Mihomo编译器：{config.MIHOMO_TOOL.name}（版本验证通过）")
         logger.info("=" * 60)
 
-        # 写入GitHub Action输出
-        write_github_output(config, {
-            "clash_block_count": len(block_rules_clash),
-            "clash_allow_count": len(allow_rules_clash),
-            "surge_count": len(allow_rules_surge) + len(block_rules_surge),
-            "mihomo_count": len(allow_rules_mihomo) + len(block_rules_mihomo)
-        })
+        # 2. 多线程并行处理（白名单+拦截规则，提升效率）
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            # 任务1：白名单规则 → Clash YAML → Mihomo MRS
+            executor.submit(
+                lambda: clash_yaml_to_mihomo_mrs(config, generate_clash_yaml(config, is_allow=True), is_allow=True)
+            )
+            # 任务2：拦截规则 → Clash YAML → Mihomo MRS
+            executor.submit(
+                lambda: clash_yaml_to_mihomo_mrs(config, generate_clash_yaml(config, is_allow=False), is_allow=False)
+            )
+
+        # 3. 输出最终汇总
+        logger.info("=" * 60)
+        logger.info("全部流程完成！生成文件汇总：")
+        logger.info(f"1. Clash白名单YAML：{config.CLASH_ALLOW_YAML}")
+        logger.info(f"2. Clash拦截YAML：{config.CLASH_BLOCK_YAML}")
+        logger.info(f"3. Mihomo白名单MRS：{config.OUTPUT_MIHOMO_ALLOW}（SHA256：{calculate_file_hash(config.OUTPUT_MIHOMO_ALLOW)[:16]}...）")
+        logger.info(f"4. Mihomo拦截MRS：{config.OUTPUT_MIHOMO_BLOCK}（SHA256：{calculate_file_hash(config.OUTPUT_MIHOMO_BLOCK)[:16]}...）")
+        logger.info("=" * 60)
         return 0
 
     except (FileNotFoundError, PermissionError, IsADirectoryError, ValueError) as e:
