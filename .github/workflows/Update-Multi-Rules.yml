@@ -32,6 +32,12 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ env.MAIN_BRANCH }}
+      # 1.1 清理之前生成的产物
+      - name: Unified cleanup process
+        run: |
+          echo "开始清理..."
+          # 清理临时目录
+          rm -f ${{ github.workspace }}/*.txt ${{ github.workspace }}/*.conf ${{ github.workspace }}/*.yaml
 
       # 2. 设置Python环境- 核心步骤
       - name: Set up Python
@@ -107,8 +113,6 @@ jobs:
           echo "开始统一清理..."
           # 清理临时目录
           rm -rf ${{ env.TEMP_DIR }} 
-          rm -f ${{ github.workspace }}/*.txt ${{ github.workspace }}/*.conf ${{ github.workspace }}/*.yaml
-
           echo "统一清理完成"
 
       # 15. 提交变更- 核心步骤
