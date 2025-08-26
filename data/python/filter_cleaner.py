@@ -14,10 +14,10 @@ import logging
 import asyncio
 import aiodns
 import subprocess
+import socket
 from pathlib import Path
 from typing import Set, List, Dict, Optional, Tuple
 from datetime import datetime
-import socket
 
 # 配置类
 class Config:
@@ -36,17 +36,18 @@ class Config:
     SMARTDNS_BIN = "/usr/local/bin/smartdns"
     SMARTDNS_CONFIG_DIR = BASE_DIR / "data" / "smartdns"
     SMARTDNS_CONFIG_FILE = SMARTDNS_CONFIG_DIR / "smartdns.conf"
-    SMARTDNS_PORT = int(os.getenv('SMARTDNS_PORT', 5353))
+    SMARTDNS_PORT = int(os.getenv('SMARTDNS_PORT', 5354))  # 使用5354端口避免冲突
+    SMARTDNS_LOG_FILE = SMARTDNS_CONFIG_DIR / "smartdns.log"
 
     # 缓存与备份
     CACHE_DIR = BASE_DIR / "data" / "cache"
     BACKUP_DIR = FILTER_DIR / "backups"
 
     # 性能配置
-    DNS_WORKERS = int(os.getenv('DNS_WORKERS', 50))
-    BATCH_SIZE = int(os.getenv('BATCH_SIZE', 1000))
-    DNS_TIMEOUT = int(os.getenv('DNS_TIMEOUT', 3))
-    DNS_RETRIES = int(os.getenv('DNS_RETRIES', 2))
+    DNS_WORKERS = int(os.getenv('DNS_WORKERS', 30))
+    BATCH_SIZE = int(os.getenv('BATCH_SIZE', 500))
+    DNS_TIMEOUT = int(os.getenv('DNS_TIMEOUT', 5))
+    DNS_RETRIES = int(os.getenv('DNS_RETRIES', 3))
 
     # 功能开关
     USE_SMARTDNS = os.getenv('USE_SMARTDNS', 'true').lower() == 'true'
@@ -144,16 +145,23 @@ class SmartDNSValidator:
             'valid': 0,
             'invalid': 0,
             'cached': 0,
-            'timeout': 0
+            'timeout': 0,
+            'smartdns_queries': 0,
+            'system_dns_queries': 0
         }
         
         # 初始化DNS解析器
         self.resolver = aiodns.DNSResolver()
+        self.smartdns_available = False
+        
         if Config.USE_SMARTDNS:
-            # 使用SmartDNS作为解析器
+            # 配置SmartDNS作为首选解析器
             self.resolver.nameservers = ['127.0.0.1']
             self.resolver.port = Config.SMARTDNS_PORT
-        else:
+            # 测试SmartDNS是否可用
+            self.smartdns_available = self._test_smartdns()
+        
+        if not self.smartdns_available:
             # 使用公共DNS作为备用
             self.resolver.nameservers = [
                 '8.8.8.8',        # Google DNS
@@ -161,6 +169,38 @@ class SmartDNSValidator:
                 '223.5.5.5',      # AliDNS
                 '119.29.29.29'    # DNSPod
             ]
+            logger.info("使用公共DNS进行域名验证")
+        
+    def _test_smartdns(self) -> bool:
+        """测试SmartDNS是否可用"""
+        try:
+            # 创建一个临时事件循环来测试SmartDNS
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # 测试查询一个已知存在的域名
+            test_resolver = aiodns.DNSResolver()
+            test_resolver.nameservers = ['127.0.0.1']
+            test_resolver.port = Config.SMARTDNS_PORT
+            
+            result = loop.run_until_complete(
+                asyncio.wait_for(
+                    test_resolver.query("baidu.com", "A"),
+                    timeout=3
+                )
+            )
+            loop.close()
+            
+            if result:
+                logger.info("SmartDNS可用，将使用SmartDNS进行域名验证")
+                return True
+            else:
+                logger.warning("SmartDNS测试查询返回空结果")
+                return False
+                
+        except Exception as e:
+            logger.warning(f"SmartDNS不可用: {e}")
+            return False
         
     async def validate_domain(self, domain: str) -> bool:
         """验证域名是否有效（可解析）"""
@@ -196,6 +236,10 @@ class SmartDNSValidator:
                         timeout=Config.DNS_TIMEOUT
                     )
                     if result:
+                        if self.smartdns_available:
+                            self.stats['smartdns_queries'] += 1
+                        else:
+                            self.stats['system_dns_queries'] += 1
                         return True
                 except asyncio.TimeoutError:
                     self.stats['timeout'] += 1
@@ -206,11 +250,28 @@ class SmartDNSValidator:
                     # NXDOMAIN表示域名不存在
                     if e.args[0] == 4:  # NXDOMAIN
                         return False
+                    logger.debug(f"域名 {domain} DNS错误: {e}")
                     continue
                 except Exception as e:
-                    logger.debug(f"域名查询异常 {domain}: {str(e)}")
+                    logger.debug(f"域名 {domain} 查询异常: {str(e)}")
                     continue
                     
+        # 如果所有方法都失败，尝试使用系统DNS作为终极备用
+        try:
+            logger.debug(f"尝试使用系统DNS验证 {domain}")
+            loop = asyncio.get_event_loop()
+            # 尝试解析A记录
+            result = await loop.run_in_executor(
+                None, 
+                lambda: socket.getaddrinfo(domain, None, family=socket.AF_INET)
+            )
+            if result:
+                logger.debug(f"域名 {domain} 通过系统DNS验证成功")
+                self.stats['system_dns_queries'] += 1
+                return True
+        except Exception as e:
+            logger.debug(f"系统DNS验证 {domain} 失败: {e}")
+        
         return False
 
 
@@ -229,6 +290,7 @@ serve-expired yes
 rr-ttl-min 300
 log-level error
 log-size 128K
+log-file {Config.SMARTDNS_LOG_FILE}
 speed-check-mode none
 
 # 国内DNS服务器
@@ -280,6 +342,8 @@ nameserver /github.com/overseas
                 "-x"
             ]
             
+            logger.info(f"启动SmartDNS: {' '.join(cmd)}")
+            
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -288,14 +352,34 @@ nameserver /github.com/overseas
             )
             
             # 等待服务启动
-            time.sleep(2)
+            time.sleep(3)
             
-            # 测试服务是否正常
+            # 检查进程状态
+            if self.process.poll() is not None:
+                # 进程已退出，获取错误信息
+                stdout, stderr = self.process.communicate()
+                logger.error(f"SmartDNS进程已退出，返回值: {self.process.returncode}")
+                if stdout:
+                    logger.error(f"STDOUT: {stdout}")
+                if stderr:
+                    logger.error(f"STDERR: {stderr}")
+                return False
+                
+            # 测试连接
             if self.test_connection():
                 logger.info("SmartDNS服务启动成功")
                 return True
             else:
-                logger.error("SmartDNS服务启动失败")
+                logger.error("SmartDNS服务启动但无法连接")
+                # 尝试读取日志文件
+                if Config.SMARTDNS_LOG_FILE.exists():
+                    try:
+                        with open(Config.SMARTDNS_LOG_FILE, 'r') as f:
+                            log_content = f.read()
+                        if log_content:
+                            logger.error(f"SmartDNS日志内容: {log_content}")
+                    except Exception as e:
+                        logger.error(f"无法读取日志文件: {e}")
                 return False
                 
         except Exception as e:
@@ -305,10 +389,10 @@ nameserver /github.com/overseas
     def test_connection(self) -> bool:
         """测试SmartDNS连接"""
         try:
-            # 使用nslookup测试连接
+            # 使用dig测试连接
             cmd = [
-                "nslookup", "-timeout=3", 
-                "google.com", "127.0.0.1", str(Config.SMARTDNS_PORT)
+                "dig", "@127.0.0.1", "-p", str(Config.SMARTDNS_PORT),
+                "baidu.com", "+short", "+time=3", "+tries=2"
             ]
             
             result = subprocess.run(
@@ -318,16 +402,25 @@ nameserver /github.com/overseas
                 timeout=5
             )
             
-            return result.returncode == 0 and "Name:" in result.stdout
-        except:
+            success = result.returncode == 0 and len(result.stdout.strip()) > 0
+            if not success:
+                logger.warning(f"dig测试失败: {result.stderr}")
+                
+            return success
+        except Exception as e:
+            logger.error(f"连接测试异常: {e}")
             return False
             
     def stop(self):
         """停止SmartDNS服务"""
-        if self.process:
+        if self.process and self.process.poll() is None:
             self.process.terminate()
-            self.process.wait()
-            logger.info("SmartDNS服务已停止")
+            try:
+                self.process.wait(timeout=5)
+                logger.info("SmartDNS服务已停止")
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                logger.warning("强制终止SmartDNS服务")
 
 
 # 主处理器
@@ -352,7 +445,7 @@ class AdblockCleaner:
         if Config.USE_SMARTDNS:
             smartdns_started = self.smartdns.start()
             if not smartdns_started:
-                logger.warning("SmartDNS启动失败，将使用公共DNS进行验证")
+                logger.warning("SmartDNS启动失败，将使用备用DNS进行验证")
         
         try:
             # 处理黑名单文件
@@ -481,6 +574,8 @@ class AdblockCleaner:
         logger.info(f"无效域名: {stats['invalid']} 个")
         logger.info(f"缓存命中: {stats['cached']} 次")
         logger.info(f"查询超时: {stats['timeout']} 次")
+        logger.info(f"SmartDNS查询: {stats['smartdns_queries']} 次")
+        logger.info(f"系统DNS查询: {stats['system_dns_queries']} 次")
 
 
 # 主函数
