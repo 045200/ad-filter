@@ -17,17 +17,35 @@ INPUT_BLOCK = Path(GITHUB_WORKSPACE) / "adblock_adg.txt"
 INPUT_ALLOW = Path(GITHUB_WORKSPACE) / "allow_adg.txt"
 OUTPUT_BLOCK = Path(GITHUB_WORKSPACE) / "adblock_adh.txt"
 OUTPUT_ALLOW = Path(GITHUB_WORKSPACE) / "allow_adh.txt"
-SYNTAX_DB_PATH = Path(GITHUB_WORKSPACE) / "data" / "python" / "adblock_syntax_db.json"
+SYNTAX_DB_NAME = "adblock_syntax_db.json"
+
+# 修改语法库加载函数，优先从脚本目录查找，然后从工作空间查找
+def find_syntax_db():
+    """查找语法库文件，优先从脚本目录，然后从工作空间"""
+    # 1. 首先尝试脚本所在目录
+    script_dir = Path(__file__).parent
+    script_db_path = script_dir / SYNTAX_DB_NAME
+    if script_db_path.exists():
+        return script_db_path
+    
+    # 2. 然后尝试工作空间目录
+    workspace_db_path = Path(GITHUB_WORKSPACE) / SYNTAX_DB_NAME
+    if workspace_db_path.exists():
+        return workspace_db_path
+    
+    # 3. 如果都找不到，返回None
+    return None
 
 # 加载语法库
 def load_syntax_db():
     """加载语法库JSON文件"""
-    if not SYNTAX_DB_PATH.exists():
-        logging.warning(f"语法库文件 {SYNTAX_DB_PATH} 不存在，使用内置默认值")
+    syntax_db_path = find_syntax_db()
+    if not syntax_db_path:
+        logging.warning(f"语法库文件 {SYNTAX_DB_NAME} 不存在于脚本目录或工作空间，使用内置默认值")
         return None
     
     try:
-        with open(SYNTAX_DB_PATH, 'r', encoding='utf-8') as f:
+        with open(syntax_db_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
         logging.error(f"加载语法库失败: {e}")
@@ -236,7 +254,9 @@ def process_file(input_path: Path, is_allow: bool = False) -> list[str]:
 def main() -> int:
     # 记录使用的语法库信息
     if SYNTAX_DB:
-        logging.info(f"使用语法库: {SYNTAX_DB.get('version', '未知版本')}")
+        db_path = find_syntax_db()
+        logging.info(f"使用语法库: {db_path}")
+        logging.info(f"语法库版本: {SYNTAX_DB.get('version', '未知版本')}")
         logging.info(f"语法库描述: {SYNTAX_DB.get('description', '无描述')}")
     else:
         logging.info("使用内置默认语法规则")
