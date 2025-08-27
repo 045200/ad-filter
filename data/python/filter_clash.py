@@ -37,7 +37,7 @@ class Config:
     # -------------------------- 功能开关 --------------------------
     ENABLE_DEDUPLICATION = True
     ALLOW_AUTO_ADD_AT = False
-    VERBOSE_LOG = False  # 调试时可设为True，查看每条规则匹配情况
+    VERBOSE_LOG = True  # 调试时可设为True，查看每条规则匹配情况
     RULE_TYPE = "domain"
 
     # -------------------------- 规则过滤配置（核心修复点1：新增Hosts正则） --------------------------
