@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AGH规则转Clash/Surge/Mihomo工具（修复Hosts+通配符规则支持）
+AGH规则转Clash/Surge/Mihomo工具（增强转换率版）
 优化版本：提高转换率，改进正则表达式，优化去重逻辑
 """
 
@@ -12,11 +12,10 @@ from typing import List, Tuple, Dict, Set, Pattern
 from urllib.parse import urlparse
 
 # ==============================================================================
-# 1. 核心配置（修复规则匹配正则）
+# 1. 核心配置
 # ==============================================================================
 class Config:
     """全局配置类：统一管理输入输出路径、功能开关"""
-    # -------------------------- 路径配置 --------------------------
     BASE_DIR = os.getenv("GITHUB_WORKSPACE", os.getcwd())
 
     INPUT = {
@@ -34,13 +33,13 @@ class Config:
 
     MIHOMO_TOOL = os.path.join(BASE_DIR, "data/mihomo-tool")
 
-    # -------------------------- 功能开关 --------------------------
+    # 功能开关
     ENABLE_DEDUPLICATION = True
     ALLOW_AUTO_ADD_AT = False
-    VERBOSE_LOG = True  # 调试时可设为True，查看每条规则匹配情况
+    VERBOSE_LOG = False
     RULE_TYPE = "domain"
 
-    # -------------------------- 规则过滤配置（核心修复点1：新增Hosts正则） --------------------------
+    # 兼容修饰符
     COMPATIBLE_MODIFIERS = {
         "third-party", "script", "image", "stylesheet", "font", "media",
         "xmlhttprequest", "ping", "websocket", "other", "subdocument",
@@ -51,38 +50,40 @@ class Config:
         "dnsblock", "dnstype", "dnsrewrite-ip", "dnsrewrite-host"
     }
 
-    # 预编译正则表达式
+    # 预编译正则表达式 - 增强版
     UNSUPPORTED_RULE_PATTERNS = [
-        re.compile(r'^##|^#@#|^#%#|^#?#'),                  # 元素隐藏/JS注入
+        re.compile(r'^##|^#@#|^#%#|^#?#'),  # 元素隐藏/JS注入
         re.compile(r'\$(' + '|'.join(INCOMPATIBLE_MODIFIERS) + r')(?:=|,)'),  # 不可兼容修饰符
         re.compile(r'\$client=|\$server=|\$local=|\$important'),  # AGH定向标记
-        re.compile(r'^\/[^/]*\/$'),                          # 无域名纯正则
-        re.compile(r'^\|?https?://.*\?.*$'),                 # 含复杂参数URL
-        re.compile(r'^(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?$')  # 纯IP/CIDR（排除Hosts）
+        re.compile(r'^\/[^/]*\/$'),  # 无域名纯正则
+        re.compile(r'^\|?https?://.*\?.*$'),  # 含复杂参数URL
+        re.compile(r'^(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?$'),  # 纯IP/CIDR（排除Hosts）
+        re.compile(r'^\!.*$'),  # 注释行
     ]
 
-    # 核心修复点2：新增HOSTS规则、允许域名含*（适配||xxx.*.com^）
+    # 支持的规则模式 - 增强版
     SUPPORTED_RULE_PATTERNS = {
-        "DOMAIN_DOUBLE_PIPE": re.compile(r'^\|\|([a-zA-Z0-9-.*]+(?:\.[a-zA-Z0-9-.*]+)*)\^(?:\$.*)?$'),  # 匹配||domain.com^ 或 ||*.domain.com^
-        "DOMAIN_PLAIN": re.compile(r'^([a-zA-Z0-9-.*]+\.[a-zA-Z0-9-.*]+)$'),  # 匹配 domain.com 或 *.domain.com
-        "URL_FULL": re.compile(r'^\|https?://([a-zA-Z0-9-.*]+\.[a-zA-Z0-9-.*]+)(?::\d+)?/.*\^(?:\$.*)?$'),  # 匹配 |http://domain.com/path^
-        "HOSTS_FORMAT": re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1)\s+([a-zA-Z0-9-.*]+\.[a-zA-Z0-9-.*]+)$'),  # 匹配 0.0.0.0 domain.com
-        "EXCEPTION_RULE": re.compile(r'^@@\|\|([a-zA-Z0-9-.*]+(?:\.[a-zA-Z0-9-.*]+)*)\^(?:\$.*)?$'),  # 匹配例外规则 @@||domain.com^
-        "EXCEPTION_PLAIN": re.compile(r'^@@([a-zA-Z0-9-.*]+\.[a-zA-Z0-9-.*]+)$'),  # 匹配例外规则 @@domain.com
+        "DOMAIN_DOUBLE_PIPE": re.compile(r'^\|\|([a-zA-Z0-9-.*]+(?:\.[a-zA-Z0-9-.*]+)*)\^(?:\$.*)?$'),
+        "DOMAIN_PLAIN": re.compile(r'^([a-zA-Z0-9-.*]+\.[a-zA-Z0-9-.*]+)(?:\^)?(?:\$.*)?$'),
+        "URL_FULL": re.compile(r'^\|?https?://([a-zA-Z0-9-.*]+\.[a-zA-Z0-9-.*]+)(?::\d+)?/.*(?:\^)?(?:\$.*)?$'),
+        "HOSTS_FORMAT": re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1)\s+([a-zA-Z0-9-.*]+\.[a-zA-Z0-9-.*]+)$'),
+        "EXCEPTION_RULE": re.compile(r'^@@\|\|([a-zA-Z0-9-.*]+(?:\.[a-zA-Z0-9-.*]+)*)\^(?:\$.*)?$'),
+        "EXCEPTION_PLAIN": re.compile(r'^@@([a-zA-Z0-9-.*]+\.[a-zA-Z0-9-.*]+)(?:\^)?(?:\$.*)?$'),
+        "DOMAIN_KEYWORD": re.compile(r'^/([a-zA-Z0-9-.*]+)/$'),  # 关键字规则
+        "URL_WITH_MODIFIERS": re.compile(r'^([a-zA-Z0-9-.*]+\.[a-zA-Z0-9-.*]+)\^(?:\$([a-zA-Z,]+))?$'),
     }
 
 
 # ==============================================================================
-# 2. 工具函数（核心修复点3：优化域名校验，允许合法*）
+# 2. 工具函数
 # ==============================================================================
 def is_valid_domain(domain: str) -> bool:
-    """修复：允许域名含*（仅支持*.xxx.com、xxx.*.com格式，排除首尾*）"""
-    domain = domain.strip()
-    
-    # 排除空域名
-    if not domain:
+    """验证域名是否合法"""
+    if not domain or domain.strip() == "":
         return False
         
+    domain = domain.strip()
+    
     # 排除纯IP地址
     if re.match(r'^(?:\d{1,3}\.){3}\d{1,3}$', domain):
         return False
@@ -130,6 +131,27 @@ def extract_domain_from_url(url: str) -> str:
         return ''
 
 
+def extract_domain_from_pattern(pattern: str) -> str:
+    """从模式中提取可能的域名"""
+    # 移除常见的前缀和后缀
+    clean_pattern = pattern.strip()
+    
+    # 移除开头和结尾的特殊字符
+    clean_pattern = re.sub(r'^[\|@\*\^]+', '', clean_pattern)
+    clean_pattern = re.sub(r'[\|@\*\^]+$', '', clean_pattern)
+    
+    # 尝试分割路径和参数
+    clean_pattern = clean_pattern.split('/')[0]
+    clean_pattern = clean_pattern.split('?')[0]
+    clean_pattern = clean_pattern.split('$')[0]
+    
+    # 检查是否是有效域名
+    if is_valid_domain(clean_pattern):
+        return clean_pattern
+        
+    return ''
+
+
 def is_unsupported_rule(rule: str) -> bool:
     """检查规则是否不支持"""
     return any(pattern.search(rule) for pattern in Config.UNSUPPORTED_RULE_PATTERNS)
@@ -137,13 +159,19 @@ def is_unsupported_rule(rule: str) -> bool:
 
 def normalize_domain(domain: str) -> str:
     """规范化域名，用于去重比较"""
+    if not domain:
+        return ""
+        
+    domain = domain.lower()
+    
     # 移除开头的通配符和点
     if domain.startswith('*.'):
         domain = domain[2:]
     # 移除末尾的^等符号
     if domain.endswith('^'):
         domain = domain[:-1]
-    return domain.lower()
+        
+    return domain
 
 
 def deduplicate_rules(rules: List[Tuple[str, str, str]]) -> List[Tuple[str, str, str]]:
@@ -157,16 +185,19 @@ def deduplicate_rules(rules: List[Tuple[str, str, str]]) -> List[Tuple[str, str,
     for rule_type, target, action in rules:
         norm_target = normalize_domain(target)
         
-        # 如果已经存在更具体的规则，保留更具体的
+        if not norm_target:
+            continue
+            
+        # 如果已经存在规则，保留更具体的规则
         if norm_target in rule_dict:
             existing_rule = rule_dict[norm_target]
-            # 比较规则特异性：无通配符的规则比有通配符的更具体
             existing_has_wildcard = '*' in existing_rule[1]
             current_has_wildcard = '*' in target
             
             if not current_has_wildcard and existing_has_wildcard:
                 # 当前规则更具体，替换现有规则
                 rule_dict[norm_target] = (rule_type, target, action)
+            # 如果两个规则都有通配符或都没有，保留第一个
         else:
             rule_dict[norm_target] = (rule_type, target, action)
     
@@ -193,42 +224,39 @@ def are_modifiers_compatible(modifier_str: str) -> Tuple[bool, List[str]]:
 # ==============================================================================
 # 3. 规则解析模块（改进正则匹配逻辑）
 # ==============================================================================
-def parse_adguard_rules() -> Tuple[List[Tuple[str, str, str]], int, int, int, int]:
-    """解析AGH规则文件"""
-    valid_rules = []
+def parse_adguard_rules() -> Tuple[List[Tuple[str, str, str]], List[Tuple[str, str, str]], int, int, int, int]:
+    """解析AGH规则文件，分别返回黑名单规则和白名单规则"""
+    black_rules = []  # REJECT规则
+    white_rules = []  # DIRECT规则
     total_count = 0
     unsupported_count = 0
-    compatible_mod_count = 0
+    duplicate_count_black = 0
+    duplicate_count_white = 0
 
-    rule_sources = [
-        (Config.INPUT["BLACKLIST"], "REJECT", "AGH黑名单"),
-        (Config.INPUT["WHITELIST"], "DIRECT", "AGH白名单")
-    ]
-
-    for file_path, default_action, source_name in rule_sources:
-        if not os.path.exists(file_path):
-            print(f"⚠️  {source_name}文件不存在：{file_path}")
-            continue
-
-        with open(file_path, "r", encoding="utf-8") as f:
-            lines = [line.strip() for line in f if line.strip() and not line.startswith("!")]
+    # 处理黑名单文件
+    if os.path.exists(Config.INPUT["BLACKLIST"]):
+        with open(Config.INPUT["BLACKLIST"], "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip()]
             total_count += len(lines)
-            print(f"\n📥 读取{source_name}：共{len(lines)}条规则")
+            print(f"\n📥 读取AGH黑名单：共{len(lines)}条规则")
 
             for rule in lines:
+                # 跳过注释行
+                if rule.startswith("!"):
+                    continue
+                    
                 if is_unsupported_rule(rule):
                     unsupported_count += 1
                     if Config.VERBOSE_LOG:
                         print(f"  ⚠️  跳过不可兼容规则：{rule}")
                     continue
 
-                # 确定规则动作（默认或例外规则）
-                action = default_action
+                # 确定规则动作（黑名单中@@开头的是例外规则，转为DIRECT）
                 if rule.startswith("@@"):
-                    action = "DIRECT"  # 例外规则总是DIRECT
-                    # 移除@@前缀以便后续匹配
+                    action = "DIRECT"
                     rule_for_matching = rule[2:]
                 else:
+                    action = "REJECT"
                     rule_for_matching = rule
 
                 matched = False
@@ -249,70 +277,202 @@ def parse_adguard_rules() -> Tuple[List[Tuple[str, str, str]], int, int, int, in
                         domain = match.group(1).strip()
                     elif pattern_name == "URL_FULL":
                         domain = match.group(1).strip()
+                    elif pattern_name == "DOMAIN_KEYWORD":
+                        # 关键字规则，直接使用整个模式
+                        keyword = match.group(1).strip()
+                        if keyword and len(keyword) > 3:  # 关键字长度阈值
+                            # 添加到相应的规则列表
+                            if action == "REJECT":
+                                black_rules.append(("DOMAIN-KEYWORD", keyword, action))
+                            else:
+                                white_rules.append(("DOMAIN-KEYWORD", keyword, action))
+                            matched = True
+                        break
+                    elif pattern_name == "URL_WITH_MODIFIERS":
+                        domain = match.group(1).strip()
+                        if match.lastindex >= 2:
+                            modifiers = match.group(2) or ""
+                            is_compatible, incompatible_mods = are_modifiers_compatible(modifiers)
+                            if not is_compatible:
+                                if Config.VERBOSE_LOG:
+                                    print(f"  ⚠️  含不可兼容修饰符（{','.join(incompatible_mods)}）：{rule}")
+                                break
                     else:
-                        continue  # 未知模式
+                        continue
 
                     # 校验域名合法性
-                    if not is_valid_domain(domain):
+                    if not domain or not is_valid_domain(domain):
                         if Config.VERBOSE_LOG:
                             print(f"  ⚠️  无效域名：{domain}（规则：{rule}）")
                         break
 
-                    # 添加有效规则
-                    valid_rules.append(("DOMAIN-SUFFIX", domain, action))
+                    # 添加到相应的规则列表
+                    if action == "REJECT":
+                        black_rules.append(("DOMAIN-SUFFIX", domain, action))
+                    else:
+                        white_rules.append(("DOMAIN-SUFFIX", domain, action))
+                    
                     matched = True
                     
                     if Config.VERBOSE_LOG:
                         log_msg = f"  ✅ 解析成功：{rule} → 域名[{domain}]（动作={action}）"
                         if modifiers:
-                            log_msg += f"（忽略兼容修饰符[{modifiers}]）"
+                            log_msg += f"（修饰符[{modifiers}]）"
                         print(log_msg)
                     break
 
                 if not matched:
                     # 尝试处理其他格式的规则
                     domain = extract_domain_from_url(rule_for_matching)
+                    if not domain:
+                        domain = extract_domain_from_pattern(rule_for_matching)
+                        
                     if domain and is_valid_domain(domain):
-                        valid_rules.append(("DOMAIN-SUFFIX", domain, action))
+                        if action == "REJECT":
+                            black_rules.append(("DOMAIN-SUFFIX", domain, action))
+                        else:
+                            white_rules.append(("DOMAIN-SUFFIX", domain, action))
                         if Config.VERBOSE_LOG:
-                            print(f"  ✅ 通过URL解析成功：{rule} → 域名[{domain}]（动作={action}）")
+                            print(f"  ✅ 通过通用解析成功：{rule} → 域名[{domain}]（动作={action}）")
                     else:
                         unsupported_count += 1
                         if Config.VERBOSE_LOG:
                             print(f"  ⚠️  无法提取域名：{rule}")
 
-    # 去重
-    before_dedup = len(valid_rules)
-    valid_rules = deduplicate_rules(valid_rules)
-    duplicate_count = before_dedup - len(valid_rules)
-    if duplicate_count > 0:
-        print(f"\n🔍 规则去重：移除{duplicate_count}条重复规则")
+    # 处理白名单文件
+    if os.path.exists(Config.INPUT["WHITELIST"]):
+        with open(Config.INPUT["WHITELIST"], "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip()]
+            total_count += len(lines)
+            print(f"\n📥 读取AGH白名单：共{len(lines)}条规则")
 
-    return valid_rules, total_count, unsupported_count, duplicate_count, compatible_mod_count
+            for rule in lines:
+                # 跳过注释行
+                if rule.startswith("!"):
+                    continue
+                    
+                if is_unsupported_rule(rule):
+                    unsupported_count += 1
+                    if Config.VERBOSE_LOG:
+                        print(f"  ⚠️  跳过不可兼容规则：{rule}")
+                    continue
+
+                # 白名单规则默认动作是DIRECT
+                action = "DIRECT"
+                rule_for_matching = rule[2:] if rule.startswith("@@") else rule
+
+                matched = False
+                domain = ""
+                modifiers = ""
+
+                # 尝试匹配各种支持的规则模式
+                for pattern_name, pattern in Config.SUPPORTED_RULE_PATTERNS.items():
+                    match = pattern.match(rule_for_matching)
+                    if not match:
+                        continue
+
+                    # 处理不同的模式
+                    if pattern_name == "HOSTS_FORMAT":
+                        domain = match.group(1).strip()
+                    elif pattern_name in ["DOMAIN_DOUBLE_PIPE", "DOMAIN_PLAIN", 
+                                         "EXCEPTION_RULE", "EXCEPTION_PLAIN"]:
+                        domain = match.group(1).strip()
+                    elif pattern_name == "URL_FULL":
+                        domain = match.group(1).strip()
+                    elif pattern_name == "DOMAIN_KEYWORD":
+                        # 关键字规则，直接使用整个模式
+                        keyword = match.group(1).strip()
+                        if keyword and len(keyword) > 3:  # 关键字长度阈值
+                            white_rules.append(("DOMAIN-KEYWORD", keyword, action))
+                            matched = True
+                        break
+                    elif pattern_name == "URL_WITH_MODIFIERS":
+                        domain = match.group(1).strip()
+                        if match.lastindex >= 2:
+                            modifiers = match.group(2) or ""
+                            is_compatible, incompatible_mods = are_modifiers_compatible(modifiers)
+                            if not is_compatible:
+                                if Config.VERBOSE_LOG:
+                                    print(f"  ⚠️  含不可兼容修饰符（{','.join(incompatible_mods)}）：{rule}")
+                                break
+                    else:
+                        continue
+
+                    # 校验域名合法性
+                    if not domain or not is_valid_domain(domain):
+                        if Config.VERBOSE_LOG:
+                            print(f"  ⚠️  无效域名：{domain}（规则：{rule}）")
+                        break
+
+                    # 添加到白名单规则列表
+                    white_rules.append(("DOMAIN-SUFFIX", domain, action))
+                    matched = True
+                    
+                    if Config.VERBOSE_LOG:
+                        log_msg = f"  ✅ 解析成功：{rule} → 域名[{domain}]（动作={action}）"
+                        if modifiers:
+                            log_msg += f"（修饰符[{modifiers}]）"
+                        print(log_msg)
+                    break
+
+                if not matched:
+                    # 尝试处理其他格式的规则
+                    domain = extract_domain_from_url(rule_for_matching)
+                    if not domain:
+                        domain = extract_domain_from_pattern(rule_for_matching)
+                        
+                    if domain and is_valid_domain(domain):
+                        white_rules.append(("DOMAIN-SUFFIX", domain, action))
+                        if Config.VERBOSE_LOG:
+                            print(f"  ✅ 通过通用解析成功：{rule} → 域名[{domain}]（动作={action}）")
+                    else:
+                        unsupported_count += 1
+                        if Config.VERBOSE_LOG:
+                            print(f"  ⚠️  无法提取域名：{rule}")
+
+    # 分别去重黑名单和白名单规则
+    before_dedup_black = len(black_rules)
+    black_rules = deduplicate_rules(black_rules)
+    duplicate_count_black = before_dedup_black - len(black_rules)
+    
+    before_dedup_white = len(white_rules)
+    white_rules = deduplicate_rules(white_rules)
+    duplicate_count_white = before_dedup_white - len(white_rules)
+
+    return black_rules, white_rules, total_count, unsupported_count, duplicate_count_black, duplicate_count_white
 
 
 # ==============================================================================
-# 4. 规则转换模块（修复Clash通配符规则生成）
+# 4. 规则转换模块
 # ==============================================================================
-def convert_to_clash(rules: List[Tuple[str, str, str]]) -> Tuple[List[str], List[str]]:
+def convert_to_clash(black_rules: List[Tuple[str, str, str]], white_rules: List[Tuple[str, str, str]]) -> Tuple[List[str], List[str]]:
     """转换为Clash规则格式"""
     clash_block = ["payload:"]
     clash_allow = ["payload:"]
 
-    for rule_type, target, action in rules:
+    # 处理黑名单规则
+    for rule_type, target, action in black_rules:
         if rule_type == "DOMAIN-SUFFIX":
-            # 处理通配符域名
             if '*' in target:
-                # 对于通配符域名，直接使用
                 clash_rule = f"  - '{target}'"
             else:
-                # 普通域名使用+.前缀
                 clash_rule = f"  - '+.{target}'"
+            clash_block.append(clash_rule)
+        elif rule_type == "DOMAIN-KEYWORD":
+            clash_rule = f"  - '{target}'"
+            clash_block.append(clash_rule)
 
-            if action == "REJECT":
-                clash_block.append(clash_rule)
-            elif action == "DIRECT":
-                clash_allow.append(clash_rule)
+    # 处理白名单规则
+    for rule_type, target, action in white_rules:
+        if rule_type == "DOMAIN-SUFFIX":
+            if '*' in target:
+                clash_rule = f"  - '{target}'"
+            else:
+                clash_rule = f"  - '+.{target}'"
+            clash_allow.append(clash_rule)
+        elif rule_type == "DOMAIN-KEYWORD":
+            clash_rule = f"  - '{target}'"
+            clash_allow.append(clash_rule)
 
     # 空规则补默认
     if len(clash_block) == 1:
@@ -323,18 +483,27 @@ def convert_to_clash(rules: List[Tuple[str, str, str]]) -> Tuple[List[str], List
     return clash_block, clash_allow
 
 
-def convert_to_surge(rules: List[Tuple[str, str, str]]) -> Tuple[List[str], List[str]]:
+def convert_to_surge(black_rules: List[Tuple[str, str, str]], white_rules: List[Tuple[str, str, str]]) -> Tuple[List[str], List[str]]:
     """转换为Surge规则格式"""
     surge_block = []
     surge_allow = []
 
-    for rule_type, target, action in rules:
-        surge_policy = "REJECT" if action == "REJECT" else "DIRECT"
-        surge_rule = f"{rule_type},{target},{surge_policy}"
-        
-        if action == "REJECT":
+    # 处理黑名单规则
+    for rule_type, target, action in black_rules:
+        if rule_type == "DOMAIN-SUFFIX":
+            surge_rule = f"DOMAIN-SUFFIX,{target},REJECT"
             surge_block.append(surge_rule)
-        else:
+        elif rule_type == "DOMAIN-KEYWORD":
+            surge_rule = f"DOMAIN-KEYWORD,{target},REJECT"
+            surge_block.append(surge_rule)
+
+    # 处理白名单规则
+    for rule_type, target, action in white_rules:
+        if rule_type == "DOMAIN-SUFFIX":
+            surge_rule = f"DOMAIN-SUFFIX,{target},DIRECT"
+            surge_allow.append(surge_rule)
+        elif rule_type == "DOMAIN-KEYWORD":
+            surge_rule = f"DOMAIN-KEYWORD,{target},DIRECT"
             surge_allow.append(surge_rule)
 
     return surge_block, surge_allow
@@ -356,14 +525,12 @@ def compile_mihomo(clash_block_path: str) -> None:
     ]
 
     try:
-        subprocess.run(
-            cmd, 
-            check=True, 
-            capture_output=True, 
-            text=True
-        )
-        mrs_size = os.path.getsize(Config.OUTPUT["MIHOMO"]) / 1024
-        print(f"✅ Mihomo编译完成：{Config.OUTPUT['MIHOMO']}（{mrs_size:.2f} KB）")
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        if os.path.exists(Config.OUTPUT["MIHOMO"]):
+            mrs_size = os.path.getsize(Config.OUTPUT["MIHOMO"]) / 1024
+            print(f"✅ Mihomo编译完成：{Config.OUTPUT['MIHOMO']}（{mrs_size:.2f} KB）")
+        else:
+            print("⚠️  Mihomo编译完成，但输出文件不存在")
     except subprocess.CalledProcessError as e:
         print(f"\n❌ Mihomo编译失败：{e.stderr.strip()}")
 
@@ -373,34 +540,37 @@ def compile_mihomo(clash_block_path: str) -> None:
 # ==============================================================================
 def main():
     print("=" * 60)
-    print("📦 AGH规则→Clash/Surge/Mihomo 转换工具（优化版）")
+    print("📦 AGH规则→Clash/Surge/Mihomo 转换工具（增强转换率版）")
     print("=" * 60)
     print(f"🔧 功能配置：去重={Config.ENABLE_DEDUPLICATION} | 白名单补@@={Config.ALLOW_AUTO_ADD_AT}")
-    print(f"🔧 支持格式：||xxx.com^ | 0.0.0.0 xxx.com | ||xxx.*.com^")
-    print(f"🔧 转换逻辑：AGH黑名单→REJECT | AGH白名单→DIRECT")
+    print(f"🔧 支持格式：||xxx.com^ | 0.0.0.0 xxx.com | ||xxx.*.com^ | 关键字规则")
     print("=" * 60)
 
     # 步骤1：解析AGH规则
     print("\n【1/4】解析AGH规则文件...")
-    valid_rules, total_count, unsupported_count, duplicate_count, compatible_mod_count = parse_adguard_rules()
-    valid_count = len(valid_rules)
-    conversion_rate = (valid_count / total_count * 100) if total_count > 0 else 0
+    black_rules, white_rules, total_count, unsupported_count, dup_black, dup_white = parse_adguard_rules()
+    
+    black_count = len(black_rules)
+    white_count = len(white_rules)
+    conversion_rate = ((black_count + white_count) / total_count * 100) if total_count > 0 else 0
 
     # 统计
     print(f"\n📊 解析统计：")
     print(f"  - 总规则数：{total_count} 条")
-    print(f"  - 有效规则数：{valid_count} 条（转化率：{conversion_rate:.1f}%）")
+    print(f"  - 黑名单规则：{black_count} 条")
+    print(f"  - 白名单规则：{white_count} 条")
+    print(f"  - 总有效规则：{black_count + white_count} 条（转化率：{conversion_rate:.1f}%）")
     print(f"  - 不可支持数：{unsupported_count} 条")
-    print(f"  - 重复规则数：{duplicate_count} 条")
-    print(f"  - 兼容修饰符数：{compatible_mod_count} 条")
+    print(f"  - 黑名单去重：{dup_black} 条")
+    print(f"  - 白名单去重：{dup_white} 条")
 
-    if valid_count == 0:
+    if black_count == 0 and white_count == 0:
         print("\n⚠️  无有效规则可转换，程序终止")
         return
 
     # 步骤2：转换Clash
     print("\n【2/4】转换为Clash规则...")
-    clash_block, clash_allow = convert_to_clash(valid_rules)
+    clash_block, clash_allow = convert_to_clash(black_rules, white_rules)
     write_file(clash_block, Config.OUTPUT["CLASH_BLOCK"])
     write_file(clash_allow, Config.OUTPUT["CLASH_ALLOW"])
     print(f"✅ Clash规则生成：")
@@ -409,7 +579,7 @@ def main():
 
     # 步骤3：转换Surge
     print("\n【3/4】转换为Surge规则...")
-    surge_block, surge_allow = convert_to_surge(valid_rules)
+    surge_block, surge_allow = convert_to_surge(black_rules, white_rules)
     write_file(surge_block, Config.OUTPUT["SURGE_BLOCK"])
     write_file(surge_allow, Config.OUTPUT["SURGE_ALLOW"])
     print(f"✅ Surge规则生成：")
@@ -422,7 +592,7 @@ def main():
 
     print("\n" + "=" * 60)
     print("🎉 所有转换任务完成！")
-    print("✅ 已支持：Hosts格式（0.0.0.0 域名）、||xxx.*.com^通配符格式")
+    print("✅ 黑名单和白名单已分别处理，避免交叉污染")
     print("=" * 60)
 
 
