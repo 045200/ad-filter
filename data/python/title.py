@@ -7,8 +7,8 @@ import pytz
 
 # 拦截器配置
 ADBLOCKERS: Dict[str, Dict[str, str]] = {
-    "adp": {"name": "Adblock Plus", "suffix": ".txt", "comment": "!", "has_allow": False},
-    "ubo": {"name": "uBlock Origin", "suffix": ".txt", "comment": "!", "has_allow": False},
+    "adp": {"name": "Adblock Plus", "suffix": ".txt", "comment": "!", "has_allow": True},
+    "ubo": {"name": "uBlock Origin", "suffix": ".txt", "comment": "!", "has_allow": True},
     "adg": {"name": "AdGuard", "suffix": ".txt", "comment": "!", "has_allow": True},
     "adh": {"name": "AdGuard Home", "suffix": ".txt", "comment": "#", "has_allow": True},
     "clash": {"name": "Clash", "suffix": ".yaml", "comment": "#", "has_allow": True},
