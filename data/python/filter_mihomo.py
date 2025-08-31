@@ -3,336 +3,463 @@
 """
 Mihomo规则转换工具 - GitHub Actions优化版
 支持AdGuard Home语法，输出Clash/Mihomo兼容规则
-针对GitHub Actions环境优化，仅终端打印，只生成adb.mrs文件
+专为GitHub Actions环境设计，修复了转换逻辑中的常见问题
 """
 
 import os
 import re
 import sys
 import subprocess
-from typing import List, Set, Dict, Any, Tuple
+import hashlib
+from typing import List, Set, Dict, Any, Tuple, Optional
 
 # ==============================================================================
-# 配置
+# 配置类 - 使用环境变量
 # ==============================================================================
 class Config:
-    BASE_DIR = os.getenv("GITHUB_WORKSPACE", os.getcwd())
-
-    INPUT = {
-        "BLACKLIST": os.path.join(BASE_DIR, "adblock_adh.txt"),
-        "WHITELIST": os.path.join(BASE_DIR, "allow_adh.txt")
-    }
-
-    OUTPUT = {
-        "MIHOMO": os.path.join(BASE_DIR, "adb.mrs"),
-        "TEMP_CLASH": os.path.join(BASE_DIR, "temp_clash.yaml")
-    }
-
-    MIHOMO_TOOL = os.path.join(BASE_DIR, "data/mihomo-tool")
-
-    # 广告相关关键词（用于识别广告子域名）
-    AD_KEYWORDS = ['ad', 'ads', 'advert', 'advertising', 'track', 'tracking', 
-                  'analytics', 'metric', 'pixel', 'beacon', 'doubleclick', 
-                  'googlead', 'facebookad', 'affiliate', 'promo', 'banner']
-
-    # AdGuard规则类型映射
-    AG_RULE_TYPES = {
-        'domain': r'^\|\|([^\^]+)\^',
-        'exact': r'^\|([^\^]+)\^',
-        'regex': r'^/(.+)/$',
-        'element': r'^##',
-        'exception': r'^@@'
-    }
-
-
-# ==============================================================================
-# 日志函数 - 仅终端输出
-# ==============================================================================
-def log_info(message: str):
-    """输出信息日志"""
-    print(f"ℹ️  {message}")
-
-
-def log_success(message: str):
-    """输出成功日志"""
-    print(f"✅ {message}")
-
-
-def log_warning(message: str):
-    """输出警告日志"""
-    print(f"⚠️  {message}")
-
-
-def log_error(message: str):
-    """输出错误日志"""
-    print(f"❌ {message}")
-
-
-def log_debug(message: str):
-    """输出调试日志"""
-    if os.getenv('ENABLE_DEBUG') == 'true':
-        print(f"🐛 {message}")
-
-
-# ==============================================================================
-# AdGuard Home规则处理
-# ==============================================================================
-def parse_adguard_rule(rule: str) -> Dict[str, Any]:
-    """解析AdGuard Home规则，返回规则类型和内容"""
-    rule = rule.strip()
-    result = {'original': rule, 'type': 'unknown', 'content': ''}
+    """配置管理器，使用环境变量"""
     
-    # 跳过注释和空行
-    if not rule or rule.startswith('!') or rule.startswith('#'):
-        result['type'] = 'comment'
-        return result
-    
-    # 检查规则类型
-    for rule_type, pattern in Config.AG_RULE_TYPES.items():
-        if re.match(pattern, rule):
-            result['type'] = rule_type
-            break
-    
-    # 提取规则内容
-    if result['type'] == 'domain':
-        match = re.match(Config.AG_RULE_TYPES['domain'], rule)
-        if match:
-            result['content'] = match.group(1)
-    elif result['type'] == 'exact':
-        match = re.match(Config.AG_RULE_TYPES['exact'], rule)
-        if match:
-            result['content'] = match.group(1)
-    elif result['type'] == 'exception':
-        # 处理例外规则(@@)
-        result['content'] = rule[2:]
-    else:
-        result['content'] = rule
-    
-    return result
-
-
-def extract_domains_from_adguard_rules(file_path: str) -> Tuple[Set[str], Dict[str, int]]:
-    """从AdGuard Home规则文件中提取域名"""
-    domains = set()
-    rule_stats = {'total': 0, 'domain_rules': 0, 'other_rules': 0}
-
-    if not os.path.exists(file_path):
-        log_warning(f"文件不存在: {file_path}")
-        return domains, rule_stats
-
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            for line in f:
-                rule_stats['total'] += 1
-                parsed = parse_adguard_rule(line)
-                
-                if parsed['type'] == 'comment':
-                    continue
-                elif parsed['type'] == 'domain':
-                    domains.add(parsed['content'])
-                    rule_stats['domain_rules'] += 1
-                else:
-                    rule_stats['other_rules'] += 1
-                    # 对于非域名规则，尝试提取可能包含的域名
-                    if re.search(r'[a-zA-Z0-9-]+\.[a-zA-Z0-9-]+', parsed['content']):
-                        domain_match = re.search(r'([a-zA-Z0-9-]+\.[a-zA-Z0-9-]+)', parsed['content'])
-                        if domain_match:
-                            domains.add(domain_match.group(1))
-
-    except Exception as e:
-        log_error(f"读取文件时出错 {file_path}: {e}")
-
-    return domains, rule_stats
-
-
-# ==============================================================================
-# 域名处理和过滤
-# ==============================================================================
-def is_valid_domain(domain: str) -> bool:
-    """验证域名是否合法"""
-    if not domain or domain.strip() == "":
-        return False
-
-    domain = domain.strip()
-
-    # 排除纯IP地址
-    if re.match(r'^(?:\d{1,3}\.){3}\d{1,3}$', domain):
-        return False
-
-    # 基本域名格式检查
-    if not re.match(r'^[a-zA-Z0-9.*-]+\.[a-zA-Z0-9.*-]+$', domain):
-        return False
-
-    # 检查通配符位置
-    if domain.startswith('*') and not domain.startswith('*.'):
-        return False
-
-    return True
-
-
-def is_ad_subdomain(subdomain: str) -> bool:
-    """检查域名是否是广告相关的子域名"""
-    subdomain_lower = subdomain.lower()
-    for keyword in Config.AD_KEYWORDS:
-        if keyword in subdomain_lower:
-            return True
-    return False
-
-
-def filter_domains(black_domains: Set[str], white_domains: Set[str]) -> Set[str]:
-    """使用白名单过滤黑名单域名"""
-    filtered_domains = set()
-    
-    for black_domain in black_domains:
-        # 检查是否在白名单中
-        if black_domain in white_domains:
-            log_debug(f"过滤域名 (精确匹配): {black_domain}")
-            continue
-            
-        # 检查是否是白名单域名的子域名（但排除广告子域名）
-        whitelisted = False
-        for white_domain in white_domains:
-            if (black_domain == white_domain or 
-                black_domain.endswith('.' + white_domain)):
-                if is_ad_subdomain(black_domain):
-                    # 广告子域名不过滤
-                    log_debug(f"保留广告子域名: {black_domain} (白名单: {white_domain})")
-                    continue
-                else:
-                    whitelisted = True
-                    log_debug(f"过滤域名 (子域名匹配): {black_domain} (白名单: {white_domain})")
-                    break
+    def __init__(self):
+        # 基础路径配置
+        self.base_dir = os.getenv("GITHUB_WORKSPACE", os.getcwd())
         
-        if not whitelisted:
-            filtered_domains.add(black_domain)
+        # 功能开关
+        self.enable_whitelist = os.getenv("ENABLE_WHITELIST", "true").lower() == "false"
+        
+        # 输入输出路径
+        self.input_blacklist = os.getenv("INPUT_BLACKLIST", os.path.join(self.base_dir, "adblock_adh.txt"))
+        self.input_whitelist = os.getenv("INPUT_WHITELIST", os.path.join(self.base_dir, "allow_adh.txt"))
+        self.output_mihomo = os.getenv("OUTPUT_MIHOMO", os.path.join(self.base_dir, "adb.mrs"))
+        self.temp_clash = os.path.join(self.base_dir, "temp_clash.yaml")
+        
+        # 工具路径
+        self.mihomo_tool = os.getenv("MIHOMO_TOOL_PATH", os.path.join(self.base_dir, "data/mihomo-tool"))
+        
+        # AdGuard规则类型映射
+        self.ag_rule_types = {
+            'domain': r'^\|\|([^\^]+)\^',
+            'exact': r'^\|([^\^]+)\^',
+            'regex': r'^/(.+)/$',
+            'element': r'^##',
+            'exception': r'^@@'
+        }
     
-    return filtered_domains
-
-
-# ==============================================================================
-# Clash/Mihomo规则生成
-# ==============================================================================
-def convert_to_clash_rules(domains: Set[str]) -> List[str]:
-    """将域名集合转换为Clash规则，按优先级排序"""
-    exact_rules = []    # 精确域名匹配
-    suffix_rules = []   # 域名后缀匹配
-    
-    for domain in domains:
-        if domain.startswith('*.'):
-            # 通配符域名 -> DOMAIN-SUFFIX规则
-            base_domain = domain[2:]
-            suffix_rules.append(f"DOMAIN-SUFFIX,{base_domain},REJECT")
-        elif re.match(r'^[a-zA-Z0-9-]+\.[a-zA-Z0-9-]+$', domain):
-            # 普通域名 -> DOMAIN-SUFFIX规则（匹配域名及其子域）
-            suffix_rules.append(f"DOMAIN-SUFFIX,{domain},REJECT")
-        else:
-            # 其他情况 -> DOMAIN规则（精确匹配）
-            exact_rules.append(f"DOMAIN,{domain},REJECT")
-    
-    # 按Clash推荐的优先级排序：精确匹配优先，然后是后缀匹配
-    return exact_rules + suffix_rules
-
-
-def create_clash_yaml(rules: List[str], output_path: str) -> None:
-    """创建Clash格式的YAML文件"""
-    try:
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write("payload:\n")
-            for rule in rules:
-                f.write(f"  - {rule}\n")
-        log_info(f"Clash临时文件创建成功: {output_path}")
-    except Exception as e:
-        log_error(f"创建Clash临时文件失败: {e}")
-        raise
-
-
-# ==============================================================================
-# Mihomo编译
-# ==============================================================================
-def compile_mihomo(clash_yaml_path: str, output_path: str) -> bool:
-    """使用mihomo-tool编译规则集"""
-    if not os.path.exists(Config.MIHOMO_TOOL):
-        log_error(f"Mihomo工具不存在: {Config.MIHOMO_TOOL}")
-        return False
-
-    cmd = [
-        Config.MIHOMO_TOOL,
-        "convert-ruleset",
-        "domain",
-        "yaml",
-        clash_yaml_path,
-        output_path
-    ]
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        if result.returncode == 0:
-            log_success("Mihomo编译成功")
-            return True
-        else:
-            log_error(f"Mihomo编译失败: {result.stderr}")
+    def validate_paths(self) -> bool:
+        """验证必要的路径是否存在"""
+        errors = []
+        
+        # 检查黑名单文件
+        if not os.path.exists(self.input_blacklist):
+            errors.append(f"黑名单文件不存在: {self.input_blacklist}")
+        
+        # 检查白名单文件（如果启用白名单过滤）
+        if self.enable_whitelist and not os.path.exists(self.input_whitelist):
+            errors.append(f"白名单文件不存在: {self.input_whitelist}")
+        
+        # 检查mihomo-tool
+        if not os.path.exists(self.mihomo_tool):
+            errors.append(f"Mihomo工具不存在: {self.mihomo_tool}")
+        
+        if errors:
+            for error in errors:
+                print(f"::error::{error}")
             return False
-    except subprocess.CalledProcessError as e:
-        log_error(f"Mihomo编译异常: {e.stderr if e.stderr else e}")
-        return False
-    except Exception as e:
-        log_error(f"Mihomo执行异常: {e}")
-        return False
+        
+        return True
 
 
 # ==============================================================================
-# 主流程
+# AdGuard Home规则处理 - 改进版
+# ==============================================================================
+class AdGuardRuleParser:
+    """AdGuard规则解析器 - 改进版"""
+    
+    def __init__(self, config: Config):
+        self.config = config
+    
+    def parse_rule(self, rule: str) -> Dict[str, Any]:
+        """解析AdGuard Home规则，返回规则类型和内容 - 改进版"""
+        rule = rule.strip()
+        result = {'original': rule, 'type': 'unknown', 'content': '', 'is_exception': False}
+
+        # 跳过注释和空行
+        if not rule or rule.startswith('!') or rule.startswith('#'):
+            result['type'] = 'comment'
+            return result
+
+        # 检查是否为例外规则
+        if rule.startswith('@@'):
+            result['is_exception'] = True
+            rule = rule[2:]  # 移除@@前缀
+
+        # 检查规则类型
+        for rule_type, pattern in self.config.ag_rule_types.items():
+            if re.match(pattern, rule):
+                result['type'] = rule_type
+                break
+
+        # 提取规则内容
+        if result['type'] == 'domain':
+            match = re.match(self.config.ag_rule_types['domain'], rule)
+            if match:
+                result['content'] = match.group(1)
+        elif result['type'] == 'exact':
+            match = re.match(self.config.ag_rule_types['exact'], rule)
+            if match:
+                result['content'] = match.group(1)
+        elif result['type'] == 'exception':
+            # 处理例外规则(@@)
+            result['content'] = rule[2:]
+        else:
+            result['content'] = rule
+
+        return result
+
+    def extract_rules_from_file(self, file_path: str) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+        """从AdGuard Home规则文件中提取规则 - 改进版"""
+        rules = []
+        rule_stats = {'total': 0, 'domain_rules': 0, 'exact_rules': 0, 'exception_rules': 0, 'other_rules': 0}
+
+        if not os.path.exists(file_path):
+            print(f"::warning::文件不存在: {file_path}")
+            return rules, rule_stats
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                for line_num, line in enumerate(f, 1):
+                    rule_stats['total'] += 1
+                    parsed = self.parse_rule(line)
+
+                    if parsed['type'] == 'comment':
+                        continue
+                    
+                    # 统计规则类型
+                    if parsed['type'] == 'domain':
+                        rule_stats['domain_rules'] += 1
+                    elif parsed['type'] == 'exact':
+                        rule_stats['exact_rules'] += 1
+                    elif parsed['is_exception']:
+                        rule_stats['exception_rules'] += 1
+                    else:
+                        rule_stats['other_rules'] += 1
+                    
+                    rules.append(parsed)
+                    
+                    # 每处理1000行输出一次进度
+                    if line_num % 1000 == 0:
+                        print(f"::notice::已处理 {line_num} 行规则...")
+
+        except Exception as e:
+            print(f"::error::读取文件时出错 {file_path}: {e}")
+
+        return rules, rule_stats
+
+
+# ==============================================================================
+# 域名处理和过滤 - 改进版
+# ==============================================================================
+class DomainProcessor:
+    """域名处理器 - 改进版"""
+    
+    def __init__(self, config: Config):
+        self.config = config
+    
+    def is_valid_domain(self, domain: str) -> bool:
+        """验证域名是否合法 - 改进版"""
+        if not domain or domain.strip() == "":
+            return False
+
+        domain = domain.strip()
+
+        # 排除纯IP地址
+        if re.match(r'^(?:\d{1,3}\.){3}\d{1,3}$', domain):
+            return False
+
+        # 基本域名格式检查
+        if not re.match(r'^[a-zA-Z0-9.*-]+\.[a-zA-Z0-9.*-]+$', domain):
+            return False
+
+        # 检查通配符位置
+        if domain.startswith('*') and not domain.startswith('*.'):
+            return False
+
+        return True
+
+    def filter_rules(self, black_rules: List[Dict[str, Any]], white_domains: Set[str]) -> List[Dict[str, Any]]:
+        """使用白名单过滤黑名单规则 - 改进版"""
+        if not self.config.enable_whitelist:
+            return black_rules
+            
+        filtered_rules = []
+
+        for rule in black_rules:
+            # 例外规则不过滤
+            if rule.get('is_exception', False):
+                filtered_rules.append(rule)
+                continue
+                
+            domain = rule.get('content', '')
+            
+            # 检查是否在白名单中
+            if domain in white_domains:
+                print(f"::debug::过滤规则 (精确匹配): {domain}")
+                continue
+
+            # 检查是否是白名单域名的子域名
+            whitelisted = False
+            for white_domain in white_domains:
+                if (domain == white_domain or 
+                    domain.endswith('.' + white_domain)):
+                    whitelisted = True
+                    print(f"::debug::过滤规则 (子域名匹配): {domain} (白名单: {white_domain})")
+                    break
+
+            if not whitelisted:
+                filtered_rules.append(rule)
+
+        return filtered_rules
+
+
+# ==============================================================================
+# Clash/Mihomo规则生成 - 改进版
+# ==============================================================================
+class RuleConverter:
+    """规则转换器 - 改进版"""
+    
+    @staticmethod
+    def convert_to_clash_rules(rules: List[Dict[str, Any]]) -> List[str]:
+        """将规则列表转换为Clash规则 - 改进版"""
+        clash_rules = []
+
+        for rule in rules:
+            domain = rule.get('content', '')
+            rule_type = rule.get('type', '')
+            is_exception = rule.get('is_exception', False)
+            
+            # 跳过无效域名
+            if not domain or domain.strip() == "":
+                continue
+                
+            # 确定规则动作
+            action = "DIRECT" if is_exception else "REJECT"
+            
+            # 根据规则类型生成对应的Clash规则
+            if rule_type == 'domain':
+                if domain.startswith('*.'):
+                    # 通配符域名 -> DOMAIN-SUFFIX规则
+                    base_domain = domain[2:]
+                    clash_rules.append(f"DOMAIN-SUFFIX,{base_domain},{action}")
+                else:
+                    # 普通域名 -> DOMAIN-SUFFIX规则（匹配域名及其子域）
+                    clash_rules.append(f"DOMAIN-SUFFIX,{domain},{action}")
+            elif rule_type == 'exact':
+                # 精确匹配 -> DOMAIN规则
+                clash_rules.append(f"DOMAIN,{domain},{action}")
+            else:
+                # 其他规则类型，尝试转换为DOMAIN-SUFFIX
+                clash_rules.append(f"DOMAIN-SUFFIX,{domain},{action}")
+
+        return clash_rules
+
+    @staticmethod
+    def create_clash_yaml(rules: List[str], output_path: str) -> None:
+        """创建Clash格式的YAML文件 - 改进版"""
+        try:
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write("payload:\n")
+                for rule in rules:
+                    f.write(f"  - {rule}\n")
+            print(f"::notice::Clash临时文件创建成功: {output_path}")
+        except Exception as e:
+            print(f"::error::创建Clash临时文件失败: {e}")
+            raise
+
+
+# ==============================================================================
+# Mihomo编译 - 改进版
+# ==============================================================================
+class MihomoCompiler:
+    """Mihomo编译器 - 改进版"""
+    
+    def __init__(self, config: Config):
+        self.config = config
+    
+    def compile(self, clash_yaml_path: str, output_path: str) -> bool:
+        """使用mihomo-tool编译规则集 - 改进版"""
+        if not os.path.exists(self.config.mihomo_tool):
+            print(f"::error::Mihomo工具不存在: {self.config.mihomo_tool}")
+            return False
+
+        cmd = [
+            self.config.mihomo_tool,
+            "convert-ruleset",
+            "domain",
+            "yaml",
+            clash_yaml_path,
+            output_path
+        ]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            if result.returncode == 0:
+                print("::notice::Mihomo编译成功")
+                return True
+            else:
+                print(f"::error::Mihomo编译失败: {result.stderr}")
+                return False
+        except subprocess.CalledProcessError as e:
+            print(f"::error::Mihomo编译异常: {e.stderr if e.stderr else e}")
+            return False
+        except Exception as e:
+            print(f"::error::Mihomo执行异常: {e}")
+            return False
+
+
+# ==============================================================================
+# 文件验证工具
+# ==============================================================================
+class FileValidator:
+    """文件验证工具类"""
+    
+    @staticmethod
+    def calculate_sha256(file_path: str) -> str:
+        """计算文件的SHA256哈希值"""
+        sha256_hash = hashlib.sha256()
+        try:
+            with open(file_path, "rb") as f:
+                # 分块读取文件以处理大文件
+                for byte_block in iter(lambda: f.read(4096), b""):
+                    sha256_hash.update(byte_block)
+            return sha256_hash.hexdigest()
+        except Exception as e:
+            print(f"::error::计算SHA256时出错: {e}")
+            return ""
+
+    @staticmethod
+    def validate_file(file_path: str) -> Dict[str, Any]:
+        """验证文件并返回详细信息"""
+        result = {
+            "exists": False,
+            "size": 0,
+            "sha256": "",
+            "is_valid": False
+        }
+        
+        if not os.path.exists(file_path):
+            return result
+            
+        result["exists"] = True
+        result["size"] = os.path.getsize(file_path)
+        result["sha256"] = FileValidator.calculate_sha256(file_path)
+        result["is_valid"] = result["size"] > 0 and result["sha256"] != ""
+        
+        return result
+
+
+# ==============================================================================
+# 主流程 - 改进版
 # ==============================================================================
 def main():
-    # 检查是否在GitHub Actions环境中运行
-    github_actions = os.getenv('GITHUB_ACTIONS') == 'true'
+    """主函数 - 改进版"""
+    # 初始化配置
+    config = Config()
     
-    if github_actions:
-        log_info("在GitHub Actions环境中运行Mihomo规则转换")
-    else:
-        log_info("在本地环境中运行Mihomo规则转换")
+    # 输出配置信息
+    print("::notice::在GitHub Actions环境中运行Mihomo规则转换")
+    print(f"::notice::白名单过滤: {'启用' if config.enable_whitelist else '禁用'}")
+
+    # 验证路径
+    if not config.validate_paths():
+        sys.exit(1)
+
+    print("::notice::开始处理规则文件...")
+
+    # 初始化组件
+    rule_parser = AdGuardRuleParser(config)
+    domain_processor = DomainProcessor(config)
+    mihomo_compiler = MihomoCompiler(config)
+
+    # 步骤1：提取规则
+    print("::notice::【1/4】提取AdGuard Home规则...")
+    black_rules, black_stats = rule_parser.extract_rules_from_file(config.input_blacklist)
     
-    log_info("开始处理规则文件...")
+    white_domains = set()
+    white_stats = {'total': 0, 'domain_rules': 0, 'other_rules': 0}
+    
+    if config.enable_whitelist:
+        white_rules, white_stats = rule_parser.extract_rules_from_file(config.input_whitelist)
+        # 提取白名单域名
+        for rule in white_rules:
+            if rule.get('content') and not rule.get('is_exception', False):
+                white_domains.add(rule['content'])
 
-    # 步骤1：提取域名
-    log_info("【1/4】提取AdGuard Home规则域名...")
-    black_domains, black_stats = extract_domains_from_adguard_rules(Config.INPUT["BLACKLIST"])
-    white_domains, white_stats = extract_domains_from_adguard_rules(Config.INPUT["WHITELIST"])
-
-    log_info(f"📊 提取统计:")
-    log_info(f"  黑名单: {len(black_domains)} 个域名 (共 {black_stats['total']} 条规则)")
-    log_info(f"  白名单: {len(white_domains)} 个域名 (共 {white_stats['total']} 条规则)")
+    print(f"::notice::📊 提取统计:")
+    print(f"::notice::  黑名单: {len(black_rules)} 条规则 (共 {black_stats['total']} 行)")
+    print(f"::notice::    域名规则: {black_stats['domain_rules']}")
+    print(f"::notice::    精确规则: {black_stats['exact_rules']}")
+    print(f"::notice::    例外规则: {black_stats['exception_rules']}")
+    print(f"::notice::    其他规则: {black_stats['other_rules']}")
+    
+    if config.enable_whitelist:
+        print(f"::notice::  白名单: {len(white_domains)} 个域名 (共 {white_stats['total']} 条规则)")
 
     # 步骤2：过滤黑名单
-    log_info("【2/4】使用白名单过滤黑名单...")
-    filtered_domains = filter_domains(black_domains, white_domains)
-    
-    filtered_count = len(black_domains) - len(filtered_domains)
-    log_info(f"📊 过滤统计:")
-    log_info(f"  过滤前: {len(black_domains)} 个域名")
-    log_info(f"  过滤后: {len(filtered_domains)} 个域名")
-    log_info(f"  过滤掉: {filtered_count} 个域名")
+    print("::notice::【2/4】过滤黑名单规则...")
+    filtered_rules = domain_processor.filter_rules(black_rules, white_domains)
+
+    filtered_count = len(black_rules) - len(filtered_rules)
+    print(f"::notice::📊 过滤统计:")
+    print(f"::notice::  过滤前: {len(black_rules)} 条规则")
+    print(f"::notice::  过滤后: {len(filtered_rules)} 条规则")
+    if config.enable_whitelist:
+        print(f"::notice::  过滤掉: {filtered_count} 条规则")
 
     # 步骤3：转换为Clash规则并创建临时文件
-    log_info("【3/4】转换为Clash规则并创建临时文件...")
-    clash_rules = convert_to_clash_rules(filtered_domains)
-    create_clash_yaml(clash_rules, Config.OUTPUT["TEMP_CLASH"])
+    print("::notice::【3/4】转换为Clash规则并创建临时文件...")
+    clash_rules = RuleConverter.convert_to_clash_rules(filtered_rules)
+    RuleConverter.create_clash_yaml(clash_rules, config.temp_clash)
 
     # 步骤4：编译Mihomo规则集
-    log_info("【4/4】编译Mihomo规则集...")
-    if compile_mihomo(Config.OUTPUT["TEMP_CLASH"], Config.OUTPUT["MIHOMO"]):
-        mrs_size = os.path.getsize(Config.OUTPUT["MIHOMO"]) / 1024 if os.path.exists(Config.OUTPUT["MIHOMO"]) else 0
-        log_success(f"Mihomo规则集生成成功: {Config.OUTPUT['MIHOMO']} ({mrs_size:.2f} KB)")
+    print("::notice::【4/4】编译Mihomo规则集...")
+    if mihomo_compiler.compile(config.temp_clash, config.output_mihomo):
+        mrs_size = os.path.getsize(config.output_mihomo) / 1024 if os.path.exists(config.output_mihomo) else 0
+        print(f"::notice::Mihomo规则集生成成功: {config.output_mihomo} ({mrs_size:.2f} KB)")
+        
+        # 验证规则集有效性
+        if mrs_size > 0:
+            print("::notice::规则集验证: 生成成功，文件大小正常")
+        else:
+            print("::warning::规则集验证: 文件大小异常，可能生成失败")
     else:
-        log_error("Mihomo规则集生成失败")
+        print("::error::Mihomo规则集生成失败")
+        sys.exit(1)
+
+    # 步骤5：验证生成的文件
+    print("::notice::【5/5】验证生成的文件...")
+    file_validator = FileValidator()
+    validation_result = file_validator.validate_file(config.output_mihomo)
+    
+    if validation_result["is_valid"]:
+        print(f"::notice::✅ 文件验证成功:")
+        print(f"::notice::  文件大小: {validation_result['size']} 字节")
+        print(f"::notice::  SHA256: {validation_result['sha256']}")
+        
+        # 设置GitHub Actions输出变量
+        if os.getenv("GITHUB_OUTPUT"):
+            with open(os.getenv("GITHUB_OUTPUT"), "a") as f:
+                f.write(f"mrs_file={config.output_mihomo}\n")
+                f.write(f"mrs_size={validation_result['size']}\n")
+                f.write(f"mrs_sha256={validation_result['sha256']}\n")
+    else:
+        print("::error::❌ 文件验证失败")
         sys.exit(1)
 
     # 清理临时文件
-    if os.path.exists(Config.OUTPUT["TEMP_CLASH"]):
-        os.remove(Config.OUTPUT["TEMP_CLASH"])
-        log_info(f"已清理临时文件: {Config.OUTPUT['TEMP_CLASH']}")
+    if os.path.exists(config.temp_clash):
+        os.remove(config.temp_clash)
+        print(f"::notice::已清理临时文件: {config.temp_clash}")
 
-    log_info("🎉 Mihomo转换任务完成！")
+    print("::notice::🎉 Mihomo转换任务完成！")
 
 
 if __name__ == "__main__":
