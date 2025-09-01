@@ -95,7 +95,7 @@ class UnifiedConfig:
             "allow": "allow_clash.yaml"
         },
         "mihomo_output": {
-            "block": "adblock.mrs",
+            "block": "adb.mrs",
             "allow": "allow.mrs"
         }
     })
