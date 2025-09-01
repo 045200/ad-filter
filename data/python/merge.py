@@ -1,48 +1,72 @@
+#!/usr/bin/env python3
+"""
+AdGuard规则合并去重脚本 - 专注于AdGuard语法处理
+功能：合并多个AdGuard规则文件，去除重复规则，保持原有路径和文件名
+作者：AI助手
+日期：2025-09-01
+版本：2.0
+"""
+
 import os
 import re
 import json
 import requests
 from pathlib import Path
-from typing import Set, Dict, List, Tuple, Optional, Any
+from typing import Set, Dict, List, Tuple, Optional, Any, Union
 from pybloom_live import ScalableBloomFilter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
+import sys
+from datetime import datetime
 
 # 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 logger = logging.getLogger(__name__)
 
 @dataclass
-class AdBlockConfig:
-    """配置类 - 按文件前缀独立处理（未改动输出路径）"""
+class AdGuardConfig:
+    """配置类 - 保持原有路径和文件名"""
     # 基础路径配置（保持原样）
     INPUT_DIR: Path = Path(os.getenv('INPUT_DIR', './data/filter'))
     OUTPUT_DIR: Path = Path(os.getenv('OUTPUT_DIR', './'))
 
-    # 文件模式配置（仅关注adblock*.txt/allow*.txt，保留原模式字段但实际按前缀筛选）
-    ADBLOCK_PATTERNS: List[str] = None
-    OUTPUT_BLOCK: str = 'adblock_adg.txt'  # 输出路径不变
-    OUTPUT_ALLOW: str = 'allow_adg.txt'    # 输出路径不变
-
+    # GitHub Actions特定环境变量
+    GITHUB_ACTIONS: bool = os.getenv('GITHUB_ACTIONS', 'false').lower() == 'true'
+    GITHUB_REPOSITORY: str = os.getenv('GITHUB_REPOSITORY', 'unknown/repository')
+    GITHUB_SHA: str = os.getenv('GITHUB_SHA', 'unknown')
+    GITHUB_REF: str = os.getenv('GITHUB_REF', 'unknown')
+    GITHUB_WORKFLOW: str = os.getenv('GITHUB_WORKFLOW', 'unknown')
+    
+    # 文件模式配置（保持原样）
+    ADBLOCK_PATTERNS: List[str] = field(default_factory=lambda: ['*.txt', '*.filter'])
+    OUTPUT_BLOCK: str = 'adblock_adg.txt'  # 保持原文件名
+    OUTPUT_ALLOW: str = 'allow_adg.txt'    # 保持原文件名
+    
     # 布隆过滤器配置（保持原样）
-    BLOOM_INIT_CAP: int = 1000000
-    BLOOM_ERROR_RATE: float = 0.0001
-
+    BLOOM_INIT_CAP: int = int(os.getenv('BLOOM_INIT_CAP', '1000000'))
+    BLOOM_ERROR_RATE: float = float(os.getenv('BLOOM_ERROR_RATE', '0.0001'))
+    
     # 规则处理配置（保持原样）
-    MAX_RULE_LENGTH: int = 2000  # 规则最大长度限制
-    MIN_RULE_LENGTH: int = 3     # 规则最小长度限制
-
+    MAX_RULE_LENGTH: int = int(os.getenv('MAX_RULE_LENGTH', '2000'))
+    MIN_RULE_LENGTH: int = int(os.getenv('MIN_RULE_LENGTH', '3'))
+    
     # 语法数据库配置（保持原样）
     SYNTAX_DB_FILE: str = "adblock_syntax_db.json"
+    
+    # 性能配置
+    MAX_RULES_PER_FILE: int = int(os.getenv('MAX_RULES_PER_FILE', '50000'))
+    DOWNLOAD_TIMEOUT: int = int(os.getenv('DOWNLOAD_TIMEOUT', '30'))
 
-    def __post_init__(self):
-        if self.ADBLOCK_PATTERNS is None:
-            self.ADBLOCK_PATTERNS = ['*.txt', '*.filter']  # 保留原默认值，不影响前缀筛选逻辑
 
-
-class AdBlockSyntaxDatabase:
-    """AdBlock和AdGuard语法数据库（完全保留原逻辑）"""
-    def __init__(self, config: AdBlockConfig):
+class AdGuardSyntaxDatabase:
+    """AdGuard语法数据库"""
+    def __init__(self, config: AdGuardConfig):
         self.config = config
         self.syntax_patterns = {}
         self.rule_types = {}
@@ -50,7 +74,7 @@ class AdBlockSyntaxDatabase:
         self.load_syntax_database()
 
     def load_syntax_database(self):
-        """加载语法数据库（完全保留原逻辑）"""
+        """加载语法数据库"""
         # 首先尝试从脚本同目录加载语法数据库
         script_dir = Path(__file__).parent
         db_path = script_dir / self.config.SYNTAX_DB_FILE
@@ -82,24 +106,24 @@ class AdBlockSyntaxDatabase:
             except Exception as e:
                 logger.error(f"加载输入目录语法数据库失败: {e}")
 
-        # 如果都没有找到，使用内置的基本语法规则
-        logger.warning("未找到语法数据库文件，使用内置基本语法规则")
-        self.load_basic_syntax()
+        # 如果都没有找到，使用内置的AdGuard语法规则
+        logger.warning("未找到语法数据库文件，使用内置AdGuard语法规则")
+        self.load_adguard_syntax()
 
         # 尝试保存基本语法数据库到脚本目录
         try:
             self.save_syntax_database(script_dir / self.config.SYNTAX_DB_FILE)
         except Exception as e:
-            logger.error(f"保存基本语法数据库失败: {e}")
+            logger.error(f"保存AdGuard语法数据库失败: {e}")
 
     def save_syntax_database(self, db_path: Path):
-        """保存语法数据库到文件（完全保留原逻辑）"""
+        """保存语法数据库到文件"""
         db_data = {
             'syntax_patterns': self.syntax_patterns,
             'rule_types': self.rule_types,
             'modifiers': self.modifiers,
-            'version': '1.0',
-            'description': 'AdBlock/AdGuard 语法数据库'
+            'version': '2.0',
+            'description': 'AdGuard语法数据库'
         }
 
         with open(db_path, 'w', encoding='utf-8') as f:
@@ -107,9 +131,9 @@ class AdBlockSyntaxDatabase:
 
         logger.info(f"语法数据库已保存到: {db_path}")
 
-    def load_basic_syntax(self):
-        """加载基本语法规则（备用，完全保留原逻辑）"""
-        # 基本规则模式
+    def load_adguard_syntax(self):
+        """加载AdGuard语法规则"""
+        # AdGuard特定规则模式
         self.syntax_patterns = {
             'domain_rule': r'^\|\|([^\^]+)\^',
             'url_rule': r'^\|([^\|]+)\|',
@@ -117,7 +141,11 @@ class AdBlockSyntaxDatabase:
             'exception_rule': r'^@@',
             'regex_rule': r'^/(.+)/$',
             'comment': r'^!',
-            'options': r'\$(.+)$'
+            'options': r'\$(.+)$',
+            'adguard_specific': r'^#\$#',  # AdGuard特定规则
+            'html_filtering': r'^#@?#',    # HTML过滤规则
+            'scriptlet': r'^#%#',          # 脚本规则
+            'extension': r'^#\?#',         # 扩展语法
         }
 
         # 规则类型定义
@@ -128,10 +156,14 @@ class AdBlockSyntaxDatabase:
             'exception_rule': 'allow',
             'regex_rule': 'block',
             'comment': 'invalid',
-            'options': 'modifier'
+            'options': 'modifier',
+            'adguard_specific': 'block',
+            'html_filtering': 'block',
+            'scriptlet': 'block',
+            'extension': 'block',
         }
 
-        # 修饰符定义
+        # AdGuard修饰符定义
         self.modifiers = {
             'domain': r'domain=([^\s,]+)',
             'script': r'script',
@@ -148,20 +180,22 @@ class AdBlockSyntaxDatabase:
             'collapse': r'collapse',
             'donottrack': r'donottrack',
             'websocket': r'websocket',
-            'webrtc': r'webrtc'
+            'webrtc': r'webrtc',
+            'content': r'content',  # AdGuard特定
+            'popup': r'popup',      # AdGuard特定
+            'app': r'app',          # AdGuard特定
+            'network': r'network',  # AdGuard特定
         }
 
-        logger.info("使用内置基本语法规则")
+        logger.info("使用内置AdGuard语法规则")
 
 
-class AdBlockMerger:
-    def __init__(self, config: AdBlockConfig):
+class AdGuardMerger:
+    def __init__(self, config: AdGuardConfig):
         self.config = config
-        self.syntax_db = AdBlockSyntaxDatabase(config)
+        self.syntax_db = AdGuardSyntaxDatabase(config)
 
-        # --------------------------
-        # 核心修改：为两组规则创建独立的去重容器（完全隔离）
-        # --------------------------
+        # 为两组规则创建独立的去重容器（完全隔离）
         # adblock*.txt 处理后的数据（黑名单）
         self.block_data = {
             "bloom": ScalableBloomFilter(
@@ -201,8 +235,22 @@ class AdBlockMerger:
             "allow_files": 0        # allow前缀文件数
         }
 
+    def github_log(self, level: str, message: str):
+        """GitHub Actions专用日志格式"""
+        if self.config.GITHUB_ACTIONS:
+            level_map = {
+                'warning': 'warning',
+                'error': 'error',
+                'notice': 'notice',
+                'debug': 'debug'
+            }
+            gh_level = level_map.get(level, 'notice')
+            print(f"::{gh_level} ::{message}")
+        else:
+            getattr(logger, level)(message)
+
     def analyze_rule_syntax(self, rule: str) -> Dict[str, Any]:
-        """使用语法数据库分析规则语法（完全保留原逻辑）"""
+        """使用语法数据库分析规则语法"""
         result = {
             'type': 'unknown',
             'pattern_type': 'unknown',
@@ -237,7 +285,7 @@ class AdBlockMerger:
                     result['is_valid'] = result['type'] not in ['invalid', 'comment', 'empty']
                     break
             except re.error:
-                logger.warning(f"正则表达式模式错误: {pattern_name} - {pattern}")
+                self.github_log('warning', f"正则表达式模式错误: {pattern_name} - {pattern}")
                 continue
 
         # 提取修饰符
@@ -251,7 +299,7 @@ class AdBlockMerger:
                     if re.search(mod_pattern, modifiers_str):
                         result['modifiers'].append(mod_name)
                 except re.error:
-                    logger.warning(f"修饰符正则表达式错误: {mod_name} - {mod_pattern}")
+                    self.github_log('warning', f"修饰符正则表达式错误: {mod_name} - {mod_pattern}")
                     continue
 
             # 对修饰符进行排序以确保一致性
@@ -265,7 +313,7 @@ class AdBlockMerger:
         return result
 
     def normalize_rule(self, rule: str) -> Optional[str]:
-        """基于语法分析的规则标准化（完全保留原逻辑）"""
+        """基于语法分析的规则标准化"""
         analysis = self.analyze_rule_syntax(rule)
 
         if not analysis['is_valid']:
@@ -317,18 +365,15 @@ class AdBlockMerger:
         return normalized
 
     def is_valid_rule(self, rule: str) -> bool:
-        """使用语法数据库检查是否为有效规则（完全保留原逻辑）"""
+        """使用语法数据库检查是否为有效规则"""
         analysis = self.analyze_rule_syntax(rule)
         return analysis['is_valid']
 
     def determine_rule_type(self, rule: str) -> str:
-        """使用语法数据库确定规则类型（完全保留原逻辑）"""
+        """使用语法数据库确定规则类型"""
         analysis = self.analyze_rule_syntax(rule)
         return analysis['type']
 
-    # --------------------------
-    # 新增：按前缀筛选输入文件（核心分类逻辑）
-    # --------------------------
     def get_files_by_prefix(self, directory: Path) -> Tuple[List[Path], List[Path]]:
         """按文件名前缀筛选文件，返回 (adblock前缀文件列表, allow前缀文件列表)"""
         block_files = []  # 存储 adblock*.txt 文件
@@ -336,31 +381,29 @@ class AdBlockMerger:
 
         # 检查输入目录是否存在，不存在则创建
         if not directory.exists():
-            logger.warning(f"输入目录 {directory} 不存在，已自动创建")
+            self.github_log('warning', f"输入目录 {directory} 不存在，已自动创建")
             directory.mkdir(parents=True, exist_ok=True)
             return block_files, allow_files
 
-        # 递归遍历目录下所有 .txt 文件（按需求聚焦前缀，忽略其他格式）
-        for file_path in directory.rglob("*.txt"):
-            if not file_path.is_file():
-                continue  # 跳过目录，只处理文件
+        # 递归遍历目录下所有 .txt 和 .filter 文件
+        for pattern in self.config.ADBLOCK_PATTERNS:
+            for file_path in directory.rglob(pattern):
+                if not file_path.is_file():
+                    continue  # 跳过目录，只处理文件
 
-            # 按文件名前缀分类（不区分大小写，如 AdBlock1.txt 也能匹配）
-            filename = file_path.name.lower()
-            if filename.startswith("adblock"):
-                block_files.append(file_path)
-                self.global_stats["block_files"] += 1
-            elif filename.startswith("allow"):
-                allow_files.append(file_path)
-                self.global_stats["allow_files"] += 1
+                # 按文件名前缀分类（不区分大小写）
+                filename = file_path.name.lower()
+                if filename.startswith("adblock"):
+                    block_files.append(file_path)
+                    self.global_stats["block_files"] += 1
+                elif filename.startswith("allow"):
+                    allow_files.append(file_path)
+                    self.global_stats["allow_files"] += 1
 
         # 统计总文件数
         self.global_stats["total_files"] = len(block_files) + len(allow_files)
         return block_files, allow_files
 
-    # --------------------------
-    # 新增：独立处理单组文件（核心隔离逻辑）
-    # --------------------------
     def process_single_group(self, files: List[Path], data_container: dict, group_name: str) -> None:
         """
         独立处理一组文件（adblock组或allow组），数据完全隔离
@@ -409,7 +452,7 @@ class AdBlockMerger:
                     data_container["stats"]["valid"] += 1
 
             except Exception as e:
-                logger.error(f"处理文件 {file_path} 时出错: {str(e)}", exc_info=True)
+                self.github_log('error', f"处理文件 {file_path} 时出错: {str(e)}")
 
         # 输出该组处理结果统计
         stats = data_container["stats"]
@@ -419,9 +462,6 @@ class AdBlockMerger:
         logger.info(f"重复规则数：{stats['duplicate']}")
         logger.info(f"无效规则数：{stats['invalid']}")
 
-    # --------------------------
-    # 重构：主流程（先分类→再独立处理）
-    # --------------------------
     def merge_and_deduplicate(self):
         """主流程：按前缀分类文件→独立处理两组规则→完全隔离"""
         logger.info("=== 开始整体规则处理流程 ===")
@@ -437,19 +477,16 @@ class AdBlockMerger:
         if block_files:
             self.process_single_group(block_files, self.block_data, "adblock（黑名单）")
         else:
-            logger.warning("\n未找到任何 adblock*.txt 文件，黑名单规则将为空")
+            self.github_log('warning', "未找到任何 adblock*.txt 文件，黑名单规则将为空")
 
         # 3. 独立处理 allow 组（生成白名单规则）
         if allow_files:
             self.process_single_group(allow_files, self.allow_data, "allow（白名单）")
         else:
-            logger.warning("\n未找到任何 allow*.txt 文件，白名单规则将为空")
+            self.github_log('warning', "未找到任何 allow*.txt 文件，白名单规则将为空")
 
-    # --------------------------
-    # 重构：保存规则（输出路径不变，对应写入两组规则）
-    # --------------------------
     def save_rules(self):
-        """保存独立处理后的规则，输出路径完全遵循原配置"""
+        """保存独立处理后的规则，保持原有输出路径和文件名"""
         # 确保输出目录存在
         self.config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         logger.info(f"\n=== 开始保存规则（输出目录：{self.config.OUTPUT_DIR}）===")
@@ -468,20 +505,62 @@ class AdBlockMerger:
         logger.info(f"白名单规则已保存：{allow_output_path}（共 {len(self.allow_data['rules'])} 条）")
 
         logger.info("\n=== 所有规则保存完成 ===")
+        
+        # 在GitHub Actions中输出摘要
+        if self.config.GITHUB_ACTIONS:
+            summary = f"""## AdGuard规则处理结果
+            
+**处理时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+**仓库**: {self.config.GITHUB_REPOSITORY}
+**提交**: {self.config.GITHUB_SHA[:7]}
+**分支**: {self.config.GITHUB_REF}
+            
+### 处理统计
+- 总文件数: {self.global_stats['total_files']}
+- 黑名单文件: {self.global_stats['block_files']}
+- 白名单文件: {self.global_stats['allow_files']}
+            
+### 黑名单规则
+- 总处理规则: {self.block_data['stats']['processed']}
+- 有效规则: {self.block_data['stats']['valid']}
+- 重复规则: {self.block_data['stats']['duplicate']}
+- 无效规则: {self.block_data['stats']['invalid']}
+            
+### 白名单规则
+- 总处理规则: {self.allow_data['stats']['processed']}
+- 有效规则: {self.allow_data['stats']['valid']}
+- 重复规则: {self.allow_data['stats']['duplicate']}
+- 无效规则: {self.allow_data['stats']['invalid']}
+            
+**输出文件**:
+- 黑名单: {self.config.OUTPUT_BLOCK}
+- 白名单: {self.config.OUTPUT_ALLOW}
+            """
+            
+            # 在GitHub Actions中输出摘要
+            with open(os.getenv('GITHUB_STEP_SUMMARY', ''), 'a') as f:
+                f.write(summary)
 
 
 def main():
-    """主函数（保持原样，仅调用重构后的方法）"""
-    # 初始化配置（输出路径等参数完全遵循原配置）
-    config = AdBlockConfig()
+    """主函数"""
+    # 初始化配置（保持原有路径和文件名）
+    config = AdGuardConfig()
+    
+    # 输出GitHub Actions信息
+    if config.GITHUB_ACTIONS:
+        logger.info(f"运行在GitHub Actions环境: {config.GITHUB_WORKFLOW}")
+        logger.info(f"仓库: {config.GITHUB_REPOSITORY}")
+        logger.info(f"提交: {config.GITHUB_SHA}")
+        logger.info(f"分支: {config.GITHUB_REF}")
 
     # 创建合并器实例
-    merger = AdBlockMerger(config)
+    merger = AdGuardMerger(config)
 
     # 执行合并去重（按前缀独立处理）
     merger.merge_and_deduplicate()
 
-    # 保存结果（输出路径不变）
+    # 保存结果（保持原有输出路径和文件名）
     merger.save_rules()
 
 
