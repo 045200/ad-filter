@@ -1,10 +1,10 @@
 {
-  "version": "3.0",
-  "description": "Comprehensive AdBlock/AdGuard syntax database with enhanced validation and normalization rules. Fully supports both AdGuard and AdGuard Home syntax with precise compatibility marking.",
+  "version": "4.0",
+  "description": "统一规则语法数据库 - 支持多平台规则转换",
   "last_updated": "2025-09-01",
   "author": "AI Assistant",
   "database_integrity": {
-    "checksum": "sha256:a1b2c3d4e5f67890...",
+    "checksum": "sha256:...",
     "validation_rules": "complete",
     "normalization_rules": "enhanced",
     "compatibility_mapping": "detailed"
@@ -132,6 +132,67 @@
     "jsonprune": "jsonprune=",
     "urlblock": "urlblock"
   },
+  "platform_support": {
+    "adguard_home": {
+      "supported_rule_types": ["domain_rule", "exception_rule", "adguard_dns_rule", "adguard_home_dns_rewrite", "adguard_home_client", "adguard_home_dnstype", "hosts_rule", "regex_rule"],
+      "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule"],
+      "unsupported_modifiers": ["removeparam", "csp", "replace", "cookie", "redirect", "header", "scriptlet"],
+      "special_modifiers": ["client", "dnstype", "dnsrewrite", "important", "badfilter"],
+      "conversion_notes": "DNS级别过滤，不支持页面内容修改"
+    },
+    "clash": {
+      "supported_rule_types": ["domain_rule", "exception_rule", "regex_rule"],
+      "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule"],
+      "supported_modifiers": ["domain", "important"],
+      "rule_format": {
+        "domain_rule": "DOMAIN-SUFFIX,{domain},{action}",
+        "exception_rule": "DOMAIN-SUFFIX,{domain},DIRECT",
+        "regex_rule": "DOMAIN-KEYWORD,{pattern},{action}"
+      },
+      "conversion_notes": "使用Clash规则格式，支持域名和正则匹配"
+    },
+    "surge": {
+      "supported_rule_types": ["domain_rule", "exception_rule", "regex_rule"],
+      "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule"],
+      "supported_modifiers": ["domain", "important"],
+      "rule_format": {
+        "domain_rule": "DOMAIN-SUFFIX,{domain},{action}",
+        "exception_rule": "DOMAIN-SUFFIX,{domain},DIRECT",
+        "regex_rule": "URL-REGEX,{pattern},{action}"
+      },
+      "conversion_notes": "使用Surge规则格式，支持域名和URL正则匹配"
+    },
+    "mihomo": {
+      "supported_rule_types": ["domain_rule", "exception_rule"],
+      "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule", "regex_rule"],
+      "supported_modifiers": ["domain", "important"],
+      "conversion_notes": "需要从Clash规则编译为MRS格式，不支持复杂正则",
+      "compilation_required": true,
+      "source_platform": "clash"
+    },
+    "pihole": {
+      "supported_rule_types": ["domain_rule", "exception_rule", "hosts_rule"],
+      "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule", "regex_rule"],
+      "rule_format": {
+        "domain_rule": "{domain}",
+        "exception_rule": "@@{domain}",
+        "hosts_rule": "0.0.0.0 {domain}"
+      },
+      "conversion_notes": "仅支持简单域名规则，不支持修饰符"
+    },
+    "ublock_origin": {
+      "supported_rule_types": ["domain_rule", "exception_rule", "element_hiding_basic", "element_hiding_exception"],
+      "unsupported_rule_types": ["adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule"],
+      "unsupported_modifiers": ["dnsrewrite", "cname", "client", "dnstype", "denyallow", "ctag", "badfilter", "redirect", "removeheader", "removeparam", "app"],
+      "conversion_notes": "支持大部分AdGuard语法，但过滤不支持的修饰符"
+    },
+    "adblock_plus": {
+      "supported_rule_types": ["domain_rule", "exception_rule", "element_hiding_basic", "element_hiding_exception"],
+      "unsupported_rule_types": ["adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule"],
+      "unsupported_modifiers": ["dnsrewrite", "cname", "client", "dnstype", "denyallow", "ctag", "badfilter", "redirect", "removeheader", "removeparam", "app"],
+      "conversion_notes": "类似uBlock Origin，但支持度略低"
+    }
+  },
   "common_patterns": {
     "ad_keywords": ["ad", "ads", "advert", "advertising", "adv", "banner", "promo", "popup", "track", "tracking", "analytics", "affiliate", "doubleclick", "googlead", "adsense", "taboola", "outbrain", "revcontent", "propellerads"],
     "element_selectors": [".ad-", "#ad-", "[class*=\"ad\"]", "[id*=\"ad\"]", ".banner", ".popup", ".modal", ".overlay", ".newsletter", ".subscribe", ".cookie", ".gdpr", ".social-share", ".share-buttons", "[data-ad]", "[data-ad-status]", "[data-ad-preview]"],
@@ -186,35 +247,6 @@
       "max_scriptlet_length": 500
     }
   },
-  "adguard_home_specific": {
-    "supported_rule_types": ["domain_rule", "exception_rule", "adguard_dns_rule", "adguard_home_dns_rewrite", "adguard_home_client", "adguard_home_dnstype", "hosts_rule", "regex_rule"],
-    "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule"],
-    "unsupported_patterns": ["##", "#@#", "#%#", "#\\?#", "\\$removeparam=", "\\$csp=", "\\$replace=", "\\$cookie="],
-    "special_modifiers": ["client", "dnstype", "dnsrewrite", "important", "badfilter"],
-    "dns_rewrite_syntax": "^\\\\|\\\\|([^\\\\^\\n]+)\\\\^\\\\$dnsrewrite=([^\\s]+)$",
-    "client_syntax": "^\\\\|\\\\|([^\\\\^\\n]+)\\\\^\\\\$client=([^\\s]+)$",
-    "dnstype_syntax": "^\\\\|\\\\|([^\\\\^\\n]+)\\\\^\\\\$dnstype=([^\\s]+)$",
-    "performance_notes": "Avoid complex regex patterns for better DNS query performance"
-  },
-  "adguard_extended_features": {
-    "extended_css_selectors": [":has(", ":contains(", ":matches-css(", ":matches-attr(", ":matches-property(", ":nth-ancestor(", ":upward(", ":xpath("],
-    "scriptlet_injections": ["//scriptlet(\"", "//scriptlet-rule(\"", "//scriptlet-rule-2(\"", "//scriptlet-rule-3(\""],
-    "redirect_rules": ["$redirect=", "$redirect-rule="],
-    "advanced_modifiers": ["$jsonprune=", "$urlblock", "$genericblock", "$app=", "$method=", "$network=", "$popup", "$content"],
-    "stealth_mode_features": ["$stealth", "donottrack", "disable-stealth"]
-  },
-  "platform_specific_notes": {
-    "adguard_home": "主要支持DNS级别的阻止规则，不支持元素隐藏规则、脚本规则或其他高级内容修改功能",
-    "adguard_browser_extension": "支持所有规则类型，包括元素隐藏、扩展CSS和脚本规则",
-    "adguard_dns": "类似于AdGuard Home，主要支持DNS级别的过滤规则",
-    "adguard_for_windows_mac": "支持所有规则类型和功能，包括高级脚本和修改功能",
-    "adguard_for_ios_android": "支持大多数规则类型，但可能有某些高级功能的限制"
-  },
-  "coverage_notes": {
-    "general": "This syntax library aims to cover the core functionalities of both AdGuard (browser extension) and AdGuard Home (DNS filter).",
-    "adguard_home_coverage": "The library covers all major AdGuard Home specific syntax elements, including DNS rewriting, client-based filtering, and DNS type filtering. Rules unsupported by AdGuard Home (like cosmetic filters) are marked accordingly for clarity during processing.",
-    "recommendation": "When generating rules for AdGuard Home, filter out rules of types listed in 'unsupported_rule_types' to avoid errors and ensure optimal performance."
-  },
   "performance_optimization": {
     "rule_compilation_notes": "AdGuard最近在Safari转换器上进行了优化，使过滤规则转换速度提高了30倍（从10-30秒减少到0.5-2秒）",
     "dnr_rule_handling": "AdGuard浏览器扩展MV3版本中使用预构建的DNR（Declarative Net Request）规则集，提高了性能和安全性",
@@ -227,8 +259,8 @@
     }
   },
   "integrity_checks": {
-    "required_fields": ["version", "syntax_patterns", "rule_types", "modifiers", "validation_rules", "adguard_home_specific"],
+    "required_fields": ["version", "syntax_patterns", "rule_types", "modifiers", "validation_rules", "platform_support"],
     "recommended_fields": ["common_patterns", "normalization_rules", "performance_optimization"],
-    "version_compatibility": "3.x"
+    "version_compatibility": "4.x"
   }
 }
