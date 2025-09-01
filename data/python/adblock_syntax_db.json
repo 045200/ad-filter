@@ -1,7 +1,7 @@
 {
   "version": "4.0",
   "description": "统一规则语法数据库 - 支持多平台规则转换",
-  "last_updated": "2025-09-01",
+  "last_updated": "2025-09-02",
   "author": "AI Assistant",
   "database_integrity": {
     "checksum": "sha256:...",
@@ -12,39 +12,39 @@
   "syntax_patterns": {
     "comment": "^[!#]",
     "exception_rule": "^@@",
-    "domain_rule": "^\\\\|\\\\|([^\\\\^\\n]+)\\\\^",
-    "url_rule": "^\\\\|([^\\\\|\\n]+)\\\\|",
+    "domain_rule": "^\\|\\|([^\\^\\n]+)\\^",
+    "url_rule": "^\\|([^\\|\\n]+)\\|",
     "regex_rule": "^/(.*)/$",
     "hosts_rule": "^(?:\\d{1,3}\\.){3}\\d{1,3}\\s+[^\\s]+",
     "element_hiding_basic": "##[^#\\n]+$",
     "element_hiding_exception": "#@#[^#\\n]+$",
     "extended_css": "#\\?#[^#\\n]+$",
     "adguard_scriptlet": "#%#[^#\\n]+$",
-    "adguard_dns_rule": "^\\\\|\\\\|[^\\\\^\\n]*\\\\^\\\\$dnstype=",
-    "adguard_stealth_rule": "^\\\\|\\\\|[^\\\\^\\n]*\\\\^\\\\$stealth",
-    "adguard_redirect_rule": "\\\\$redirect=[^\\s]+",
-    "adguard_removeparam_rule": "\\\\$removeparam=[^\\s]+",
-    "adguard_csp_rule": "\\\\$csp=[^\\s]+",
-    "adguard_replace_rule": "\\\\$replace=[^\\s]+",
-    "adguard_cookie_rule": "\\\\$cookie=[^\\s]+",
-    "adguard_generichide": "\\\\$generichide(?:=|$)",
+    "adguard_dns_rule": "^\\|\\|[^\\^\\n]*\\^\\$dnstype=",
+    "adguard_stealth_rule": "^\\|\\|[^\\^\\n]*\\^\\$stealth",
+    "adguard_redirect_rule": "\\$redirect=[^\\s]+",
+    "adguard_removeparam_rule": "\\$removeparam=[^\\s]+",
+    "adguard_csp_rule": "\\$csp=[^\\s]+",
+    "adguard_replace_rule": "\\$replace=[^\\s]+",
+    "adguard_cookie_rule": "\\$cookie=[^\\s]+",
+    "adguard_generichide": "\\$generichide(?:=|$)",
     "adguard_specific_domain": "^[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$",
-    "adguard_home_dns_rewrite": "\\\\$dnsrewrite=[^\\s]+",
-    "adguard_home_client": "\\\\$client=[^\\s]+",
-    "adguard_home_dnstype": "\\\\$dnstype=[^\\s]+",
-    "adguard_important": "\\\\$important(?:=|$)",
-    "adguard_badfilter": "\\\\$badfilter(?:=|$)",
-    "adguard_empty": "\\\\$empty(?:=|$)",
-    "adguard_mp4": "\\\\$mp4(?:=|$)",
-    "adguard_websocket": "\\\\$websocket(?:=|$)",
-    "adguard_webrtc": "\\\\$webrtc(?:=|$)",
-    "adguard_denyallow": "\\\\$denyallow=[^\\s]+",
-    "adguard_app": "\\\\$app=[^\\s]+",
-    "adguard_network": "\\\\$network=[^\\s]+",
-    "adguard_method": "\\\\$method=[^\\s]+",
-    "adguard_specifichide": "\\\\$specifichide(?:=|$)",
-    "adguard_content": "\\\\$content(?:=|$)",
-    "adguard_popup": "\\\\$popup(?:=|$)"
+    "adguard_home_dns_rewrite": "\\$dnsrewrite=[^\\s]+",
+    "adguard_home_client": "\\$client=[^\\s]+",
+    "adguard_home_dnstype": "\\$dnstype=[^\\s]+",
+    "adguard_important": "\\$important(?:=|$)",
+    "adguard_badfilter": "\\$badfilter(?:=|$)",
+    "adguard_empty": "\\$empty(?:=|$)",
+    "adguard_mp4": "\\$mp4(?:=|$)",
+    "adguard_websocket": "\\$websocket(?:=|$)",
+    "adguard_webrtc": "\\$webrtc(?:=|$)",
+    "adguard_denyallow": "\\$denyallow=[^\\s]+",
+    "adguard_app": "\\$app=[^\\s]+",
+    "adguard_network": "\\$network=[^\\s]+",
+    "adguard_method": "\\$method=[^\\s]+",
+    "adguard_specifichide": "\\$specifichide(?:=|$)",
+    "adguard_content": "\\$content(?:=|$)",
+    "adguard_popup": "\\$popup(?:=|$)"
   },
   "rule_types": {
     "comment": "invalid",
@@ -133,6 +133,12 @@
     "urlblock": "urlblock"
   },
   "platform_support": {
+    "adguard": {
+      "supported_rule_types": ["domain_rule", "exception_rule", "element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule", "adguard_dns_rule", "adguard_stealth_rule", "regex_rule", "hosts_rule"],
+      "unsupported_rule_types": [],
+      "unsupported_modifiers": [],
+      "conversion_notes": "原生AdGuard格式，支持所有功能"
+    },
     "adguard_home": {
       "supported_rule_types": ["domain_rule", "exception_rule", "adguard_dns_rule", "adguard_home_dns_rewrite", "adguard_home_client", "adguard_home_dnstype", "hosts_rule", "regex_rule"],
       "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule"],
@@ -191,6 +197,15 @@
       "unsupported_rule_types": ["adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule"],
       "unsupported_modifiers": ["dnsrewrite", "cname", "client", "dnstype", "denyallow", "ctag", "badfilter", "redirect", "removeheader", "removeparam", "app"],
       "conversion_notes": "类似uBlock Origin，但支持度略低"
+    },
+    "hosts": {
+      "supported_rule_types": ["hosts_rule", "domain_rule"],
+      "unsupported_rule_types": ["exception_rule", "element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule", "regex_rule"],
+      "rule_format": {
+        "hosts_rule": "{rule}",
+        "domain_rule": "0.0.0.0 {domain}"
+      },
+      "conversion_notes": "仅支持hosts格式规则，不支持例外规则"
     }
   },
   "common_patterns": {
@@ -262,5 +277,12 @@
     "required_fields": ["version", "syntax_patterns", "rule_types", "modifiers", "validation_rules", "platform_support"],
     "recommended_fields": ["common_patterns", "normalization_rules", "performance_optimization"],
     "version_compatibility": "4.x"
+  },
+  "adguard_home_specific": {
+    "supported_rule_types": ["domain_rule", "exception_rule", "adguard_dns_rule", "adguard_home_dns_rewrite", "adguard_home_client", "adguard_home_dnstype", "hosts_rule", "regex_rule"],
+    "unsupported_patterns": ["##", "#@#", "#%#", "$$", "script:inject", "##^", "##*"],
+    "dns_rewrite_types": ["A", "AAAA", "CNAME", "TXT", "MX", "PTR", "SRV", "SOA", "NS"],
+    "max_dns_rewrite_length": 1000,
+    "valid_client_pattern": "^([0-9a-fA-F.:]+|[a-zA-Z0-9.-]+)$"
   }
 }
