@@ -1,7 +1,7 @@
 {
-  "version": "2.1",
+  "version": "2.2",
   "description": "Comprehensive AdBlock/AdGuard syntax database covering AdBlock basic rules, AdGuard extended rules, DNS filtering (including AdGuard Home specific syntax), and cosmetic filtering rules. Designed for accurate rule parsing and deduplication. Note: AdGuard Home primarily supports DNS-level blocking rules and does not support cosmetic filtering or scriptlet rules.",
-  "last_updated": "2025-08-26",
+  "last_updated": "2025-09-01",
   "syntax_patterns": {
     "comment": "^[!#]",
     "exception_rule": "^@@",
@@ -24,7 +24,20 @@
     "adguard_specific_domain": "^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$",
     "adguard_home_dns_rewrite": "\\^\\$dnsrewrite=",
     "adguard_home_client": "\\^\\$client=",
-    "adguard_home_dnstype": "\\^\\$dnstype="
+    "adguard_home_dnstype": "\\^\\$dnstype=",
+    "adguard_important": "\\\\$important",
+    "adguard_badfilter": "\\\\$badfilter",
+    "adguard_empty": "\\\\$empty",
+    "adguard_mp4": "\\\\$mp4",
+    "adguard_websocket": "\\\\$websocket",
+    "adguard_webrtc": "\\\\$webrtc",
+    "adguard_denyallow": "\\\\$denyallow=",
+    "adguard_app": "\\\\$app=",
+    "adguard_network": "\\\\$network=",
+    "adguard_method": "\\\\$method=",
+    "adguard_specifichide": "\\\\$specifichide",
+    "adguard_content": "\\\\$content",
+    "adguard_popup": "\\\\$popup"
   },
   "rule_types": {
     "comment": "invalid",
@@ -48,7 +61,20 @@
     "adguard_specific_domain": "block",
     "adguard_home_dns_rewrite": "dns_rewrite",
     "adguard_home_client": "client_block",
-    "adguard_home_dnstype": "dns_type_block"
+    "adguard_home_dnstype": "dns_type_block",
+    "adguard_important": "modifier",
+    "adguard_badfilter": "modifier",
+    "adguard_empty": "modifier",
+    "adguard_mp4": "modifier",
+    "adguard_websocket": "modifier",
+    "adguard_webrtc": "modifier",
+    "adguard_denyallow": "modifier",
+    "adguard_app": "modifier",
+    "adguard_network": "modifier",
+    "adguard_method": "modifier",
+    "adguard_specifichide": "cosmetic",
+    "adguard_content": "modifier",
+    "adguard_popup": "modifier"
   },
   "modifiers": {
     "domain": "domain=([^\\s,]+)",
@@ -89,13 +115,22 @@
     "network": "network=([^\\s,]+)",
     "method": "method=([^\\s,]+)",
     "adguard_home_noerror": "noerror",
-    "adguard_home_answer": "answer=([^\\s,]+)"
+    "adguard_home_answer": "answer=([^\\s,]+)",
+    "content": "content",
+    "popup": "popup",
+    "extension_css_has": ":-ext-has\\(",
+    "extension_css_contains": ":-ext-contains\\(",
+    "extension_css_matches_css": ":-ext-matches-css\\(",
+    "genericblock": "genericblock",
+    "jsonprune": "jsonprune=",
+    "urlblock": "urlblock"
   },
   "common_patterns": {
-    "ad_keywords": ["ad", "ads", "advert", "advertising", "adv", "banner", "promo", "popup", "track", "tracking", "analytics", "affiliate", "doubleclick", "googlead", "adsense"],
-    "element_selectors": [".ad-", "#ad-", "[class*=\"ad\"]", "[id*=\"ad\"]", ".banner", ".popup", ".modal", ".overlay", ".newsletter", ".subscribe", ".cookie", ".gdpr"],
-    "known_trackers": ["google-analytics", "googletagmanager", "facebook.net", "scorecardresearch", "hotjar", "amplitude", "mixpanel", "matomo", "piwik"],
-    "adguard_home_dns_rewrite_types": ["A", "AAAA", "CNAME", "TXT", "MX", "PTR", "SRV", "SOA", "NS"]
+    "ad_keywords": ["ad", "ads", "advert", "advertising", "adv", "banner", "promo", "popup", "track", "tracking", "analytics", "affiliate", "doubleclick", "googlead", "adsense", "taboola", "outbrain", "revcontent", "propellerads"],
+    "element_selectors": [".ad-", "#ad-", "[class*=\"ad\"]", "[id*=\"ad\"]", ".banner", ".popup", ".modal", ".overlay", ".newsletter", ".subscribe", ".cookie", ".gdpr", ".social-share", ".share-buttons", "[data-ad]", "[data-ad-status]", "[data-ad-preview]"],
+    "known_trackers": ["google-analytics", "googletagmanager", "facebook.net", "scorecardresearch", "hotjar", "amplitude", "mixpanel", "matomo", "piwik", "segment.io", "intercom.io", "optimizely", "clicktale", "crazyegg", "newrelic", "fullstory"],
+    "adguard_home_dns_rewrite_types": ["A", "AAAA", "CNAME", "TXT", "MX", "PTR", "SRV", "SOA", "NS"],
+    "adguard_redirect_resources": ["nooptext", "noopcss", "noophtml", "noopjs", "noopframe", "noopmp3", "noopmp4", "noopttf", "noopjson", "noopico", "noopvideo", "noopimage"]
   },
   "normalization_rules": {
     "domain_to_lowercase": true,
@@ -103,24 +138,38 @@
     "remove_redundant_wildcards": true,
     "standardize_protocols": true,
     "canonicalize_domains": true,
-    "adguard_home_normalize_dns_rewrite": true
+    "adguard_home_normalize_dns_rewrite": true,
+    "normalize_redirect_rules": true,
+    "normalize_removeparam_rules": true,
+    "normalize_csp_rules": true,
+    "normalize_regex_patterns": true
   },
   "validation_rules": {
     "max_rule_length": 2000,
     "min_rule_length": 3,
-    "valid_domain_chars": "a-zA-Z0-9.-",
+    "valid_domain_chars": "a-zA-Z0-9.-*",
     "valid_modifier_combinations": {
       "document": ["domain", "important", "badfilter"],
       "elemhide": ["domain", "generichide", "specifichide"],
       "redirect": ["domain", "important", "script", "image"],
       "removeparam": ["domain", "important", "third-party"],
       "dnsrewrite": ["domain", "client", "dnstype", "important"],
-      "dnstype": ["domain", "client", "important"]
+      "dnstype": ["domain", "client", "important"],
+      "csp": ["domain", "important"],
+      "replace": ["domain", "important"],
+      "cookie": ["domain", "important"],
+      "stealth": ["domain", "important"]
     },
     "adguard_home_specific_validation": {
       "max_dns_rewrite_length": 1000,
       "valid_dns_rewrite_types": ["A", "AAAA", "CNAME", "TXT", "MX", "PTR", "SRV", "SOA", "NS"],
-      "client_modifier_pattern": "^([0-9a-fA-F.:]+|[a-zA-Z0-9.-]+)$"
+      "client_modifier_pattern": "^([0-9a-fA-F.:]+|[a-zA-Z0-9.-]+)$",
+      "valid_dnstype_values": ["A", "AAAA", "CNAME", "TXT", "MX", "PTR", "SRV", "SOA", "NS", "ANY", "HTTPS", "SVCB"]
+    },
+    "adguard_specific_validation": {
+      "valid_redirect_values": ["nooptext", "noopcss", "noophtml", "noopjs", "noopframe", "noopmp3", "noopmp4", "noopttf", "noopjson", "noopico", "noopvideo", "noopimage", "other-1st-party-resources"],
+      "valid_removeparam_pattern": "^[^&=\\s]+(=[^&=\\s]*)?$",
+      "valid_csp_policy_pattern": "^[a-zA-Z-\\s;]+$"
     }
   },
   "adguard_home_specific": {
@@ -128,11 +177,31 @@
     "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule"],
     "special_modifiers": ["client", "dnstype", "dnsrewrite", "important", "badfilter"],
     "dns_rewrite_syntax": "^\\|\\|([^\\^]+)\\^\\$dnsrewrite=([^\\s]+)$",
-    "client_syntax": "^\\|\\|([^\\^]+)\\^\\$client=([^\\s]+)$"
+    "client_syntax": "^\\|\\|([^\\^]+)\\^\\$client=([^\\s]+)$",
+    "dnstype_syntax": "^\\|\\|([^\\^]+)\\^\\$dnstype=([^\\s]+)$"
+  },
+  "adguard_extended_features": {
+    "extended_css_selectors": [":has(", ":contains(", ":matches-css(", ":matches-attr(", ":matches-property(", ":nth-ancestor(", ":upward(", ":xpath("],
+    "scriptlet_injections": ["//scriptlet(\"", "//scriptlet-rule(\"", "//scriptlet-rule-2(\"", "//scriptlet-rule-3(\""],
+    "redirect_rules": ["$redirect=", "$redirect-rule="],
+    "advanced_modifiers": ["$jsonprune=", "$urlblock", "$genericblock", "$app=", "$method=", "$network=", "$popup", "$content"],
+    "stealth_mode_features": ["$stealth", "donottrack", "disable-stealth"]
+  },
+  "platform_specific_notes": {
+    "adguard_home": "主要支持DNS级别的阻止规则，不支持元素隐藏规则、脚本规则或其他高级内容修改功能[citation:3][citation:8]",
+    "adguard_browser_extension": "支持所有规则类型，包括元素隐藏、扩展CSS和脚本规则[citation:5][citation:10]",
+    "adguard_dns": "类似于AdGuard Home，主要支持DNS级别的过滤规则[citation:3]",
+    "adguard_for_windows_mac": "支持所有规则类型和功能，包括高级脚本和修改功能[citation:2][citation:9]",
+    "adguard_for_ios_android": "支持大多数规则类型，但可能有某些高级功能的限制[citation:7][citation:9]"
   },
   "coverage_notes": {
     "general": "This syntax library aims to cover the core functionalities of both AdGuard (browser extension) and AdGuard Home (DNS filter).",
-    "adguard_home_coverage": "The library covers all major AdGuard Home specific syntax elements, including DNS rewriting, client-based filtering, and DNS type filtering. Rules unsupported by AdGuard Home (like cosmetic filters) are marked accordingly for clarity during processing.",
-    "recommendation": "When generating rules for AdGuard Home, filter out rules of types listed in 'unsupported_rule_types' to avoid errors and ensure optimal performance."
+    "adguard_home_coverage": "The library covers all major AdGuard Home specific syntax elements, including DNS rewriting, client-based filtering, and DNS type filtering. Rules unsupported by AdGuard Home (like cosmetic filters) are marked accordingly for clarity during processing.[citation:3][citation:8]",
+    "recommendation": "When generating rules for AdGuard Home, filter out rules of types listed in 'unsupported_rule_types' to avoid errors and ensure optimal performance.[citation:3]"
+  },
+  "performance_optimization": {
+    "rule_compilation_notes": "AdGuard最近在Safari转换器上进行了优化，使过滤规则转换速度提高了30倍（从10-30秒减少到0.5-2秒）[citation:7]",
+    "dnr_rule_handling": "AdGuard浏览器扩展MV3版本中使用预构建的DNR（Declarative Net Request）规则集，提高了性能和安全性[citation:1]",
+    "recommended_practices": "对于大型规则集，建议使用分块处理和增量更新来优化性能[citation:7]"
   }
 }
