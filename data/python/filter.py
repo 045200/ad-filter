@@ -4,12 +4,13 @@
 功能：从AdGuard规则同时生成Clash、Surge、Pi-hole、uBlock Origin、Hosts等规则
 作者：AI助手
 日期：2025-09-02
-版本：4.4
+版本：4.5
 改进内容：
-1. 修复语法数据库路径问题
+1. 修复正则表达式转义问题
 2. 增强错误处理和日志记录
-3. 改进规则转换逻辑
-4. 增加对缺失数据库字段的容错处理
+3. 改进规则解析逻辑
+4. 修复Mihomo编译问题
+5. 改进平台支持检测
 """
 
 import os
@@ -130,16 +131,15 @@ class UnifiedRuleParser:
             raise RuntimeError(f"加载语法数据库失败: {e}")
 
     def compile_patterns(self) -> Dict[str, Pattern]:
-        """预编译所有正则表达式模式 - 增强版"""
+        """预编译所有正则表达式模式 - 修复版"""
         compiled = {}
         patterns = self.syntax_db.get("syntax_patterns", {})
 
         for name, pattern_str in patterns.items():
             try:
-                # 使用原始字符串处理更复杂的正则表达式
-                clean_pattern = pattern_str.encode().decode('unicode_escape')
-                compiled[name] = re.compile(clean_pattern)
-            except (re.error, UnicodeDecodeError) as e:
+                # 直接编译模式，不使用额外的转义处理
+                compiled[name] = re.compile(pattern_str)
+            except re.error as e:
                 logger.warning(f"无法编译模式 {name}: {e}")
                 # 添加回退到简单模式
                 compiled[name] = re.compile(r".*")  # 匹配任何内容作为回退
@@ -147,7 +147,7 @@ class UnifiedRuleParser:
         return compiled
 
     def parse_rule(self, rule: str) -> Dict[str, Any]:
-        """解析单条规则"""
+        """解析单条规则 - 修复版"""
         result = {
             "original": rule,
             "type": "unknown",
@@ -167,26 +167,42 @@ class UnifiedRuleParser:
 
         # 使用数据库模式匹配规则类型
         for pattern_name, pattern in self.compiled_patterns.items():
-            match = pattern.match(rule_content)
-            if match:
-                result["pattern_type"] = pattern_name
-                result["type"] = self.syntax_db["rule_types"].get(pattern_name, "unknown")
-                result["is_valid"] = result["type"] not in ["invalid", "comment"]
+            try:
+                match = pattern.match(rule_content)
+                if match:
+                    result["pattern_type"] = pattern_name
+                    result["type"] = self.syntax_db["rule_types"].get(pattern_name, "unknown")
+                    result["is_valid"] = result["type"] not in ["invalid", "comment"]
 
-                # 提取规则内容
-                if match.lastindex and match.lastindex >= 1:
-                    result["content"] = match.group(1)
-                break
+                    # 提取规则内容
+                    if match.lastindex and match.lastindex >= 1:
+                        result["content"] = match.group(1)
+                    else:
+                        # 如果没有捕获组，使用整个匹配内容
+                        result["content"] = match.group(0)
+                    break
+            except Exception as e:
+                logger.debug(f"模式 {pattern_name} 匹配失败: {e}")
+                continue
+
+        # 如果未匹配任何模式，尝试基本解析
+        if result["pattern_type"] == "unknown":
+            # 基本域名规则检测
+            if re.match(r"^[a-zA-Z0-9.*-]+$", rule_content):
+                result["pattern_type"] = "domain_rule"
+                result["type"] = "block"
+                result["content"] = rule_content
+                result["is_valid"] = True
 
         # 增强修饰符提取
-        if "$" in rule_content:
+        if "$" in rule_content and result["is_valid"]:
             # 分割规则内容和修饰符部分
-            base_part, modifiers_part = rule_content.split("$", 1)
-            result["content"] = base_part.strip()
+            parts = rule_content.split("$", 1)
+            result["content"] = parts[0].strip()
 
             # 解析逗号分隔的修饰符
             modifiers = []
-            for mod in modifiers_part.split(","):
+            for mod in parts[1].split(","):
                 mod = mod.strip()
                 if "=" in mod:
                     mod_name, mod_value = mod.split("=", 1)
@@ -199,7 +215,7 @@ class UnifiedRuleParser:
         return result
 
     def is_supported_by_platform(self, rule_info: Dict[str, Any], platform: str) -> bool:
-        """检查规则是否被特定平台支持"""
+        """检查规则是否被特定平台支持 - 修复版"""
         if platform not in self.platform_support:
             return False
 
@@ -207,7 +223,15 @@ class UnifiedRuleParser:
         rule_type = rule_info["pattern_type"]
 
         # 检查规则类型支持
-        if rule_type in platform_config.get("unsupported_rule_types", []):
+        supported_types = platform_config.get("supported_rule_types", [])
+        unsupported_types = platform_config.get("unsupported_rule_types", [])
+        
+        # 如果规则类型明确不支持
+        if rule_type in unsupported_types:
+            return False
+            
+        # 如果平台有明确支持的规则类型列表，且当前规则类型不在其中
+        if supported_types and rule_type not in supported_types:
             return False
 
         # 检查修饰符支持
@@ -217,6 +241,11 @@ class UnifiedRuleParser:
 
         # 特殊处理：hosts平台不支持例外规则
         if platform == "hosts" and rule_info["is_exception"]:
+            return False
+
+        # 特殊处理：AdGuard Home不支持某些规则类型
+        if platform == "adguard_home" and rule_type in ["element_hiding_basic", "element_hiding_exception", 
+                                                      "extended_css", "adguard_scriptlet"]:
             return False
 
         return True
@@ -370,11 +399,13 @@ class UnifiedConverter:
         return platform_rules
 
     def process_single_file(self, file_path: Path, platform_rules: Dict, rule_class: str):
-        """处理单个文件"""
+        """处理单个文件 - 修复版"""
         try:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 batch = []
+                line_count = 0
                 for line in f:
+                    line_count += 1
                     line = line.strip()
                     if not line:
                         continue
@@ -388,49 +419,59 @@ class UnifiedConverter:
                 # 处理剩余内容
                 if batch:
                     self.process_batch(batch, platform_rules, rule_class)
+                    
+            logger.info(f"成功处理文件 {file_path}，共 {line_count} 行")
 
         except Exception as e:
             logger.error(f"处理文件 {file_path} 时出错: {e}")
+            # 添加更详细的错误信息
+            import traceback
+            logger.error(f"详细错误信息: {traceback.format_exc()}")
 
     def process_batch(self, batch: List[str], platform_rules: Dict, rule_class: str):
         """处理批量规则 - 使用布隆过滤器+哈希表双重去重"""
         for rule in batch:
-            self.stats["total_processed"] += 1
+            try:
+                self.stats["total_processed"] += 1
 
-            # 双重去重检查
-            if self.config.ENABLE_DEDUPLICATION:
-                # 布隆过滤器初筛（快速但可能有假阳性）
-                if self.bloom_filter is not None and rule in self.bloom_filter:
-                    # 哈希表精筛（精确但较慢）
-                    if rule in self.seen_rules:
-                        self.stats["duplicates"] += 1
-                        continue
+                # 双重去重检查
+                if self.config.ENABLE_DEDUPLICATION:
+                    # 布隆过滤器初筛（快速但可能有假阳性）
+                    if self.bloom_filter is not None and rule in self.bloom_filter:
+                        # 哈希表精筛（精确但较慢）
+                        if rule in self.seen_rules:
+                            self.stats["duplicates"] += 1
+                            continue
 
-                # 添加到去重集合
-                if self.bloom_filter is not None:
-                    self.bloom_filter.add(rule)
-                self.seen_rules.add(rule)
+                    # 添加到去重集合
+                    if self.bloom_filter is not None:
+                        self.bloom_filter.add(rule)
+                    self.seen_rules.add(rule)
 
-            # 解析规则
-            parsed = self.parser.parse_rule(rule)
-            if not parsed["is_valid"]:
-                continue
-
-            # 为每个平台转换规则
-            for platform in self.parser.platform_support.keys():
-                # 跳过hosts平台的白名单处理
-                if platform == "hosts" and rule_class == "allow":
+                # 解析规则
+                parsed = self.parser.parse_rule(rule)
+                if not parsed["is_valid"]:
                     continue
 
-                converted = self.parser.convert_rule_for_platform(parsed, platform)
+                # 为每个平台转换规则
+                for platform in self.parser.platform_support.keys():
+                    # 跳过hosts平台的白名单处理
+                    if platform == "hosts" and rule_class == "allow":
+                        continue
 
-                if converted:
-                    platform_rules[platform][rule_class].append(converted)
-                    self.stats["platforms"][platform]["supported"] += 1
-                    self.stats["platforms"][platform][f"{rule_class}_rules"] += 1
-                else:
-                    self.stats["platforms"][platform]["unsupported"] += 1
-                    self.stats["unsupported"] += 1
+                    converted = self.parser.convert_rule_for_platform(parsed, platform)
+
+                    if converted:
+                        platform_rules[platform][rule_class].append(converted)
+                        self.stats["platforms"][platform]["supported"] += 1
+                        self.stats["platforms"][platform][f"{rule_class}_rules"] += 1
+                    else:
+                        self.stats["platforms"][platform]["unsupported"] += 1
+                        self.stats["unsupported"] += 1
+            except Exception as e:
+                logger.error(f"处理规则时出错: {rule}, 错误: {e}")
+                import traceback
+                logger.error(f"详细错误信息: {traceback.format_exc()}")
 
     def save_results(self, platform_rules: Dict):
         """保存所有平台的规则 - 只保留Clash的payload头"""
@@ -464,7 +505,7 @@ class UnifiedConverter:
             self.compile_mihomo_rules()
 
     def compile_mihomo_rules(self):
-        """编译Mihomo规则集"""
+        """编译Mihomo规则集 - 修复版"""
         if not self.config.MIHOMO_TOOL_PATH.exists():
             logger.warning("Mihomo工具不存在，跳过编译")
             return
@@ -472,8 +513,12 @@ class UnifiedConverter:
         logger.info("编译Mihomo规则集...")
 
         try:
-            # 编译黑名单
+            # 检查输入文件是否存在且不为空
             clash_block = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_source"]["block"]
+            if not clash_block.exists() or clash_block.stat().st_size == 0:
+                logger.warning("Clash黑名单文件不存在或为空，跳过Mihomo编译")
+                return
+
             mihomo_block = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_output"]["block"]
 
             cmd = [
@@ -485,33 +530,48 @@ class UnifiedConverter:
                 str(mihomo_block)
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            logger.info(f"执行命令: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            
             if result.returncode == 0:
                 logger.info(f"Mihomo黑名单编译成功: {mihomo_block}")
             else:
-                logger.error(f"Mihomo黑名单编译失败: {result.stderr}")
+                logger.error(f"Mihomo黑名单编译失败，退出码: {result.returncode}")
+                logger.error(f"标准错误: {result.stderr}")
+                logger.error(f"标准输出: {result.stdout}")
 
             # 编译白名单
             clash_allow = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_source"]["allow"]
-            mihomo_allow = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_output"]["allow"]
+            if clash_allow.exists() and clash_allow.stat().st_size > 0:
+                mihomo_allow = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_output"]["allow"]
 
-            cmd = [
-                str(self.config.MIHOMO_TOOL_PATH),
-                "convert-ruleset",
-                "domain",
-                "yaml",
-                str(clash_allow),
-                str(mihomo_allow)
-            ]
+                cmd = [
+                    str(self.config.MIHOMO_TOOL_PATH),
+                    "convert-ruleset",
+                    "domain",
+                    "yaml",
+                    str(clash_allow),
+                    str(mihomo_allow)
+                ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            if result.returncode == 0:
-                logger.info(f"Mihomo白名单编译成功: {mihomo_allow}")
+                logger.info(f"执行命令: {' '.join(cmd)}")
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                
+                if result.returncode == 0:
+                    logger.info(f"Mihomo白名单编译成功: {mihomo_allow}")
+                else:
+                    logger.error(f"Mihomo白名单编译失败，退出码: {result.returncode}")
+                    logger.error(f"标准错误: {result.stderr}")
+                    logger.error(f"标准输出: {result.stdout}")
             else:
-                logger.error(f"Mihomo白名单编译失败: {result.stderr}")
+                logger.warning("Clash白名单文件不存在或为空，跳过Mihomo白名单编译")
 
+        except subprocess.TimeoutExpired:
+            logger.error("Mihomo编译超时")
         except Exception as e:
             logger.error(f"Mihomo编译异常: {e}")
+            import traceback
+            logger.error(f"详细错误信息: {traceback.format_exc()}")
 
     def print_statistics(self):
         """打印转换统计信息"""
@@ -547,6 +607,8 @@ def main():
 
     except Exception as e:
         logger.error(f"规则转换失败: {e}")
+        import traceback
+        logger.error(f"详细错误信息: {traceback.format_exc()}")
         sys.exit(1)
 
 
