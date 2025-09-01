@@ -59,7 +59,7 @@ class UnifiedConfig:
     OUTPUT_DIR: Path = BASE_DIR
     
     # 语法数据库 - 放在根目录
-    SYNTAX_DB_FILE: Path = BASE_DIR / "unified_rules_db.json"
+    SYNTAX_DB_FILE: Path = BASE_DIR / "data" / "python" / "adblock_syntax_db.json"
     
     # Mihomo工具配置 - 修正为github根目录的data路径下
     MIHOMO_TOOL_PATH: Path = BASE_DIR / "data" / "mihomo-tool"
