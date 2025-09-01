@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-AdGuard规则合并去重脚本 - 专注于AdGuard语法处理
-功能：合并多个AdGuard规则文件，去除重复规则，保持原有路径和文件名
+AdGuard规则合并去重脚本（最终版） - 完全依赖外部语法数据库
+功能：合并多个AdGuard规则文件，去除重复规则，同时生成AdGuard和AdGuard Home规则
 作者：AI助手
 日期：2025-09-01
-版本：2.1
-更新：完全适配AdGuard语法数据库，支持所有AdGuard规则类型
+版本：3.1
+更新：增强的布隆过滤器+哈希表去重机制，完善的数据库完整性检查
 """
 
 import os
 import re
 import json
-import requests
+import hashlib
 from pathlib import Path
 from typing import Set, Dict, List, Tuple, Optional, Any, Union
 from pybloom_live import ScalableBloomFilter
@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AdGuardConfig:
-    """配置类 - 保持原有路径和文件名"""
-    # 基础路径配置（保持原样）
+    """配置类 - 同时输出AdGuard和AdGuard Home规则"""
+    # 基础路径配置
     INPUT_DIR: Path = Path(os.getenv('INPUT_DIR', './data/filter'))
     OUTPUT_DIR: Path = Path(os.getenv('OUTPUT_DIR', './'))
 
@@ -43,30 +43,37 @@ class AdGuardConfig:
     GITHUB_SHA: str = os.getenv('GITHUB_SHA', 'unknown')
     GITHUB_REF: str = os.getenv('GITHUB_REF', 'unknown')
     GITHUB_WORKFLOW: str = os.getenv('GITHUB_WORKFLOW', 'unknown')
-    
-    # 文件模式配置（保持原样）
+
+    # 文件模式配置
     ADBLOCK_PATTERNS: List[str] = field(default_factory=lambda: ['*.txt', '*.filter'])
-    OUTPUT_BLOCK: str = 'adblock_adg.txt'  # 保持原文件名
-    OUTPUT_ALLOW: str = 'allow_adg.txt'    # 保持原文件名
     
-    # 布隆过滤器配置（保持原样）
+    # 输出文件配置 - 同时输出AdGuard和AdGuard Home规则
+    OUTPUT_ADG_BLOCK: str = 'adblock_adg.txt'  # AdGuard拦截规则
+    OUTPUT_ADG_ALLOW: str = 'allow_adg.txt'    # AdGuard允许规则
+    OUTPUT_ADH_BLOCK: str = 'adblock_adh.txt'  # AdGuard Home拦截规则
+    OUTPUT_ADH_ALLOW: str = 'allow_adh.txt'    # AdGuard Home允许规则
+
+    # 布隆过滤器配置 - 从数据库获取或使用默认值
     BLOOM_INIT_CAP: int = int(os.getenv('BLOOM_INIT_CAP', '1000000'))
-    BLOOM_ERROR_RATE: float = float(os.getenv('BLOOM_ERROR_RATE', '0.0001'))
-    
-    # 规则处理配置（保持原样）
+    BLOOM_ERROR_RATE: float = float(os.getenv('BLOOM_ERROR_RATE', '0.001'))
+    BLOOM_SCALING_FACTOR: float = float(os.getenv('BLOOM_SCALING_FACTOR', '2.0'))
+    BLOOM_MAX_CAPACITY: int = int(os.getenv('BLOOM_MAX_CAPACITY', '10000000'))
+
+    # 规则处理配置
     MAX_RULE_LENGTH: int = int(os.getenv('MAX_RULE_LENGTH', '2000'))
     MIN_RULE_LENGTH: int = int(os.getenv('MIN_RULE_LENGTH', '3'))
-    
-    # 语法数据库配置（保持原样）
+
+    # 语法数据库配置 - 必须提供
     SYNTAX_DB_FILE: str = "adblock_syntax_db.json"
-    
+
     # 性能配置
     MAX_RULES_PER_FILE: int = int(os.getenv('MAX_RULES_PER_FILE', '50000'))
     DOWNLOAD_TIMEOUT: int = int(os.getenv('DOWNLOAD_TIMEOUT', '30'))
+    BATCH_PROCESSING_SIZE: int = int(os.getenv('BATCH_PROCESSING_SIZE', '1000'))
 
 
 class AdGuardSyntaxDatabase:
-    """AdGuard语法数据库"""
+    """AdGuard语法数据库 - 完全依赖外部数据库，增强完整性检查"""
     def __init__(self, config: AdGuardConfig):
         self.config = config
         self.syntax_patterns = {}
@@ -75,338 +82,216 @@ class AdGuardSyntaxDatabase:
         self.validation_rules = {}
         self.common_patterns = {}
         self.adguard_home_specific = {}
+        self.performance_config = {}
+        self.db_path = None
         self.load_syntax_database()
 
+    def find_syntax_db(self) -> Path:
+        """查找语法数据库文件"""
+        search_paths = [
+            Path(__file__).parent / self.config.SYNTAX_DB_FILE,  # 脚本目录
+            Path.cwd() / self.config.SYNTAX_DB_FILE,             # 当前工作目录
+            self.config.INPUT_DIR / self.config.SYNTAX_DB_FILE,  # 输入目录
+            Path('/etc/adguard') / self.config.SYNTAX_DB_FILE,   # 系统配置目录
+        ]
+        
+        for db_path in search_paths:
+            if db_path.exists():
+                return db_path
+                
+        return None
+
+    def validate_database_integrity(self, db_data: Dict) -> bool:
+        """验证数据库完整性"""
+        required_fields = [
+            "version", "syntax_patterns", "rule_types", "modifiers", 
+            "validation_rules", "adguard_home_specific"
+        ]
+        
+        missing_fields = [field for field in required_fields if field not in db_data]
+        if missing_fields:
+            raise ValueError(f"数据库缺少必需字段: {missing_fields}")
+        
+        # 检查版本兼容性
+        version = db_data.get("version", "1.0")
+        if not version.startswith("3."):
+            logger.warning(f"数据库版本 {version} 可能不兼容当前脚本")
+            
+        return True
+
     def load_syntax_database(self):
-        """加载语法数据库"""
-        # 首先尝试从脚本同目录加载语法数据库
-        script_dir = Path(__file__).parent
-        db_path = script_dir / self.config.SYNTAX_DB_FILE
+        """加载语法数据库 - 找不到数据库或数据库不完整则抛出异常"""
+        self.db_path = self.find_syntax_db()
+        
+        if not self.db_path:
+            error_msg = f"错误：找不到语法数据库文件 {self.config.SYNTAX_DB_FILE}"
+            logger.error(error_msg)
+            logger.error("请将语法数据库文件放置在以下位置之一：")
+            for path in [
+                Path(__file__).parent,
+                Path.cwd(),
+                self.config.INPUT_DIR,
+                Path('/etc/adguard')
+            ]:
+                logger.error(f"  - {path / self.config.SYNTAX_DB_FILE}")
+            raise FileNotFoundError(error_msg)
 
-        if db_path.exists():
-            try:
-                with open(db_path, 'r', encoding='utf-8') as f:
-                    db_data = json.load(f)
-                    self.syntax_patterns = db_data.get('syntax_patterns', {})
-                    self.rule_types = db_data.get('rule_types', {})
-                    self.modifiers = db_data.get('modifiers', {})
-                    self.validation_rules = db_data.get('validation_rules', {})
-                    self.common_patterns = db_data.get('common_patterns', {})
-                    self.adguard_home_specific = db_data.get('adguard_home_specific', {})
-                logger.info(f"从脚本目录加载语法数据库: {len(self.syntax_patterns)} 个模式")
-                return
-            except Exception as e:
-                logger.error(f"加载脚本目录语法数据库失败: {e}")
-
-        # 然后尝试从输入目录加载语法数据库
-        db_path = self.config.INPUT_DIR / self.config.SYNTAX_DB_FILE
-
-        if db_path.exists():
-            try:
-                with open(db_path, 'r', encoding='utf-8') as f:
-                    db_data = json.load(f)
-                    self.syntax_patterns = db_data.get('syntax_patterns', {})
-                    self.rule_types = db_data.get('rule_types', {})
-                    self.modifiers = db_data.get('modifiers', {})
-                    self.validation_rules = db_data.get('validation_rules', {})
-                    self.common_patterns = db_data.get('common_patterns', {})
-                    self.adguard_home_specific = db_data.get('adguard_home_specific', {})
-                logger.info(f"从输入目录加载语法数据库: {len(self.syntax_patterns)} 个模式")
-                return
-            except Exception as e:
-                logger.error(f"加载输入目录语法数据库失败: {e}")
-
-        # 如果都没有找到，使用内置的AdGuard语法规则
-        logger.warning("未找到语法数据库文件，使用内置AdGuard语法规则")
-        self.load_adguard_syntax()
-
-        # 尝试保存基本语法数据库到脚本目录
         try:
-            self.save_syntax_database(script_dir / self.config.SYNTAX_DB_FILE)
+            with open(self.db_path, 'r', encoding='utf-8') as f:
+                db_data = json.load(f)
+                
+            # 验证数据库完整性
+            self.validate_database_integrity(db_data)
+                
+            self.syntax_patterns = db_data.get('syntax_patterns', {})
+            self.rule_types = db_data.get('rule_types', {})
+            self.modifiers = db_data.get('modifiers', {})
+            self.validation_rules = db_data.get('validation_rules', {})
+            self.common_patterns = db_data.get('common_patterns', {})
+            self.adguard_home_specific = db_data.get('adguard_home_specific', {})
+            self.performance_config = db_data.get('performance_optimization', {}).get('bloom_filter_config', {})
+            
+            # 更新布隆过滤器配置（如果数据库中有定义）
+            if self.performance_config:
+                self.config.BLOOM_INIT_CAP = self.performance_config.get('initial_capacity', self.config.BLOOM_INIT_CAP)
+                self.config.BLOOM_ERROR_RATE = self.performance_config.get('error_rate', self.config.BLOOM_ERROR_RATE)
+                
+            logger.info(f"成功加载语法数据库: {self.db_path}")
+            logger.info(f"数据库版本: {db_data.get('version', '未知')}")
+            logger.info(f"语法模式数量: {len(self.syntax_patterns)}")
+            logger.info(f"规则类型数量: {len(self.rule_types)}")
+            
+        except json.JSONDecodeError as e:
+            error_msg = f"语法数据库JSON格式错误: {e}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
         except Exception as e:
-            logger.error(f"保存AdGuard语法数据库失败: {e}")
-
-    def save_syntax_database(self, db_path: Path):
-        """保存语法数据库到文件"""
-        db_data = {
-            'syntax_patterns': self.syntax_patterns,
-            'rule_types': self.rule_types,
-            'modifiers': self.modifiers,
-            'validation_rules': self.validation_rules,
-            'common_patterns': self.common_patterns,
-            'adguard_home_specific': self.adguard_home_specific,
-            'version': '2.0',
-            'description': 'AdGuard语法数据库'
-        }
-
-        with open(db_path, 'w', encoding='utf-8') as f:
-            json.dump(db_data, f, ensure_ascii=False, indent=2)
-
-        logger.info(f"语法数据库已保存到: {db_path}")
-
-    def load_adguard_syntax(self):
-        """加载AdGuard语法规则 - 基于提供的JSON数据库"""
-        # 语法模式定义
-        self.syntax_patterns = {
-            "comment": "^[!#]",
-            "exception_rule": "^@@",
-            "domain_rule": "^\\|\\|([^\\^]+)\\^",
-            "url_rule": "^\\|([^\\|]+)\\|",
-            "regex_rule": "^/(.*)/$",
-            "hosts_rule": "^\\d+\\.\\d+\\.\\d+\\.\\d+\\s+",
-            "element_hiding_basic": "##",
-            "element_hiding_exception": "#@#",
-            "extended_css": "#?#",
-            "adguard_scriptlet": "#%#",
-            "adguard_dns_rule": "^\\|\\|[^\\^]*\\^\\$dnstype=",
-            "adguard_stealth_rule": "^\\|\\|[^\\^]*\\^\\$stealth",
-            "adguard_redirect_rule": "\\$redirect=",
-            "adguard_removeparam_rule": "\\$removeparam=",
-            "adguard_csp_rule": "\\$csp=",
-            "adguard_replace_rule": "\\$replace=",
-            "adguard_cookie_rule": "\\$cookie=",
-            "adguard_generichide": "\\$generichide",
-            "adguard_specific_domain": "^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$",
-            "adguard_home_dns_rewrite": "\\^\\$dnsrewrite=",
-            "adguard_home_client": "\\^\\$client=",
-            "adguard_home_dnstype": "\\^\\$dnstype=",
-            "adguard_important": "\\$important",
-            "adguard_badfilter": "\\$badfilter",
-            "adguard_empty": "\\$empty",
-            "adguard_mp4": "\\$mp4",
-            "adguard_websocket": "\\$websocket",
-            "adguard_webrtc": "\\$webrtc",
-            "adguard_denyallow": "\\$denyallow=",
-            "adguard_app": "\\$app=",
-            "adguard_network": "\\$network=",
-            "adguard_method": "\\$method=",
-            "adguard_specifichide": "\\$specifichide",
-            "adguard_content": "\\$content",
-            "adguard_popup": "\\$popup"
-        }
-
-        # 规则类型定义
-        self.rule_types = {
-            "comment": "invalid",
-            "exception_rule": "allow",
-            "domain_rule": "block",
-            "url_rule": "block",
-            "regex_rule": "block",
-            "hosts_rule": "block",
-            "element_hiding_basic": "cosmetic",
-            "element_hiding_exception": "cosmetic_allow",
-            "extended_css": "cosmetic_extended",
-            "adguard_scriptlet": "scriptlet",
-            "adguard_dns_rule": "block",
-            "adguard_stealth_rule": "block",
-            "adguard_redirect_rule": "block",
-            "adguard_removeparam_rule": "block",
-            "adguard_csp_rule": "block",
-            "adguard_replace_rule": "block",
-            "adguard_cookie_rule": "block",
-            "adguard_generichide": "cosmetic",
-            "adguard_specific_domain": "block",
-            "adguard_home_dns_rewrite": "dns_rewrite",
-            "adguard_home_client": "client_block",
-            "adguard_home_dnstype": "dns_type_block",
-            "adguard_important": "modifier",
-            "adguard_badfilter": "modifier",
-            "adguard_empty": "modifier",
-            "adguard_mp4": "modifier",
-            "adguard_websocket": "modifier",
-            "adguard_webrtc": "modifier",
-            "adguard_denyallow": "modifier",
-            "adguard_app": "modifier",
-            "adguard_network": "modifier",
-            "adguard_method": "modifier",
-            "adguard_specifichide": "cosmetic",
-            "adguard_content": "modifier",
-            "adguard_popup": "modifier"
-        }
-
-        # 修饰符定义
-        self.modifiers = {
-            "domain": "domain=([^\\s,]+)",
-            "third-party": "third-party",
-            "first-party": "first-party",
-            "script": "script",
-            "image": "image",
-            "stylesheet": "stylesheet",
-            "object": "object",
-            "xmlhttprequest": "xmlhttprequest",
-            "subdocument": "subdocument",
-            "document": "document",
-            "elemhide": "elemhide",
-            "other": "other",
-            "match-case": "match-case",
-            "collapse": "collapse",
-            "donottrack": "donottrack",
-            "websocket": "websocket",
-            "webrtc": "webrtc",
-            "dnstype": "dnstype=([^\\s,]+)",
-            "dnsrewrite": "dnsrewrite=([^\\s,]+)",
-            "important": "important",
-            "badfilter": "badfilter",
-            "empty": "empty",
-            "mp4": "mp4",
-            "redirect": "redirect=([^\\s,]+)",
-            "redirect-rule": "redirect-rule=([^\\s,]+)",
-            "removeparam": "removeparam=([^\\s,]+)",
-            "csp": "csp=([^\\s,]+)",
-            "replace": "replace=([^\\s,]+)",
-            "cookie": "cookie=([^\\s,]+)",
-            "generichide": "generichide",
-            "specifichide": "specifichide",
-            "stealth": "stealth",
-            "client": "client=([^\\s,]+)",
-            "denyallow": "denyallow=([^\\s,]+)",
-            "app": "app=([^\\s,]+)",
-            "network": "network=([^\\s,]+)",
-            "method": "method=([^\\s,]+)",
-            "adguard_home_noerror": "noerror",
-            "adguard_home_answer": "answer=([^\\s,]+)",
-            "content": "content",
-            "popup": "popup",
-            "extension_css_has": ":-ext-has\\(",
-            "extension_css_contains": ":-ext-contains\\(",
-            "extension_css_matches_css": ":-ext-matches-css\\(",
-            "genericblock": "genericblock",
-            "jsonprune": "jsonprune=",
-            "urlblock": "urlblock"
-        }
-
-        # 验证规则
-        self.validation_rules = {
-            "max_rule_length": 2000,
-            "min_rule_length": 3,
-            "valid_domain_chars": "a-zA-Z0-9.-*",
-            "valid_modifier_combinations": {
-                "document": ["domain", "important", "badfilter"],
-                "elemhide": ["domain", "generichide", "specifichide"],
-                "redirect": ["domain", "important", "script", "image"],
-                "removeparam": ["domain", "important", "third-party"],
-                "dnsrewrite": ["domain", "client", "dnstype", "important"],
-                "dnstype": ["domain", "client", "important"],
-                "csp": ["domain", "important"],
-                "replace": ["domain", "important"],
-                "cookie": ["domain", "important"],
-                "stealth": ["domain", "important"]
-            },
-            "adguard_home_specific_validation": {
-                "max_dns_rewrite_length": 1000,
-                "valid_dns_rewrite_types": ["A", "AAAA", "CNAME", "TXT", "MX", "PTR", "SRV", "SOA", "NS"],
-                "client_modifier_pattern": "^([0-9a-fA-F.:]+|[a-zA-Z0-9.-]+)$",
-                "valid_dnstype_values": ["A", "AAAA", "CNAME", "TXT", "MX", "PTR", "SRV", "SOA", "NS", "ANY", "HTTPS", "SVCB"]
-            },
-            "adguard_specific_validation": {
-                "valid_redirect_values": ["nooptext", "noopcss", "noophtml", "noopjs", "noopframe", "noopmp3", "noopmp4", "noopttf", "noopjson", "noopico", "noopvideo", "noopimage", "other-1st-party-resources"],
-                "valid_removeparam_pattern": "^[^&=\\s]+(=[^&=\\s]*)?$",
-                "valid_csp_policy_pattern": "^[a-zA-Z-\\s;]+$"
-            }
-        }
-
-        # AdGuard Home特定配置
-        self.adguard_home_specific = {
-            "supported_rule_types": ["domain_rule", "exception_rule", "adguard_dns_rule", "adguard_home_dns_rewrite", "adguard_home_client", "adguard_home_dnstype", "hosts_rule", "regex_rule"],
-            "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule"],
-            "special_modifiers": ["client", "dnstype", "dnsrewrite", "important", "badfilter"],
-            "dns_rewrite_syntax": "^\\|\\|([^\\^]+)\\^\\$dnsrewrite=([^\\s]+)$",
-            "client_syntax": "^\\|\\|([^\\^]+)\\^\\$client=([^\\s]+)$",
-            "dnstype_syntax": "^\\|\\|([^\\^]+)\\^\\$dnstype=([^\\s]+)$"
-        }
-
-        # 常见模式
-        self.common_patterns = {
-            "ad_keywords": ["ad", "ads", "advert", "advertising", "adv", "banner", "promo", "popup", "track", "tracking", "analytics", "affiliate", "doubleclick", "googlead", "adsense", "taboola", "outbrain", "revcontent", "propellerads"],
-            "element_selectors": [".ad-", "#ad-", "[class*=\"ad\"]", "[id*=\"ad\"]", ".banner", ".popup", ".modal", ".overlay", ".newsletter", ".subscribe", ".cookie", ".gdpr", ".social-share", ".share-buttons", "[data-ad]", "[data-ad-status]", "[data-ad-preview]"],
-            "known_trackers": ["google-analytics", "googletagmanager", "facebook.net", "scorecardresearch", "hotjar", "amplitude", "mixpanel", "matomo", "piwik", "segment.io", "intercom.io", "optimizely", "clicktale", "crazyegg", "newrelic", "fullstory"],
-            "adguard_home_dns_rewrite_types": ["A", "AAAA", "CNAME", "TXT", "MX", "PTR", "SRV", "SOA", "NS"],
-            "adguard_redirect_resources": ["nooptext", "noopcss", "noophtml", "noopjs", "noopframe", "noopmp3", "noopmp4", "noopttf", "noopjson", "noopico", "noopvideo", "noopimage"]
-        }
-
-        logger.info("使用内置AdGuard语法规则")
-
-    def is_adguard_home_environment(self) -> bool:
-        """检查是否为AdGuard Home环境"""
-        return self.config.GITHUB_ACTIONS and "adguard_home" in self.config.GITHUB_WORKFLOW.lower()
+            error_msg = f"加载语法数据库失败: {e}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
 
     def is_rule_supported_by_adguard_home(self, rule_type: str) -> bool:
         """检查规则类型是否被AdGuard Home支持"""
-        return rule_type in self.adguard_home_specific.get("supported_rule_types", [])
+        if not self.adguard_home_specific or "supported_rule_types" not in self.adguard_home_specific:
+            logger.warning("语法数据库中缺少AdGuard Home支持规则类型定义")
+            return False
+            
+        return rule_type in self.adguard_home_specific["supported_rule_types"]
 
     def validate_rule_for_adguard_home(self, rule: str, rule_type: str) -> bool:
         """验证规则是否符合AdGuard Home的要求"""
-        if not self.is_adguard_home_environment():
-            return True
-            
         # 检查规则类型是否支持
         if not self.is_rule_supported_by_adguard_home(rule_type):
-            self.github_log('debug', f"AdGuard Home不支持的规则类型: {rule_type} - {rule}")
+            logger.debug(f"AdGuard Home不支持的规则类型: {rule_type} - {rule}")
             return False
-            
+
         # 检查DNS重写规则长度
-        if rule_type == "adguard_home_dns_rewrite" and len(rule) > self.validation_rules.get("adguard_home_specific_validation", {}).get("max_dns_rewrite_length", 1000):
-            self.github_log('debug', f"DNS重写规则过长: {rule}")
-            return False
-            
-        # 检查DNS重写类型是否有效
         if rule_type == "adguard_home_dns_rewrite":
+            max_length = self.validation_rules.get("adguard_home_specific_validation", {}).get("max_dns_rewrite_length", 1000)
+            if len(rule) > max_length:
+                logger.debug(f"DNS重写规则过长: {rule}")
+                return False
+
+        # 检查DNS重写类型是否有效
+        if rule_type == "adguard_home_dns_rewrite" or "$dnsrewrite=" in rule:
             match = re.search(r"\$dnsrewrite=([^,\s]+)", rule)
             if match:
                 rewrite_type = match.group(1)
                 valid_types = self.validation_rules.get("adguard_home_specific_validation", {}).get("valid_dns_rewrite_types", [])
                 if rewrite_type not in valid_types:
-                    self.github_log('debug', f"无效的DNS重写类型: {rewrite_type} - {rule}")
+                    logger.debug(f"无效的DNS重写类型: {rewrite_type} - {rule}")
                     return False
-                    
+
         return True
+
+    def check_unsupported_patterns(self, rule: str) -> bool:
+        """检查规则是否包含AdGuard Home不支持的模式"""
+        unsupported_patterns = self.adguard_home_specific.get("unsupported_patterns", [])
+        for pattern in unsupported_patterns:
+            if re.search(pattern, rule):
+                return False
+        return True
+
+
+class EnhancedBloomFilter:
+    """增强的布隆过滤器封装类，结合哈希表确保准确性"""
+    def __init__(self, config: AdGuardConfig):
+        self.config = config
+        self.bloom = ScalableBloomFilter(
+            initial_capacity=config.BLOOM_INIT_CAP,
+            error_rate=config.BLOOM_ERROR_RATE,
+            mode=ScalableBloomFilter.LARGE_SET_GROWTH
+        )
+        self.hash_set = set()
+        self.collision_count = 0
+        self.false_positive_count = 0
+
+    def add(self, item: str) -> bool:
+        """添加项目到布隆过滤器和哈希表"""
+        item_hash = hashlib.md5(item.encode('utf-8')).hexdigest()
+        
+        # 先检查布隆过滤器（快速但可能有误报）
+        if item in self.bloom:
+            # 布隆过滤器说可能存在，用哈希表确认
+            if item_hash not in self.hash_set:
+                self.false_positive_count += 1
+                logger.debug(f"布隆过滤器误报: {item}")
+                return False
+            return True
+        
+        # 添加到布隆过滤器和哈希表
+        self.bloom.add(item)
+        self.hash_set.add(item_hash)
+        return False
+
+    def __contains__(self, item: str) -> bool:
+        """检查项目是否存在"""
+        item_hash = hashlib.md5(item.encode('utf-8')).hexdigest()
+        return item_hash in self.hash_set
+
+    def get_stats(self) -> Dict[str, int]:
+        """获取统计信息"""
+        return {
+            "total_items": len(self.hash_set),
+            "collision_count": self.collision_count,
+            "false_positive_count": self.false_positive_count,
+            "false_positive_rate": self.false_positive_count / len(self.hash_set) if self.hash_set else 0
+        }
 
 
 class AdGuardMerger:
     def __init__(self, config: AdGuardConfig):
         self.config = config
-        self.syntax_db = AdGuardSyntaxDatabase(config)
+        try:
+            self.syntax_db = AdGuardSyntaxDatabase(config)
+        except (FileNotFoundError, RuntimeError, ValueError) as e:
+            logger.error(f"初始化语法数据库失败: {e}")
+            sys.exit(1)
 
-        # 为两组规则创建独立的去重容器（完全隔离）
-        # adblock*.txt 处理后的数据（黑名单）
-        self.block_data = {
-            "bloom": ScalableBloomFilter(
-                initial_capacity=config.BLOOM_INIT_CAP,
-                error_rate=config.BLOOM_ERROR_RATE
-            ),
-            "seen": set(),          # 精确去重集合
-            "rules": [],            # 最终有效规则列表
-            "stats": {              # 独立统计
-                "processed": 0,     # 总处理规则数
-                "valid": 0,         # 有效规则数
-                "duplicate": 0,     # 重复规则数
-                "invalid": 0,       # 无效规则数
-                "unsupported": 0    # AdGuard Home不支持的规则数
-            }
+        # 为AdGuard和AdGuard Home分别创建增强的去重容器
+        self.adguard_filter = EnhancedBloomFilter(config)
+        self.adhome_filter = EnhancedBloomFilter(config)
+
+        # 规则存储
+        self.adguard_rules = []
+        self.adhome_rules = []
+
+        # 统计信息
+        self.stats = {
+            "total_processed": 0,
+            "adguard_rules": 0,
+            "adhome_rules": 0,
+            "duplicates": 0,
+            "invalid_rules": 0,
+            "unsupported_rules": 0,
+            "bloom_false_positives": 0
         }
 
-        # allow*.txt 处理后的数据（白名单）
-        self.allow_data = {
-            "bloom": ScalableBloomFilter(
-                initial_capacity=config.BLOOM_INIT_CAP,
-                error_rate=config.BLOOM_ERROR_RATE
-            ),
-            "seen": set(),
-            "rules": [],
-            "stats": {
-                "processed": 0,
-                "valid": 0,
-                "duplicate": 0,
-                "invalid": 0,
-                "unsupported": 0
-            }
-        }
-
-        # 全局文件统计（辅助日志）
-        self.global_stats = {
-            "total_files": 0,       # 总处理文件数
-            "block_files": 0,       # adblock前缀文件数
-            "allow_files": 0        # allow前缀文件数
+        # 全局文件统计
+        self.file_stats = {
+            "total_files": 0,
+            "block_files": 0,
+            "allow_files": 0
         }
 
     def github_log(self, level: str, message: str):
@@ -434,7 +319,7 @@ class AdGuardMerger:
         }
 
         # 检查注释
-        if re.match(self.syntax_db.syntax_patterns.get('comment', r'^[!#]'), rule):
+        if re.match(r'^[!#]', rule):
             result['type'] = 'comment'
             return result
 
@@ -450,16 +335,16 @@ class AdGuardMerger:
             return result
 
         # 使用语法数据库匹配规则类型
-        for pattern_name, pattern in self.syntax_db.syntax_patterns.items():
+        for pattern_name, pattern_str in self.syntax_db.syntax_patterns.items():
             try:
-                match = re.match(pattern, rule)
-                if match:
+                pattern = re.compile(pattern_str)
+                if pattern.match(rule):
                     result['pattern_type'] = pattern_name
                     result['type'] = self.syntax_db.rule_types.get(pattern_name, 'unknown')
                     result['is_valid'] = result['type'] not in ['invalid', 'comment', 'empty']
                     break
-            except re.error:
-                self.github_log('warning', f"正则表达式模式错误: {pattern_name} - {pattern}")
+            except re.error as e:
+                self.github_log('debug', f"正则表达式模式错误: {pattern_name} - {pattern_str}, 错误: {e}")
                 continue
 
         # 提取修饰符
@@ -472,8 +357,8 @@ class AdGuardMerger:
                 try:
                     if re.search(mod_pattern, modifiers_str):
                         result['modifiers'].append(mod_name)
-                except re.error:
-                    self.github_log('warning', f"修饰符正则表达式错误: {mod_name} - {mod_pattern}")
+                except re.error as e:
+                    self.github_log('debug', f"修饰符正则表达式错误: {mod_name} - {mod_pattern}, 错误: {e}")
                     continue
 
             # 对修饰符进行排序以确保一致性
@@ -520,27 +405,6 @@ class AdGuardMerger:
             except re.error:
                 pass  # 保持原样
 
-        elif analysis['pattern_type'] == 'element_hiding_basic':
-            # 元素隐藏规则标准化: example.com##.ad -> example.com##.ad
-            try:
-                parts = normalized.split('##', 1)
-                if len(parts) == 2:
-                    domain = parts[0].lower()  # 域名转换为小写
-                    selector = parts[1].strip()
-                    normalized = f'{domain}##{selector}'
-            except:
-                pass  # 保持原样
-
-        # 处理AdGuard DNS规则
-        elif analysis['pattern_type'] == 'adguard_dns_rule':
-            try:
-                match = re.match(r'^\|\|([^\^]+)\^', normalized)
-                if match:
-                    domain = match.group(1).lower()  # 域名转换为小写
-                    normalized = f'||{domain}^'
-            except re.error:
-                pass  # 保持原样
-
         # 添加排序后的修饰符
         if analysis['modifiers']:
             modifiers_str = ','.join(analysis['modifiers'])
@@ -551,221 +415,224 @@ class AdGuardMerger:
     def is_valid_rule(self, rule: str) -> bool:
         """使用语法数据库检查是否为有效规则"""
         analysis = self.analyze_rule_syntax(rule)
-        
-        # 检查AdGuard Home环境下的规则支持性
-        if self.syntax_db.is_adguard_home_environment():
-            if not self.syntax_db.validate_rule_for_adguard_home(rule, analysis['pattern_type']):
-                return False
-        
         return analysis['is_valid']
 
-    def determine_rule_type(self, rule: str) -> str:
-        """使用语法数据库确定规则类型"""
-        analysis = self.analyze_rule_syntax(rule)
-        return analysis['type']
-
     def get_files_by_prefix(self, directory: Path) -> Tuple[List[Path], List[Path]]:
-        """按文件名前缀筛选文件，返回 (adblock前缀文件列表, allow前缀文件列表)"""
-        block_files = []  # 存储 adblock*.txt 文件
-        allow_files = []  # 存储 allow*.txt 文件
+        """按文件名前缀筛选文件"""
+        block_files = []
+        allow_files = []
 
-        # 检查输入目录是否存在，不存在则创建
         if not directory.exists():
             self.github_log('warning', f"输入目录 {directory} 不存在，已自动创建")
             directory.mkdir(parents=True, exist_ok=True)
             return block_files, allow_files
 
-        # 递归遍历目录下所有 .txt 和 .filter 文件
         for pattern in self.config.ADBLOCK_PATTERNS:
             for file_path in directory.rglob(pattern):
                 if not file_path.is_file():
-                    continue  # 跳过目录，只处理文件
+                    continue
 
-                # 按文件名前缀分类（不区分大小写）
                 filename = file_path.name.lower()
                 if filename.startswith("adblock"):
                     block_files.append(file_path)
-                    self.global_stats["block_files"] += 1
+                    self.file_stats["block_files"] += 1
                 elif filename.startswith("allow"):
                     allow_files.append(file_path)
-                    self.global_stats["allow_files"] += 1
+                    self.file_stats["allow_files"] += 1
 
-        # 统计总文件数
-        self.global_stats["total_files"] = len(block_files) + len(allow_files)
+        self.file_stats["total_files"] = len(block_files) + len(allow_files)
         return block_files, allow_files
 
-    def process_single_group(self, files: List[Path], data_container: dict, group_name: str) -> None:
-        """
-        独立处理一组文件（adblock组或allow组），数据完全隔离
-        :param files: 该组的文件列表
-        :param data_container: 该组的去重容器+统计（block_data 或 allow_data）
-        :param group_name: 组名（用于日志区分）
-        """
-        logger.info(f"\n=== 开始处理 {group_name} 组文件（共 {len(files)} 个）===")
-
-        for file_path in files:
-            try:
-                # 读取当前文件的所有规则
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    rules = f.read().splitlines()
-                logger.info(f"成功读取 {file_path}，共 {len(rules)} 条规则")
-
-                # 逐条处理当前文件的规则
-                for rule in rules:
-                    data_container["stats"]["processed"] += 1  # 累计总处理数
-                    rule_stripped = rule.strip()
-
-                    # 1. 跳过注释和空行（不统计为无效，仅跳过）
-                    if not rule_stripped or re.match(self.syntax_db.syntax_patterns.get('comment', r'^[!#]'), rule_stripped):
-                        continue
-
-                    # 2. 验证规则有效性（长度+语法）
-                    if not self.is_valid_rule(rule_stripped):
-                        data_container["stats"]["invalid"] += 1
-                        continue
+    def process_file_batch(self, file_path: Path, is_allow: bool = False):
+        """批量处理文件内容"""
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                batch = []
+                for line in f:
+                    batch.append(line.strip())
+                    if len(batch) >= self.config.BATCH_PROCESSING_SIZE:
+                        self.process_batch(batch, is_allow)
+                        batch = []
+                
+                # 处理剩余内容
+                if batch:
+                    self.process_batch(batch, is_allow)
                     
-                    # 检查AdGuard Home不支持的规则
-                    analysis = self.analyze_rule_syntax(rule_stripped)
-                    if self.syntax_db.is_adguard_home_environment() and not self.syntax_db.is_rule_supported_by_adguard_home(analysis['pattern_type']):
-                        data_container["stats"]["unsupported"] += 1
-                        continue
-                        
-                    normalized_rule = self.normalize_rule(rule_stripped)
-                    if not normalized_rule:
-                        data_container["stats"]["invalid"] += 1
-                        continue
+        except Exception as e:
+            self.github_log('error', f"处理文件 {file_path} 时出错: {str(e)}")
 
-                    # 3. 独立去重（仅与同组规则对比，不跨组）
-                    # 先通过布隆过滤器快速判断，再通过精确集合验证
-                    if normalized_rule in data_container["bloom"]:
-                        if normalized_rule in data_container["seen"]:
-                            data_container["stats"]["duplicate"] += 1
-                            continue
-
-                    # 4. 有效规则加入该组（更新去重容器和规则列表）
-                    data_container["bloom"].add(normalized_rule)
-                    data_container["seen"].add(normalized_rule)
-                    data_container["rules"].append(normalized_rule)
-                    data_container["stats"]["valid"] += 1
-
-            except Exception as e:
-                self.github_log('error', f"处理文件 {file_path} 时出错: {str(e)}")
-
-        # 输出该组处理结果统计
-        stats = data_container["stats"]
-        logger.info(f"\n=== {group_name} 组处理完成 ===")
-        logger.info(f"总处理规则数：{stats['processed']}")
-        logger.info(f"有效规则数：{stats['valid']}")
-        logger.info(f"重复规则数：{stats['duplicate']}")
-        logger.info(f"无效规则数：{stats['invalid']}")
-        if self.syntax_db.is_adguard_home_environment():
-            logger.info(f"AdGuard Home不支持的规则数：{stats['unsupported']}")
-
-    def merge_and_deduplicate(self):
-        """主流程：按前缀分类文件→独立处理两组规则→完全隔离"""
-        logger.info("=== 开始整体规则处理流程 ===")
-
-        # 1. 按前缀分类输入文件
-        block_files, allow_files = self.get_files_by_prefix(self.config.INPUT_DIR)
-        logger.info(f"\n文件分类结果：")
-        logger.info(f"adblock前缀文件（黑名单源）：{self.global_stats['block_files']} 个")
-        logger.info(f"allow前缀文件（白名单源）：{self.global_stats['allow_files']} 个")
-        logger.info(f"总计处理文件：{self.global_stats['total_files']} 个")
-
-        # 2. 独立处理 adblock 组（生成黑名单规则）
-        if block_files:
-            self.process_single_group(block_files, self.block_data, "adblock（黑名单）")
-        else:
-            self.github_log('warning', "未找到任何 adblock*.txt 文件，黑名单规则将为空")
-
-        # 3. 独立处理 allow 组（生成白名单规则）
-        if allow_files:
-            self.process_single_group(allow_files, self.allow_data, "allow（白名单）")
-        else:
-            self.github_log('warning', "未找到任何 allow*.txt 文件，白名单规则将为空")
-
-    def save_rules(self):
-        """保存独立处理后的规则，保持原有输出路径和文件名"""
-        # 确保输出目录存在
-        self.config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        logger.info(f"\n=== 开始保存规则（输出目录：{self.config.OUTPUT_DIR}）===")
-
-        # 1. 保存 adblock 组到原配置的黑名单输出文件
-        block_output_path = self.config.OUTPUT_DIR / self.config.OUTPUT_BLOCK
-        with open(block_output_path, 'w', encoding='utf-8') as f:
-            # 规则按字母排序，保持一致性
-            f.write('\n'.join(sorted(self.block_data["rules"])))
-        logger.info(f"黑名单规则已保存：{block_output_path}（共 {len(self.block_data['rules'])} 条）")
-
-        # 2. 保存 allow 组到原配置的白名单输出文件
-        allow_output_path = self.config.OUTPUT_DIR / self.config.OUTPUT_ALLOW
-        with open(allow_output_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(sorted(self.allow_data["rules"])))
-        logger.info(f"白名单规则已保存：{allow_output_path}（共 {len(self.allow_data['rules'])} 条）")
-
-        logger.info("\n=== 所有规则保存完成 ===")
-        
-        # 在GitHub Actions中输出摘要
-        if self.config.GITHUB_ACTIONS:
-            summary = f"""## AdGuard规则处理结果
+    def process_batch(self, batch: List[str], is_allow: bool = False):
+        """处理批量规则"""
+        for rule in batch:
+            self.stats["total_processed"] += 1
             
+            # 跳过注释和空行
+            if not rule or re.match(r'^[!#]', rule):
+                continue
+
+            # 验证规则有效性
+            if not self.is_valid_rule(rule):
+                self.stats["invalid_rules"] += 1
+                continue
+
+            # 分析规则语法
+            analysis = self.analyze_rule_syntax(rule)
+            
+            # 标准化规则
+            normalized_rule = self.normalize_rule(rule)
+            if not normalized_rule:
+                self.stats["invalid_rules"] += 1
+                continue
+
+            # 检查AdGuard Home兼容性
+            adhome_compatible = (self.syntax_db.validate_rule_for_adguard_home(rule, analysis['pattern_type']) and 
+                               self.syntax_db.check_unsupported_patterns(rule))
+
+            # 去重处理 - AdGuard规则
+            if self.adguard_filter.add(normalized_rule):
+                self.stats["duplicates"] += 1
+            else:
+                self.adguard_rules.append(normalized_rule)
+                self.stats["adguard_rules"] += 1
+
+            # 去重处理 - AdGuard Home规则（如果兼容）
+            if adhome_compatible:
+                if self.adhome_filter.add(normalized_rule):
+                    self.stats["duplicates"] += 1
+                else:
+                    self.adhome_rules.append(normalized_rule)
+                    self.stats["adhome_rules"] += 1
+            else:
+                self.stats["unsupported_rules"] += 1
+
+    def process_files(self):
+        """处理所有文件"""
+        block_files, allow_files = self.get_files_by_prefix(self.config.INPUT_DIR)
+        
+        logger.info(f"\n文件分类结果：")
+        logger.info(f"adblock前缀文件: {self.file_stats['block_files']} 个")
+        logger.info(f"allow前缀文件: {self.file_stats['allow_files']} 个")
+        logger.info(f"总计处理文件: {self.file_stats['total_files']} 个")
+
+        # 处理拦截规则文件
+        for file_path in block_files:
+            self.process_file_batch(file_path, is_allow=False)
+        
+        # 处理允许规则文件
+        for file_path in allow_files:
+            self.process_file_batch(file_path, is_allow=True)
+
+        # 更新误报统计
+        self.stats["bloom_false_positives"] = (
+            self.adguard_filter.false_positive_count + 
+            self.adhome_filter.false_positive_count
+        )
+
+    def save_results(self):
+        """保存结果到文件"""
+        self.config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        logger.info(f"\n=== 开始保存规则 ===")
+
+        # 保存AdGuard规则
+        adg_block_path = self.config.OUTPUT_DIR / self.config.OUTPUT_ADG_BLOCK
+        with open(adg_block_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(sorted(self.adguard_rules)))
+        logger.info(f"AdGuard拦截规则已保存: {adg_block_path}")
+
+        adg_allow_path = self.config.OUTPUT_DIR / self.config.OUTPUT_ADG_ALLOW
+        with open(adg_allow_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(sorted(self.adguard_rules)))
+        logger.info(f"AdGuard允许规则已保存: {adg_allow_path}")
+
+        # 保存AdGuard Home规则
+        adh_block_path = self.config.OUTPUT_DIR / self.config.OUTPUT_ADH_BLOCK
+        with open(adh_block_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(sorted(self.adhome_rules)))
+        logger.info(f"AdGuard Home拦截规则已保存: {adh_block_path}")
+
+        adh_allow_path = self.config.OUTPUT_DIR / self.config.OUTPUT_ADH_ALLOW
+        with open(adh_allow_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(sorted(self.adhome_rules)))
+        logger.info(f"AdGuard Home允许规则已保存: {adh_allow_path}")
+
+        # 输出详细统计信息
+        logger.info("\n=== 处理统计 ===")
+        logger.info(f"总处理规则: {self.stats['total_processed']}")
+        logger.info(f"AdGuard规则: {self.stats['adguard_rules']}")
+        logger.info(f"AdGuard Home规则: {self.stats['adhome_rules']}")
+        logger.info(f"重复规则: {self.stats['duplicates']}")
+        logger.info(f"无效规则: {self.stats['invalid_rules']}")
+        logger.info(f"不兼容规则: {self.stats['unsupported_rules']}")
+        logger.info(f"布隆过滤器误报: {self.stats['bloom_false_positives']}")
+        
+        # 布隆过滤器性能统计
+        adg_stats = self.adguard_filter.get_stats()
+        adh_stats = self.adhome_filter.get_stats()
+        logger.info(f"AdGuard过滤器误报率: {adg_stats['false_positive_rate']:.6f}")
+        logger.info(f"AdGuard Home过滤器误报率: {adh_stats['false_positive_rate']:.6f}")
+
+        # GitHub Actions摘要
+        if self.config.GITHUB_ACTIONS:
+            self.generate_github_summary()
+
+    def generate_github_summary(self):
+        """生成GitHub Actions摘要"""
+        summary = f"""## AdGuard规则处理结果（最终版）
+        
 **处理时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 **仓库**: {self.config.GITHUB_REPOSITORY}
 **提交**: {self.config.GITHUB_SHA[:7]}
-**分支**: {self.config.GITHUB_REF}
-**环境**: {'AdGuard Home' if self.syntax_db.is_adguard_home_environment() else '标准AdGuard'}
-            
-### 处理统计
-- 总文件数: {self.global_stats['total_files']}
-- 黑名单文件: {self.global_stats['block_files']}
-- 白名单文件: {self.global_stats['allow_files']}
-            
-### 黑名单规则
-- 总处理规则: {self.block_data['stats']['processed']}
-- 有效规则: {self.block_data['stats']['valid']}
-- 重复规则: {self.block_data['stats']['duplicate']}
-- 无效规则: {self.block_data['stats']['invalid']}
-- 不支持的规则: {self.block_data['stats']['unsupported']}
-            
-### 白名单规则
-- 总处理规则: {self.allow_data['stats']['processed']}
-- 有效规则: {self.allow_data['stats']['valid']}
-- 重复规则: {self.allow_data['stats']['duplicate']}
-- 无效规则: {self.allow_data['stats']['invalid']}
-- 不支持的规则: {self.allow_data['stats']['unsupported']}
-            
+**数据库版本**: {getattr(self.syntax_db, 'version', '未知')}
+
+### 文件统计
+- 总文件数: {self.file_stats['total_files']}
+- 拦截规则文件: {self.file_stats['block_files']}
+- 允许规则文件: {self.file_stats['allow_files']}
+
+### 规则处理统计
+- 总处理规则: {self.stats['total_processed']}
+- AdGuard有效规则: {self.stats['adguard_rules']}
+- AdGuard Home有效规则: {self.stats['adhome_rules']}
+- 重复规则: {self.stats['duplicates']}
+- 无效规则: {self.stats['invalid_rules']}
+- 不兼容规则: {self.stats['unsupported_rules']}
+- 布隆过滤器误报: {self.stats['bloom_false_positives']}
+
+### 性能指标
+- AdGuard过滤器误报率: {self.adguard_filter.get_stats()['false_positive_rate']:.6f}
+- AdGuard Home过滤器误报率: {self.adhome_filter.get_stats()['false_positive_rate']:.6f}
+
 **输出文件**:
-- 黑名单: {self.config.OUTPUT_BLOCK}
-- 白名单: {self.config.OUTPUT_ALLOW}
-            """
-            
-            # 在GitHub Actions中输出摘要
-            if os.getenv('GITHUB_STEP_SUMMARY'):
-                with open(os.getenv('GITHUB_STEP_SUMMARY'), 'a') as f:
-                    f.write(summary)
+- AdGuard拦截规则: {self.config.OUTPUT_ADG_BLOCK}
+- AdGuard允许规则: {self.config.OUTPUT_ADG_ALLOW}
+- AdGuard Home拦截规则: {self.config.OUTPUT_ADH_BLOCK}
+- AdGuard Home允许规则: {self.config.OUTPUT_ADH_ALLOW}
+
+**数据库完整性**: ✅ 验证通过
+**去重机制**: ✅ 布隆过滤器+哈希表协同工作
+"""
+        
+        if os.getenv('GITHUB_STEP_SUMMARY'):
+            with open(os.getenv('GITHUB_STEP_SUMMARY'), 'a') as f:
+                f.write(summary)
 
 
 def main():
     """主函数"""
-    # 初始化配置（保持原有路径和文件名）
     config = AdGuardConfig()
     
-    # 输出GitHub Actions信息
     if config.GITHUB_ACTIONS:
         logger.info(f"运行在GitHub Actions环境: {config.GITHUB_WORKFLOW}")
-        logger.info(f"仓库: {config.GITHUB_REPOSITORY}")
-        logger.info(f"提交: {config.GITHUB_SHA}")
-        logger.info(f"分支: {config.GITHUB_REF}")
 
-    # 创建合并器实例
-    merger = AdGuardMerger(config)
-
-    # 执行合并去重（按前缀独立处理）
-    merger.merge_and_deduplicate()
-
-    # 保存结果（保持原有输出路径和文件名）
-    merger.save_rules()
+    try:
+        merger = AdGuardMerger(config)
+        merger.process_files()
+        merger.save_results()
+        return 0
+    except Exception as e:
+        logger.error(f"处理失败: {e}")
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
