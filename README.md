@@ -67,8 +67,8 @@
 
 | 适用拦截器 | 规则类型   | 📥 GitHub直链                                                                 | 🚀 国内加速链接                                                                 |
 | :--------- | :--------- | :----------------------------------------------------------------------------- | :------------------------------------------------------------------------------- |
-| Adblock Plus | 拦截规则   | [adblock_adp.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_adp.txt) | [adblock_adp.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_adp.txt) |
-| Adblock Plus | 白名单规则 | [allow_adp.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_adp.txt)     | [allow_adp.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_adp.txt)     |
+| Adblock Plus | 拦截规则   | [adblock_adp.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_abp.txt) | [adblock_adp.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_abp.txt) |
+| Adblock Plus | 白名单规则 | [allow_adp.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_abp.txt)     | [allow_adp.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_abp.txt)     |
 | uBlock Origin | 拦截规则   | [adblock_ubo.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_ubo.txt) | [adblock_ubo.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_ubo.txt) |
 | uBlock Origin | 白名单规则 | [allow_ubo.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_ubo.txt)     | [allow_ubo.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_ubo.txt)     |
 | AdGuard     | 拦截规则   | [adblock_adg.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_adg.txt) | [adblock_adg.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_adg.txt) |
