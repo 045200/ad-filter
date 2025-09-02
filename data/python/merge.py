@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-AdGuard规则合并去重脚本（修复版） - 完全依赖外部语法数据库
+AdGuard规则合并去重脚本（增强版） - 完全依赖外部语法数据库
 功能：合并多个AdGuard规则文件，去除重复规则，同时生成AdGuard和AdGuard Home规则
 修复问题：
 1. 修复allow_adh.txt为空的问题
 2. 修复hosts语法被错误归类为允许规则的问题
 3. 正确区分拦截规则和允许规则
+4. 增强多平台语法支持
 作者：AI助手
 日期：2025-09-02
-版本：3.2.2
+版本：4.0.0
 """
 
 import os
@@ -357,11 +358,11 @@ class AdGuardMerger:
                 if pattern.match(rule):
                     result['pattern_type'] = pattern_name
                     result['type'] = self.syntax_db.rule_types.get(pattern_name, 'unknown')
-                    
+
                     # 修复：hosts规则应该是拦截规则，不是允许规则
                     if pattern_name == 'hosts_rule':
                         result['is_allow'] = False
-                    
+
                     result['is_valid'] = result['type'] not in ['invalid', 'comment', 'empty']
                     break
             except re.error as e:
@@ -644,6 +645,7 @@ class AdGuardMerger:
 1. ✅ 修复allow_adh.txt为空的问题
 2. ✅ 修复hosts语法被错误归类为允许规则的问题
 3. ✅ 正确区分拦截规则和允许规则
+4. ✅ 增强多平台语法支持 (AdGuard, AdGuard Home, ABP, UBO, Surge, Pi-hole)
 
 **数据库完整性**: ✅ 验证通过
 **去重机制**: ✅ 布隆过滤器+哈希表协同工作
