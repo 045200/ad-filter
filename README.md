@@ -67,8 +67,8 @@
 
 | 适用拦截器 | 规则类型   | 📥 GitHub直链                                                                 | 🚀 国内加速链接                                                                 |
 | :--------- | :--------- | :----------------------------------------------------------------------------- | :------------------------------------------------------------------------------- |
-| Adblock Plus | 拦截规则   | [adblock_adp.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_abp.txt) | [adblock_adp.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_abp.txt) |
-| Adblock Plus | 白名单规则 | [allow_adp.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_abp.txt)     | [allow_adp.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_abp.txt)     |
+| Adblock Plus | 拦截规则   | [adblock_abp.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_abp.txt) | [adblock_abp.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_abp.txt) |
+| Adblock Plus | 白名单规则 | [allow_abp.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_abp.txt)     | [allow_abp.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_abp.txt)     |
 | uBlock Origin | 拦截规则   | [adblock_ubo.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_ubo.txt) | [adblock_ubo.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_ubo.txt) |
 | uBlock Origin | 白名单规则 | [allow_ubo.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_ubo.txt)     | [allow_ubo.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_ubo.txt)     |
 | AdGuard     | 拦截规则   | [adblock_adg.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_adg.txt) | [adblock_adg.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_adg.txt) |
@@ -78,6 +78,7 @@
 | Clash       | 拦截规则   | [adblock_clash.yaml](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_clash.yaml) | [adblock_clash.yaml](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_clash.yaml) |
 | Clash       | 放行规则   | [adblock_clash.yaml](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_clash.yaml) | [adblock_clash.yaml](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_clash.yaml) |
 | Mihomo      | 拦截规则   | [adb.mrs](https://raw.githubusercontent.com/045200/ad-filter/multi/adb.mrs)             | [adb.mrs](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adb.mrs)             |
+| Mihomo      | 放行规则   | [allow.mrs](https://raw.githubusercontent.com/045200/ad-filter/multi/allow.mrs)             | [allow.mrs](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow.mrs)             |
 | Surge       | 拦截规则   | [adblock_surge.conf](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.conf) | [adblock_surge.conf](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.conf) |
 | Surge       | 放行规则   | [adblock_clash.yaml](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_surge.conf) | [adblock_clash.yaml](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_surge.conf) |
 | Pi-hole     | 拦截规则   | [adblock_pihole.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_pihole.txt) | [adblock_pihole.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_pihole.txt) |
