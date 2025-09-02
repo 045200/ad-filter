@@ -74,8 +74,8 @@ class UnifiedConfig:
             # 注意: hosts文件没有白名单概念
         },
         "mihomo_source": {
-            "block": "adblock_clash.yaml",  # 使用Clash规则作为Mihomo源
-            "allow": "allow_clash.yaml"
+            "block": "adblock_clash_for_mihomo.yaml",  # 专门为Mihomo编译准备的文件
+            "allow": "allow_clash_for_mihomo.yaml"
         },
         "mihomo_output": {
             "block": "adb.mrs",
@@ -260,7 +260,7 @@ class UnifiedRuleParser:
                 'action': action,
                 'rule': original_rule  # 添加 rule 占位符
             }
-            
+
             try:
                 return format_str.format(**format_params)
             except KeyError as e:
@@ -471,34 +471,63 @@ class UnifiedConverter:
                 logger.error(f"详细错误信息: {traceback.format_exc()}")
 
     def save_results(self, platform_rules: Dict):
-        """保存所有平台的规则 - 只保留Clash的payload头"""
+        """保存所有平台的规则 - 修复Mihomo编译源格式问题"""
         logger.info("保存多平台规则文件...")
 
-        # 保存各平台规则
+        # 首先，确保为Mihomo编译源生成一个纯净的YAML文件（无payload头）
+        # 假设我们使用clash规则的解析结果作为Mihomo的输入源
+        if "clash" in platform_rules and "block" in platform_rules["clash"]:
+            clash_block_rules = platform_rules["clash"]["block"]
+            # Mihomo源文件：只包含规则，不包含payload头
+            mihomo_source_block_file = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_source"]["block"]
+            
+            # 过滤掉空规则
+            valid_rules = [rule for rule in clash_block_rules if rule.strip()]
+            
+            with open(mihomo_source_block_file, 'w', encoding='utf-8') as f:
+                # 直接写入规则，每行一条
+                f.write("\n".join(valid_rules))
+                
+            logger.info(f"已保存 Mihomo 编译源黑名单规则: {mihomo_source_block_file} ({len(valid_rules)} 条)")
+
+        # 可选：同样处理白名单
+        if "clash" in platform_rules and "allow" in platform_rules["clash"] and platform_rules["clash"]["allow"]:
+            clash_allow_rules = platform_rules["clash"]["allow"]
+            mihomo_source_allow_file = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_source"]["allow"]
+            
+            # 过滤掉空规则
+            valid_rules = [rule for rule in clash_allow_rules if rule.strip()]
+            
+            with open(mihomo_source_allow_file, 'w', encoding='utf-8') as f:
+                f.write("\n".join(valid_rules))
+                
+            logger.info(f"已保存 Mihomo 编译源白名单规则: {mihomo_source_allow_file} ({len(valid_rules)} 条)")
+
+        # 保存其他平台规则（保持原有逻辑，例如Clash平台保留payload头）
         for platform, rules in platform_rules.items():
             for rule_type in ["block", "allow"]:
-                # 跳过hosts平台的白名单（不存在）
                 if platform == "hosts" and rule_type == "allow":
                     continue
+                if not rules[rule_type]:
+                    continue
 
-                if rules[rule_type]:
-                    output_file = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform][rule_type]
+                output_file = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform][rule_type]
+                content = rules[rule_type]
 
-                    # 只对Clash平台添加payload头
-                    if platform == "clash":
-                        content = ["payload:"]
-                        content.extend(rules[rule_type])
-                    else:
-                        # 其他平台直接输出规则，不添加任何头
-                        content = rules[rule_type]
-
+                # 只有Clash平台输出需要添加payload头（用于直接使用）
+                if platform == "clash":
+                    content_with_header = ["payload:"] + content
+                    with open(output_file, 'w', encoding='utf-8') as f:
+                        f.write("\n".join(content_with_header))
+                else:
+                    # 其他平台直接输出规则
                     with open(output_file, 'w', encoding='utf-8') as f:
                         f.write("\n".join(content))
 
-                    logger.info(f"已保存 {platform} {rule_type} 规则: {output_file} ({len(rules[rule_type])} 条)")
+                logger.info(f"已保存 {platform} {rule_type} 规则: {output_file} ({len(rules[rule_type])} 条)")
 
         # 编译Mihomo规则集（如果需要）
-        if self.config.ENABLE_MIHOMO_COMPILATION and "mihomo" in self.parser.platform_support:
+        if self.config.ENABLE_MIHOMO_COMPILATION:
             self.compile_mihomo_rules()
 
     def compile_mihomo_rules(self):
@@ -511,9 +540,9 @@ class UnifiedConverter:
 
         try:
             # 检查输入文件是否存在且不为空
-            clash_block = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_source"]["block"]
-            if not clash_block.exists() or clash_block.stat().st_size == 0:
-                logger.warning("Clash黑名单文件不存在或为空，跳过Mihomo编译")
+            mihomo_source_block = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_source"]["block"]
+            if not mihomo_source_block.exists() or mihomo_source_block.stat().st_size == 0:
+                logger.warning("Mihomo源黑名单文件不存在或为空，跳过Mihomo编译")
                 return
 
             mihomo_block = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_output"]["block"]
@@ -523,7 +552,7 @@ class UnifiedConverter:
                 "convert-ruleset",
                 "domain",
                 "yaml",
-                str(clash_block),
+                str(mihomo_source_block),
                 str(mihomo_block)
             ]
 
@@ -538,8 +567,8 @@ class UnifiedConverter:
                 logger.error(f"标准输出: {result.stdout}")
 
             # 编译白名单
-            clash_allow = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_source"]["allow"]
-            if clash_allow.exists() and clash_allow.stat().st_size > 0:
+            mihomo_source_allow = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_source"]["allow"]
+            if mihomo_source_allow.exists() and mihomo_source_allow.stat().st_size > 0:
                 mihomo_allow = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_output"]["allow"]
 
                 cmd = [
@@ -547,7 +576,7 @@ class UnifiedConverter:
                     "convert-ruleset",
                     "domain",
                     "yaml",
-                    str(clash_allow),
+                    str(mihomo_source_allow),
                     str(mihomo_allow)
                 ]
 
@@ -561,7 +590,7 @@ class UnifiedConverter:
                     logger.error(f"标准错误: {result.stderr}")
                     logger.error(f"标准输出: {result.stdout}")
             else:
-                logger.warning("Clash白名单文件不存在或为空，跳过Mihomo白名单编译")
+                logger.warning("Mihomo源白名单文件不存在或为空，跳过Mihomo白名单编译")
 
         except subprocess.TimeoutExpired:
             logger.error("Mihomo编译超时")
