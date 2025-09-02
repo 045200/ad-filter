@@ -84,6 +84,7 @@ jobs:
         run: |
           echo "开始合并广告规则..."
           python ${{ env.PYTHON_SCRIPTS }}/merge.py &
+          wait
           echo "广告规则合并完成"
       
       # 12. 并行生成多格式规则- 核心步骤
