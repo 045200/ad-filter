@@ -1,50 +1,71 @@
 ||adx.ads.heytapmobi.com^
-# 字节系广告
-# 汽水音乐补充规则
-! 拦截广告视频源
-||v3-luna.douyinvod.com/ad/
-||lf-webcast-gr-sourcecdn.bytegecko.com/ad/
-||zijieapi.com/ad/
-
-! 拦截广告跳转按钮
-luna.music.com##a[href*="ad.douyin.com"]
-luna.music.com##button:has-text(去看视频)
-luna.music.com##div:has-text(再看1个)
-
-! 拦截奖励弹窗
-luna.music.com##div.reward-popup
-luna.music.com##div[class*="reward-dialog"]
-
-! 拦截计时器组件
-luna.music.com##div.time-reward-container
-luna.music.com##div[class*="countdown-timer"]
-
-! 高级拦截
-||luna.music.com/api/reward/video
-||music-api.tiktokv.com/reward/
-
-! 基础广告域名拦截（字节跳动系）
-||bytegecko.com^$third-party
-||zijieapi.com^$third-party
+### 字节系通用广告拦截规则
+||pangolin.snssdk.com^
+||pangolin16*.snssdk.com^
+||isnssdk.com/pangle/
+||isnssdk.com/adx/
+||toutiao.com/pangle/
+||toutiao.com/adx/
+||bytedance.com/pangle/
+||bytedance.com/adx/
+||snssdk.com/adx/
+||lf1-ttcdn-tos.pstatp.com/ad/
+||lf1-ttcdn-tos.pstatp.com/adx/
+||ixigua.com/adx/
+||douyin.com/adx/
+||bytedance.com^$script,third-party
+||bytedance.com^$popup,third-party
+||gecko.zijieapi.com^$redirect=nooptex
 ||douyinvod.com^$third-party
 ||amemv.com^$third-party
-||bytedance.com^$script
+||zijieapi.com^$third-party
+||bytegecko.com^$third-party
+||*.bytedance.com^$domain=~bytedance.com,script
+||*.snssdk.com^$domain=~snssdk.com,script
 
-! 汽水音乐专项规则（动态广告接口）
-luna.music.com##.reward-video-popup
+### 移动端专项拦截
+||ttcdn.byteimg.com/ad/   # 抖音广告CDN
+||aweme.snssdk.com/ads/   # TikTok广告接口
+||video.snssdk.com/ads/   # 视频号广告
+||ugc.snssdk.com/ads/     # UGC内容广告
+||aweme.com/ads/          # TikTok主站广告
+||musical.ly/ads/         # 国际版抖音广告
+||douyin.com/api/ads/     # 抖音API广告
+||ttads.qq.com/           # QQ浏览器字节广告
+||ttads.wandoujia.com/    # 应用商店广告
+
+### 动态广告特征拦截
+||**/ad/                  # 通用广告路径拦截
+||**/adx/                 # 广告联盟路径
+||**/adload/              # 动态广告加载
+||**/reward/              # 激励视频广告
+||**/interstitial/        # 插页广告
+||**/native/              # 原生广告
+||**/banner/              # 横幅广告
+||**/video_ads/           # 视频广告
+||**/adserver/            # 广告服务器
+
+### 元素隐藏规则（移动端）
 luna.music.com##div[class*="ad-container"]
-luna.music.com##[data-testid="ad-layer"]
-luna.music.com##.ads-skip-button
-luna.music.com##.video-reward-overlay
+luna.music.com##div[id*="ad-view"]
+luna.music.com##div[data-ad-type="reward"]
+luna.music.com##button:has-text(/立即观看|观看广告/)
+luna.music.com##a[href*="ad.douyin.com"]
+douyin.com##div[class*="sponsored"]
+douyin.com##div[data-e2e="ad-banner"]
+douyin.com##div[class*="ad为空"]
 
-! 抖音/西瓜视频广告拦截（防止跨平台广告）
-||lf-webcast-*.bytegecko.com^$media
-||*.douyinvod.com/ad/*$xmlhttprequest
-||api*.amemv.com^$domain=ixigua.com
+### 高级过滤选项
+||*.bytegecko.com^$media,script
+||*.lf-webcast.com^$xmlhttprequest
+||*.amemv.com^$domain=ixigua.com,script
+||*.douyinvod.com^$domain=bytedance.com,script
+||*.snssdk.com^$domain=~snssdk.com,xmlhttprequest
 
-! 高级规则（覆盖弹窗和重定向）
-||bytedance.com^$popup
-||gecko.zijieapi.com^$redirect=nooptext
+### 防规避规则
+@@||bytedance.com^$domain=bytedance.com,script
+@@||snssdk.com^$domain=snssdk.com,script
+@@||douyin.com^$domain=douyin.com,script
 
 # ====== 通用广告拦截规则 =====
 ! 国内主流广告SDK拦截
@@ -176,21 +197,6 @@ luna.music.com##.video-reward-overlay
 ||weixin.qq.com/cgi-bin/recommend^
 ||push.weread.qq.com^
 ||miniprogram.qq.com/recommend^
-
-# ====== 字节系广告 =====
-||pangolin.snssdk.com^
-||pangolin16*.snssdk.com^
-||isnssdk.com/pangle/
-||isnssdk.com/adx/
-||toutiao.com/pangle/
-||toutiao.com/adx/
-||bytedance.com/pangle/
-||bytedance.com/adx/
-||snssdk.com/adx/
-||lf1-ttcdn-tos.pstatp.com/ad/
-||lf1-ttcdn-tos.pstatp.com/adx/
-||ixigua.com/adx/
-||douyin.com/adx/
 
 # ====== 百度系广告 =====
 ||baidu.com/als/ad
