@@ -47,7 +47,7 @@ class UnifiedConfig:
     # Mihomo工具配置 - 修正为github根目录的data路径下
     MIHOMO_TOOL_PATH: Path = BASE_DIR / "data" / "mihomo-tool"
 
-    # 输出文件配置 - 直接输出到GitHub根目录
+    # 输出文件配置 - 移除mihomo_source的txt，直接用clash产物作为输入
     OUTPUT_FILES: Dict[str, Dict[str, str]] = field(default_factory=lambda: {
         "clash": {
             "block": "adblock_clash.yaml",
@@ -72,11 +72,7 @@ class UnifiedConfig:
         "hosts": {
             "block": "hosts.txt"
         },
-        "mihomo_source": {
-            "block": "adblock_mihomo.txt",  # 改为纯文本格式
-            "allow": "allow_mihomo.txt"
-        },
-        "mihomo_output": {
+        "mihomo_output": {  # 仅保留mihomo输出配置
             "block": "adb.mrs",
             "allow": "allow.mrs"
         }
@@ -293,10 +289,6 @@ class UnifiedRuleParser:
                     break
             return original_rule
 
-        # Mihomo直接使用原始规则（去除例外前缀）
-        elif platform == "mihomo_source":
-            return rule_info["original"].lstrip('@@')  # 移除例外前缀
-
         return None
 
 
@@ -445,7 +437,7 @@ class UnifiedConverter:
         """保存所有平台的规则"""
         logger.info("保存多平台规则文件...")
 
-        # 首先保存常规Clash规则文件（带payload头）
+        # 保存所有平台规则（含Clash YAML产物）
         for platform, rules in platform_rules.items():
             for rule_type in ["block", "allow"]:
                 if platform == "hosts" and rule_type == "allow":
@@ -456,8 +448,9 @@ class UnifiedConverter:
                 output_file = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform][rule_type]
                 content = rules[rule_type]
 
+                # Clash规则添加payload头（Mihomo要求的标准格式）
                 if platform == "clash":
-                    content_with_header = ["payload:"] + content
+                    content_with_header = ["payload:"] + [f"  - {line}" for line in content]  # 规则缩进2空格，符合YAML语法
                     with open(output_file, 'w', encoding='utf-8') as f:
                         f.write("\n".join(content_with_header))
                 else:
@@ -466,98 +459,71 @@ class UnifiedConverter:
 
                 logger.info(f"已保存 {platform} {rule_type} 规则: {output_file} ({len(rules[rule_type])} 条)")
 
-        # 为Mihomo编译源生成文件（直接保存纯文本规则）
-        if "mihomo_source" in platform_rules and "block" in platform_rules["mihomo_source"]:
-            mihomo_block_rules = platform_rules["mihomo_source"]["block"]
-            mihomo_source_block_file = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_source"]["block"]
-
-            # 过滤空规则并去重
-            valid_rules = [rule.strip() for rule in mihomo_block_rules if rule.strip()]
-            valid_rules = list(set(valid_rules))  # 二次去重
-
-            with open(mihomo_source_block_file, 'w', encoding='utf-8') as f:
-                f.write("\n".join(valid_rules))
-
-            logger.info(f"已保存 Mihomo 编译源黑名单规则: {mihomo_source_block_file} ({len(valid_rules)} 条)")
-
-        if "mihomo_source" in platform_rules and "allow" in platform_rules["mihomo_source"]:
-            mihomo_allow_rules = platform_rules["mihomo_source"]["allow"]
-            mihomo_source_allow_file = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_source"]["allow"]
-
-            valid_rules = [rule.strip() for rule in mihomo_allow_rules if rule.strip()]
-            valid_rules = list(set(valid_rules))
-
-            with open(mihomo_source_allow_file, 'w', encoding='utf-8') as f:
-                f.write("\n".join(valid_rules))
-
-            logger.info(f"已保存 Mihomo 编译源白名单规则: {mihomo_source_allow_file} ({len(valid_rules)} 条)")
-
-        # 编译Mihomo规则集
+        # 编译Mihomo规则集（直接使用Clash YAML作为输入）
         if self.config.ENABLE_MIHOMO_COMPILATION:
             self.compile_mihomo_rules()
 
     def compile_mihomo_rules(self):
-        """编译Mihomo规则集"""
+        """编译Mihomo规则集 - 输入改为Clash YAML产物"""
         if not self.config.MIHOMO_TOOL_PATH.exists():
             logger.warning("Mihomo工具不存在，跳过编译")
             return
 
-        logger.info("编译Mihomo规则集...")
+        logger.info("基于Clash YAML产物编译Mihomo规则集...")
 
         try:
-            # 编译黑名单
-            mihomo_source_block = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_source"]["block"]
-            if not mihomo_source_block.exists() or mihomo_source_block.stat().st_size == 0:
-                logger.warning("Mihomo源黑名单文件不存在或为空，跳过Mihomo编译")
-                return
+            # 1. 编译黑名单（adb.mrs）
+            clash_block_yaml = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["clash"]["block"]
+            mihomo_block_output = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_output"]["block"]
 
-            mihomo_block = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_output"]["block"]
-
-            # 调整Mihomo命令为直接处理文本文件
-            cmd = [
-                str(self.config.MIHOMO_TOOL_PATH),
-                "convert-ruleset",
-                "domain",
-                "txt",  # 改为文本格式
-                str(mihomo_source_block),
-                str(mihomo_block)
-            ]
-
-            logger.info(f"执行命令: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-
-            if result.returncode == 0:
-                logger.info(f"Mihomo黑名单编译成功: {mihomo_block}")
+            if not clash_block_yaml.exists() or clash_block_yaml.stat().st_size == 0:
+                logger.warning("Clash黑名单YAML不存在或为空，跳过adb.mrs编译")
             else:
-                logger.error(f"Mihomo黑名单编译失败，退出码: {result.returncode}")
-                logger.error(f"标准错误: {result.stderr}")
-                logger.error(f"标准输出: {result.stdout}")
+                # Mihomo命令：输入格式为yaml，规则类型为domain
+                cmd_block = [
+                    str(self.config.MIHOMO_TOOL_PATH),
+                    "convert-ruleset",
+                    "domain",          # 规则类型：域名规则
+                    "yaml",            # 输入格式：Clash YAML
+                    str(clash_block_yaml),
+                    str(mihomo_block_output)
+                ]
 
-            # 编译白名单
-            mihomo_source_allow = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_source"]["allow"]
-            if mihomo_source_allow.exists() and mihomo_source_allow.stat().st_size > 0:
-                mihomo_allow = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_output"]["allow"]
+                logger.info(f"执行黑名单编译命令: {' '.join(cmd_block)}")
+                result = subprocess.run(cmd_block, capture_output=True, text=True, timeout=300)
 
-                cmd = [
+                if result.returncode == 0:
+                    logger.info(f"Mihomo黑名单编译成功: {mihomo_block_output}")
+                else:
+                    logger.error(f"adb.mrs编译失败，退出码: {result.returncode}")
+                    logger.error(f"标准错误: {result.stderr}")
+                    logger.error(f"标准输出: {result.stdout}")
+
+            # 2. 编译白名单（allow.mrs）
+            clash_allow_yaml = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["clash"]["allow"]
+            mihomo_allow_output = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_output"]["allow"]
+
+            if not clash_allow_yaml.exists() or clash_allow_yaml.stat().st_size == 0:
+                logger.warning("Clash白名单YAML不存在或为空，跳过allow.mrs编译")
+            else:
+                cmd_allow = [
                     str(self.config.MIHOMO_TOOL_PATH),
                     "convert-ruleset",
                     "domain",
-                    "txt",
-                    str(mihomo_source_allow),
-                    str(mihomo_allow)
+                    "yaml",
+                    str(clash_allow_yaml),
+                    str(mihomo_allow_output)
                 ]
 
-                logger.info(f"执行命令: {' '.join(cmd)}")
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                logger.info(f"执行白名单编译命令: {' '.join(cmd_allow)}")
+                result = subprocess.run(cmd_allow, capture_output=True, text=True, timeout=300)
 
                 if result.returncode == 0:
-                    logger.info(f"Mihomo白名单编译成功: {mihomo_allow}")
+                    logger.info(f"Mihomo白名单编译成功: {mihomo_allow_output}")
                 else:
-                    logger.error(f"Mihomo白名单编译失败，退出码: {result.returncode}")
+                    logger.error(f"allow.mrs编译失败，退出码: {result.returncode}")
                     logger.error(f"标准错误: {result.stderr}")
                     logger.error(f"标准输出: {result.stdout}")
-            else:
-                logger.warning("Mihomo源白名单文件不存在或为空，跳过Mihomo白名单编译")
 
         except subprocess.TimeoutExpired:
             logger.error("Mihomo编译超时")
@@ -592,11 +558,11 @@ def main():
         logger.info("开始规则转换...")
         platform_rules = converter.process_files()
 
-        logger.info("保存转换结果...")
+        logger.info("保存转换结果并编译Mihomo规则集...")
         converter.save_results(platform_rules)
 
         converter.print_statistics()
-        logger.info("规则转换完成!")
+        logger.info("规则转换及Mihomo编译完成!")
 
     except Exception as e:
         logger.error(f"规则转换失败: {e}")
