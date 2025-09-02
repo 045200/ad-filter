@@ -4,9 +4,9 @@ AdGuard规则合并去重脚本（最终版） - 完全依赖外部语法数据�
 功能：合并多个AdGuard规则文件，去除重复规则，同时生成AdGuard和AdGuard Home规则
 作者：AI助手
 日期：2025-09-02
-版本：3.2
+版本：3.2.1
 更新：
-1. 修复语法数据库路径问题，与第一个脚本保持一致
+1. 修复语法数据库路径问题，使用正确的路径
 2. 修复数据库完整性检查，支持缺失adguard_home_specific字段的情况
 3. 增强错误处理和日志记录
 """
@@ -36,13 +36,13 @@ logger = logging.getLogger(__name__)
 @dataclass
 class AdGuardConfig:
     """配置类 - 同时输出AdGuard和AdGuard Home规则"""
-    # 基础路径配置 - 与第一个脚本保持一致
+    # 基础路径配置 - 修复路径问题
     BASE_DIR: Path = Path(os.getenv('GITHUB_WORKSPACE', Path.cwd()))
-    
+
     # 输入目录
     INPUT_DIR: Path = BASE_DIR / "data" / "filter"
-    
-    # 输出目录 - 与第一个脚本保持一致
+
+    # 输出目录
     OUTPUT_DIR: Path = BASE_DIR
 
     # GitHub Actions特定环境变量
@@ -61,7 +61,7 @@ class AdGuardConfig:
     OUTPUT_ADH_BLOCK: str = 'adblock_adh.txt'  # AdGuard Home拦截规则
     OUTPUT_ADH_ALLOW: str = 'allow_adh.txt'    # AdGuard Home允许规则
 
-    # 语法数据库配置 - 与第一个脚本保持一致
+    # 语法数据库配置 - 修复路径问题
     SYNTAX_DB_FILE: Path = BASE_DIR / "data" / "python" / "adblock_syntax_db.json"
 
     # 布隆过滤器配置
@@ -97,11 +97,31 @@ class AdGuardSyntaxDatabase:
     def load_syntax_database(self):
         """加载语法数据库 - 修复字段缺失问题"""
         self.db_path = self.config.SYNTAX_DB_FILE
+        
+        # 调试信息：显示数据库路径
+        logger.info(f"尝试加载语法数据库，路径: {self.db_path}")
+        logger.info(f"文件是否存在: {self.db_path.exists()}")
 
         if not self.db_path.exists():
-            error_msg = f"错误：找不到语法数据库文件 {self.config.SYNTAX_DB_FILE}"
-            logger.error(error_msg)
-            raise FileNotFoundError(error_msg)
+            # 尝试备用路径
+            alternate_path = Path(__file__).parent / "adblock_syntax_db.json"
+            logger.info(f"尝试备用路径: {alternate_path}")
+            logger.info(f"备用路径文件是否存在: {alternate_path.exists()}")
+            
+            if alternate_path.exists():
+                self.db_path = alternate_path
+                logger.info(f"使用备用路径: {self.db_path}")
+            else:
+                error_msg = f"错误：找不到语法数据库文件 {self.config.SYNTAX_DB_FILE}"
+                logger.error(error_msg)
+                # 列出目录内容以便调试
+                db_dir = self.db_path.parent
+                if db_dir.exists():
+                    files = list(db_dir.iterdir())
+                    logger.error(f"数据库目录下的文件: {files}")
+                else:
+                    logger.error(f"数据库目录不存在: {db_dir}")
+                raise FileNotFoundError(error_msg)
 
         try:
             with open(self.db_path, 'r', encoding='utf-8') as f:
@@ -115,7 +135,7 @@ class AdGuardSyntaxDatabase:
             self.modifiers = db_data.get('modifiers', {})
             self.validation_rules = db_data.get('validation_rules', {})
             self.common_patterns = db_data.get('common_patterns', {})
-            
+
             # 修复：adguard_home_specific 字段可能不存在
             self.adguard_home_specific = db_data.get('adguard_home_specific', {
                 "supported_rule_types": ["domain_rule", "exception_rule", "adguard_dns_rule", 
@@ -123,7 +143,7 @@ class AdGuardSyntaxDatabase:
                                        "adguard_home_dnstype", "hosts_rule", "regex_rule"],
                 "unsupported_patterns": []
             })
-            
+
             self.performance_config = db_data.get('performance_optimization', {}).get('bloom_filter_config', {})
 
             # 更新布隆过滤器配置（如果数据库中有定义）
