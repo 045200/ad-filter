@@ -1,18 +1,3 @@
-#!/usr/bin/env python3
-"""
-统一规则转换平台 - 基于语法数据库的多目标输出系统
-功能：从AdGuard规则同时生成Clash、Surge、Pi-hole、uBlock Origin、Hosts等规则
-作者：AI助手
-日期：2025-09-02
-版本：4.5
-改进内容：
-1. 修复正则表达式转义问题
-2. 增强错误处理和日志记录
-3. 改进规则解析逻辑
-4. 修复Mihomo编译问题
-5. 改进平台支持检测
-"""
-
 import os
 import re
 import json
@@ -225,11 +210,11 @@ class UnifiedRuleParser:
         # 检查规则类型支持
         supported_types = platform_config.get("supported_rule_types", [])
         unsupported_types = platform_config.get("unsupported_rule_types", [])
-        
+
         # 如果规则类型明确不支持
         if rule_type in unsupported_types:
             return False
-            
+
         # 如果平台有明确支持的规则类型列表，且当前规则类型不在其中
         if supported_types and rule_type not in supported_types:
             return False
@@ -251,7 +236,7 @@ class UnifiedRuleParser:
         return True
 
     def convert_rule_for_platform(self, rule_info: Dict[str, Any], platform: str) -> Optional[str]:
-        """将规则转换为特定平台格式"""
+        """将规则转换为特定平台格式 - 修复字符串格式化问题"""
         if not self.is_supported_by_platform(rule_info, platform):
             return None
 
@@ -259,6 +244,7 @@ class UnifiedRuleParser:
         rule_format = platform_config.get("rule_format", {})
         rule_type = rule_info["pattern_type"]
         content = rule_info["content"]
+        original_rule = rule_info["original"]
         is_exception = rule_info["is_exception"]
 
         # 确定动作
@@ -267,7 +253,19 @@ class UnifiedRuleParser:
         # 应用平台特定转换规则
         if rule_type in rule_format:
             format_str = rule_format[rule_type]
-            return format_str.format(domain=content, pattern=content, action=action)
+            # 提供所有可能的占位符变量
+            format_params = {
+                'domain': content,
+                'pattern': content,
+                'action': action,
+                'rule': original_rule  # 添加 rule 占位符
+            }
+            
+            try:
+                return format_str.format(**format_params)
+            except KeyError as e:
+                logger.warning(f"格式化字符串缺少键 {e}，使用原始规则: {original_rule}")
+                return original_rule
 
         # 默认转换逻辑
         if platform == "clash" or platform == "surge":
@@ -289,8 +287,8 @@ class UnifiedRuleParser:
                 return f"@@{content}" if is_exception else content
             elif rule_type == "hosts_rule":
                 # 处理hosts格式规则
-                if "0.0.0.0" in rule_info["original"]:
-                    return rule_info["original"]  # 保持原样
+                if "0.0.0.0" in original_rule:
+                    return original_rule  # 保持原样
                 else:
                     return f"0.0.0.0 {content}"
 
@@ -300,12 +298,11 @@ class UnifiedRuleParser:
                 return f"0.0.0.0 {content}"
             elif rule_type == "hosts_rule":
                 # 如果已经是hosts格式，直接返回
-                return rule_info["original"]
+                return original_rule
 
         # uBlock Origin和AdBlock Plus保持原格式，但过滤不支持的修饰符
         elif platform in ["ublock_origin", "adblock_plus"]:
             # 移除不支持的修饰符
-            original_rule = rule_info["original"]
             unsupported_mods = platform_config.get("unsupported_modifiers", [])
 
             for mod in unsupported_mods:
@@ -419,7 +416,7 @@ class UnifiedConverter:
                 # 处理剩余内容
                 if batch:
                     self.process_batch(batch, platform_rules, rule_class)
-                    
+
             logger.info(f"成功处理文件 {file_path}，共 {line_count} 行")
 
         except Exception as e:
@@ -532,7 +529,7 @@ class UnifiedConverter:
 
             logger.info(f"执行命令: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            
+
             if result.returncode == 0:
                 logger.info(f"Mihomo黑名单编译成功: {mihomo_block}")
             else:
@@ -556,7 +553,7 @@ class UnifiedConverter:
 
                 logger.info(f"执行命令: {' '.join(cmd)}")
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                
+
                 if result.returncode == 0:
                     logger.info(f"Mihomo白名单编译成功: {mihomo_allow}")
                 else:
