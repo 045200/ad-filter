@@ -73,8 +73,8 @@ class UnifiedConfig:
             "block": "hosts.txt"
         },
         "mihomo_source": {
-            "block": "adblock_clash_for_mihomo.yaml",
-            "allow": "allow_clash_for_mihomo.yaml"
+            "block": "adblock_mihomo.txt",  # 改为纯文本格式
+            "allow": "allow_mihomo.txt"
         },
         "mihomo_output": {
             "block": "adb.mrs",
@@ -293,6 +293,10 @@ class UnifiedRuleParser:
                     break
             return original_rule
 
+        # Mihomo直接使用原始规则（去除例外前缀）
+        elif platform == "mihomo_source":
+            return rule_info["original"].lstrip('@@')  # 移除例外前缀
+
         return None
 
 
@@ -462,29 +466,30 @@ class UnifiedConverter:
 
                 logger.info(f"已保存 {platform} {rule_type} 规则: {output_file} ({len(rules[rule_type])} 条)")
 
-        # 为Mihomo编译源生成文件（也带payload头）
-        if "clash" in platform_rules and "block" in platform_rules["clash"]:
-            clash_block_rules = platform_rules["clash"]["block"]
+        # 为Mihomo编译源生成文件（直接保存纯文本规则）
+        if "mihomo_source" in platform_rules and "block" in platform_rules["mihomo_source"]:
+            mihomo_block_rules = platform_rules["mihomo_source"]["block"]
             mihomo_source_block_file = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_source"]["block"]
-            
-            valid_rules = [rule for rule in clash_block_rules if rule.strip()]
-            content_with_header = ["payload:"] + valid_rules
-            
+
+            # 过滤空规则并去重
+            valid_rules = [rule.strip() for rule in mihomo_block_rules if rule.strip()]
+            valid_rules = list(set(valid_rules))  # 二次去重
+
             with open(mihomo_source_block_file, 'w', encoding='utf-8') as f:
-                f.write("\n".join(content_with_header))
-            
+                f.write("\n".join(valid_rules))
+
             logger.info(f"已保存 Mihomo 编译源黑名单规则: {mihomo_source_block_file} ({len(valid_rules)} 条)")
 
-        if "clash" in platform_rules and "allow" in platform_rules["clash"] and platform_rules["clash"]["allow"]:
-            clash_allow_rules = platform_rules["clash"]["allow"]
+        if "mihomo_source" in platform_rules and "allow" in platform_rules["mihomo_source"]:
+            mihomo_allow_rules = platform_rules["mihomo_source"]["allow"]
             mihomo_source_allow_file = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_source"]["allow"]
-            
-            valid_rules = [rule for rule in clash_allow_rules if rule.strip()]
-            content_with_header = ["payload:"] + valid_rules
-            
+
+            valid_rules = [rule.strip() for rule in mihomo_allow_rules if rule.strip()]
+            valid_rules = list(set(valid_rules))
+
             with open(mihomo_source_allow_file, 'w', encoding='utf-8') as f:
-                f.write("\n".join(content_with_header))
-            
+                f.write("\n".join(valid_rules))
+
             logger.info(f"已保存 Mihomo 编译源白名单规则: {mihomo_source_allow_file} ({len(valid_rules)} 条)")
 
         # 编译Mihomo规则集
@@ -508,11 +513,12 @@ class UnifiedConverter:
 
             mihomo_block = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_output"]["block"]
 
+            # 调整Mihomo命令为直接处理文本文件
             cmd = [
                 str(self.config.MIHOMO_TOOL_PATH),
                 "convert-ruleset",
                 "domain",
-                "yaml",
+                "txt",  # 改为文本格式
                 str(mihomo_source_block),
                 str(mihomo_block)
             ]
@@ -536,7 +542,7 @@ class UnifiedConverter:
                     str(self.config.MIHOMO_TOOL_PATH),
                     "convert-ruleset",
                     "domain",
-                    "yaml",
+                    "txt",
                     str(mihomo_source_allow),
                     str(mihomo_allow)
                 ]
