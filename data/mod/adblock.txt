@@ -1,5 +1,32 @@
 ||adx.ads.heytapmobi.com^
 # 字节系通用广告拦截规则
+# Luna Music 专项拦截规则
+||luna.music.com/api/promotion/  # 促销接口
+||luna.music.com/api/vip/        # VIP相关接口
+||luna.music.com/ad/             # 广告接口
+||luna.music.com/reward/         # 激励视频接口
+
+# 应用内元素隐藏规则 (Luna Music)
+com.luna.music##div[text*="看视频"]
+com.luna.music##div[text*="免费听"]
+com.luna.music##div[text*="畅听"]
+com.luna.music##button[text*="看视频"]
+com.luna.music##button[text*="立即解锁"]
+com.luna.music##div[class*="reward"]
+com.luna.music##div[class*="promotion"]
+com.luna.music##div[class*="vip_promote"]
+com.luna.music##div[class*="ad_container"]
+
+# 激励视频广告通用拦截
+||**/reward/video/               # 激励视频接口
+||**/api/reward/                 # 奖励相关API
+||**/promotion/video/            # 促销视频接口
+||**/vip/promote/                # VIP促销接口
+
+# 移动端应用内广告补充
+||app-ad.xyz^$app=com.luna.music  # 应用内广告域名
+||ad-api.mobile.com^$app=com.luna.music
+
 ||pangolin.snssdk.com^
 ||pangolin16*.snssdk.com^
 ||isnssdk.com/pangle/
