@@ -1,3 +1,33 @@
+# 防规避规则 - 允许自有域名下的必要内容
+@@||bytedance.com^$domain=bytedance.com,script
+@@||snssdk.com^$domain=snssdk.com,script
+@@||douyin.com^$domain=douyin.com,script
+@@||tiktok.com^$domain=tiktok.com,script
+
+# 允许关键CDN资源 - 防止误拦截导致功能异常
+@@||lf6-cdn-tos.bytecdntp.com^$domain=douyin.com
+@@||*.bytecdntp.com^$document,domain=~bytecdntp.com
+@@||*.snssdk.com^$document,domain=~snssdk.com
+@@||*.douyin.com^$document,domain=~douyin.com
+@@||*.tiktok.com^$document,domain=~tiktok.com
+
+# 允许关键功能接口（登录、支付等）
+@@||douyin.com/passport/
+@@||douyin.com/pay/
+@@||tiktok.com/login/
+@@||toutiao.com/passport/
+@@||toutiao.com/pay/
+
+# 允许必要的第三方服务
+@@||log.byteoversea.com^$domain=douyin.com
+@@||mon.tiktok.com^$domain=tiktok.com
+
+# 允许用户内容和非广告资源
+@@||pstatp.com/ugc/
+@@||snssdk.com/ugc/
+@@||douyin.com/aweme/
+@@||tiktok.com/share/
+!github
 @@||raw.githubusercontent.com
 !补充名单
 @@||dns.weixin.qq.com.cn^
