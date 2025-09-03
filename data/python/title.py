@@ -11,8 +11,8 @@ ADBLOCKERS: Dict[str, Dict[str, str]] = {
     "ubo": {"name": "uBlock Origin", "suffix": ".txt", "comment": "!", "has_allow": True},
     "adg": {"name": "AdGuard", "suffix": ".txt", "comment": "!", "has_allow": True},
     "adh": {"name": "AdGuard Home", "suffix": ".txt", "comment": "#", "has_allow": True},
-    "clash": {"name": "Clash", "suffix": ".yaml", "comment": "#", "has_allow": True},
-    "surge": {"name": "Surge", "suffix": ".conf", "comment": "#", "has_allow": True},
+    "clash": {"name": "Clash", "suffix": ".yaml", "comment": "#", "has_allow": False},
+    "surge": {"name": "Surge", "suffix": ".conf", "comment": "#", "has_allow": False},
     "pihole": {"name": "Pi-hole", "suffix": ".txt", "comment": "#", "has_allow": True}
 }
 
