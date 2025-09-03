@@ -1,5 +1,5 @@
 ||adx.ads.heytapmobi.com^
-### 字节系通用广告拦截规则
+# 字节系通用广告拦截规则
 ||pangolin.snssdk.com^
 ||pangolin16*.snssdk.com^
 ||isnssdk.com/pangle/
@@ -23,7 +23,26 @@
 ||*.bytedance.com^$domain=~bytedance.com,script
 ||*.snssdk.com^$domain=~snssdk.com,script
 
-### 移动端专项拦截
+# 补充的通用广告域名
+||ads.tiktokv.com^
+||ads-api.tiktok.com^
+||ads-sg.tiktok.com^
+||api-access.pangolin-sdk-toutiao.com^
+||log.pangolin-sdk-toutiao.com^
+||tp-pangolin.sgsnssdk.com^
+||sf1-be-pack.pglstatp-toutiao.com^
+||sf1-ttcdn-tos.pstatp.com/ad/
+||lf3-ttcdn-tos.pstatp.com/ad/
+||lf6-ttcdn-tos.pstatp.com/ad/
+||lf9-ttcdn-tos.pstatp.com/ad/
+||cdn.toutiao.com/pangle/
+||cdn.toutiao.com/adx/
+||cdn.bytedance.com/pangle/
+||cdn.bytedance.com/adx/
+||mon-va.tiktok.com^$domain=~tiktok.com
+||mon.tiktok.com^$domain=~tiktok.com
+
+# 移动端专项拦截
 ||ttcdn.byteimg.com/ad/   # 抖音广告CDN
 ||aweme.snssdk.com/ads/   # TikTok广告接口
 ||video.snssdk.com/ads/   # 视频号广告
@@ -34,18 +53,55 @@
 ||ttads.qq.com/           # QQ浏览器字节广告
 ||ttads.wandoujia.com/    # 应用商店广告
 
-### 动态广告特征拦截
-||**/ad/                  # 通用广告路径拦截
-||**/adx/                 # 广告联盟路径
-||**/adload/              # 动态广告加载
-||**/reward/              # 激励视频广告
-||**/interstitial/        # 插页广告
-||**/native/              # 原生广告
-||**/banner/              # 横幅广告
-||**/video_ads/           # 视频广告
-||**/adserver/            # 广告服务器
+# 补充移动端拦截
+||tiktok.com/api/ads/
+||tiktok.com/ads/
+||tiktokv.com/ads/
+||musical.ly/api/ads/
+||tiktok.com/log/monitor/
+||ttads.baidu.com/
+||ttads.360.cn/
+||ttads.huawei.com/
+||ttads.xiaomi.com/
 
-### 元素隐藏规则（移动端）
+# 动态广告特征拦截
+||snssdk.com/*/ad/
+||snssdk.com/*/adx/
+||douyin.com/*/ad/
+||douyin.com/*/adx/
+||tiktok.com/*/ad/
+||tiktok.com/*/adx/
+||bytedance.com/*/ad/
+||bytedance.com/*/adx/
+||**/adsense/
+||**/advertiser/
+||**/promotion/
+||**/commercial/
+||**/sponsor/
+||**/tracking/
+||**/log/
+||**/monitor/
+
+# 高级过滤选项
+||*.bytegecko.com^$media,script
+||*.lf-webcast.com^$xmlhttprequest
+||*.amemv.com^$domain=ixigua.com,script
+||*.douyinvod.com^$domain=bytedance.com,script
+||*.snssdk.com^$domain=~snssdk.com,xmlhttprequest
+||bytecdn.cn^$third-party
+||pstatp.com^$third-party,domain=~pstatp.com
+||snssdk.com^$third-party,domain=~snssdk.com
+||douyin.com^$third-party,domain=~douyin.com
+||tiktok.com^$third-party,domain=~tiktok.com
+||musical.ly^$third-party,domain=~musical.ly
+||bytegecko.com^$third-party,script
+||zijieapi.com^$third-party,script
+||amemv.com^$third-party,script
+||douyinvod.com^$third-party,script
+||pstatp.com^$third-party,image
+||snssdk.com^$third-party,image
+
+# 元素隐藏规则（移动端）
 luna.music.com##div[class*="ad-container"]
 luna.music.com##div[id*="ad-view"]
 luna.music.com##div[data-ad-type="reward"]
@@ -54,18 +110,20 @@ luna.music.com##a[href*="ad.douyin.com"]
 douyin.com##div[class*="sponsored"]
 douyin.com##div[data-e2e="ad-banner"]
 douyin.com##div[class*="ad为空"]
-
-### 高级过滤选项
-||*.bytegecko.com^$media,script
-||*.lf-webcast.com^$xmlhttprequest
-||*.amemv.com^$domain=ixigua.com,script
-||*.douyinvod.com^$domain=bytedance.com,script
-||*.snssdk.com^$domain=~snssdk.com,xmlhttprequest
-
-### 防规避规则
-@@||bytedance.com^$domain=bytedance.com,script
-@@||snssdk.com^$domain=snssdk.com,script
-@@||douyin.com^$domain=douyin.com,script
+douyin.com##div[class*="-ad"]
+douyin.com##div[class^="ad-"]
+douyin.com##div[data-ad-id]
+douyin.com##div:has(> div[data-e2e*="ad"])
+douyin.com##a[href*=".douyin.com/ad"]
+tiktok.com##div[class*="-ad"]
+tiktok.com##div[class^="ad-"]
+tiktok.com##div[data-ad-id]
+tiktok.com##div:has(> [data-e2e*="ad"])
+toutiao.com##div[class*="-ad"]
+toutiao.com##div[class^="ad-"]
+toutiao.com##div[data-ad-id]
+##div[id^="ads"]
+##div[class*="ads"]
 
 # ====== 通用广告拦截规则 =====
 ! 国内主流广告SDK拦截
