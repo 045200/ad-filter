@@ -1,165 +1,68 @@
 ||adx.ads.heytapmobi.com^
-# 字节系通用广告拦截规则
-# Luna Music 专项拦截规则
-||luna.music.com/api/promotion/  # 促销接口
-||luna.music.com/api/vip/        # VIP相关接口
-||luna.music.com/ad/             # 广告接口
-||luna.music.com/reward/         # 激励视频接口
-
-# 应用内元素隐藏规则 (Luna Music)
-com.luna.music##div[text*="看视频"]
-com.luna.music##div[text*="免费听"]
-com.luna.music##div[text*="畅听"]
-com.luna.music##button[text*="看视频"]
-com.luna.music##button[text*="立即解锁"]
-com.luna.music##div[class*="reward"]
-com.luna.music##div[class*="promotion"]
-com.luna.music##div[class*="vip_promote"]
-com.luna.music##div[class*="ad_container"]
-
-# 激励视频广告通用拦截
-||**/reward/video/               # 激励视频接口
-||**/api/reward/                 # 奖励相关API
-||**/promotion/video/            # 促销视频接口
-||**/vip/promote/                # VIP促销接口
-
-# 移动端应用内广告补充
-||app-ad.xyz^$app=com.luna.music  # 应用内广告域名
+! ##### 汽水音乐 (Luna Music) 专项 #####
+||luna.music.com/ad^
+||luna.music.com/*/ad^
+||luna.music.com/api/promotion/
+||luna.music.com/api/vip/
+||luna.music.com/reward/
+||app-ad.xyz^$app=com.luna.music
 ||ad-api.mobile.com^$app=com.luna.music
 
+! ##### 抖音 (Douyin) 专项 #####
+||douyin.com/ads^
+||douyin.com/ad^
+||douyin.com/*/ad^
+||douyin.com/api/ads/
+||douyin.com/adx/
+||aweme.snssdk.com/ads/
+||ttcdn.byteimg.com/ad/
+
+! ##### TikTok 专项 #####
+||tiktok.com/ads^
+||tiktok.com/ad^
+||tiktok.com/*/ad^
+||tiktok.com/api/ads/
+||ads.tiktokv.com^
+||ads-api.tiktok.com^
+||ads-sg.tiktok.com^
+
+! ##### 头条 (Toutiao) 及其他字节系 #####
+||toutiao.com/ads^
+||toutiao.com/ad^
+||toutiao.com/*/ad^
+||toutiao.com/adx/
+||toutiao.com/pangle/
 ||pangolin.snssdk.com^
 ||pangolin16*.snssdk.com^
 ||isnssdk.com/pangle/
 ||isnssdk.com/adx/
-||toutiao.com/pangle/
-||toutiao.com/adx/
 ||bytedance.com/pangle/
 ||bytedance.com/adx/
 ||snssdk.com/adx/
 ||lf1-ttcdn-tos.pstatp.com/ad/
 ||lf1-ttcdn-tos.pstatp.com/adx/
 ||ixigua.com/adx/
-||douyin.com/adx/
+||musical.ly/ads/
+||musical.ly/api/ads/
+
+! ##### 通用字节跳动广告与追踪 #####
 ||bytedance.com^$script,third-party
-||bytedance.com^$popup,third-party
-||gecko.zijieapi.com^$redirect=nooptex
-||douyinvod.com^$third-party
-||amemv.com^$third-party
-||zijieapi.com^$third-party
-||bytegecko.com^$third-party
 ||*.bytedance.com^$domain=~bytedance.com,script
 ||*.snssdk.com^$domain=~snssdk.com,script
-
-# 补充的通用广告域名
-||ads.tiktokv.com^
-||ads-api.tiktok.com^
-||ads-sg.tiktok.com^
-||api-access.pangolin-sdk-toutiao.com^
-||log.pangolin-sdk-toutiao.com^
-||tp-pangolin.sgsnssdk.com^
-||sf1-be-pack.pglstatp-toutiao.com^
-||sf1-ttcdn-tos.pstatp.com/ad/
-||lf3-ttcdn-tos.pstatp.com/ad/
-||lf6-ttcdn-tos.pstatp.com/ad/
-||lf9-ttcdn-tos.pstatp.com/ad/
-||cdn.toutiao.com/pangle/
-||cdn.toutiao.com/adx/
-||cdn.bytedance.com/pangle/
-||cdn.bytedance.com/adx/
+||zijieapi.com^$third-party
+||bytegecko.com^$third-party
+||douyinvod.com^$third-party
+||amemv.com^$third-party
+||gecko.zijieapi.com^$redirect=nooptext
 ||mon-va.tiktok.com^$domain=~tiktok.com
 ||mon.tiktok.com^$domain=~tiktok.com
 
-# 移动端专项拦截
-||ttcdn.byteimg.com/ad/   # 抖音广告CDN
-||aweme.snssdk.com/ads/   # TikTok广告接口
-||video.snssdk.com/ads/   # 视频号广告
-||ugc.snssdk.com/ads/     # UGC内容广告
-||aweme.com/ads/          # TikTok主站广告
-||musical.ly/ads/         # 国际版抖音广告
-||douyin.com/api/ads/     # 抖音API广告
-||ttads.qq.com/           # QQ浏览器字节广告
-||ttads.wandoujia.com/    # 应用商店广告
-
-# 补充移动端拦截
-||tiktok.com/api/ads/
-||tiktok.com/ads/
-||tiktokv.com/ads/
-||musical.ly/api/ads/
-||tiktok.com/log/monitor/
-||ttads.baidu.com/
-||ttads.360.cn/
-||ttads.huawei.com/
-||ttads.xiaomi.com/
-
-# 动态广告特征拦截
-||snssdk.com/*/ad/
-||snssdk.com/*/adx/
-||douyin.com/*/ad/
-||douyin.com/*/adx/
-||tiktok.com/*/ad/
-||tiktok.com/*/adx/
-||bytedance.com/*/ad/
-||bytedance.com/*/adx/
-||**/adsense/
-||**/advertiser/
-||**/promotion/
-||**/commercial/
-||**/sponsor/
-||**/tracking/
-||**/log/
-||**/monitor/
-
-# 高级过滤选项
-||*.bytegecko.com^$media,script
-||*.lf-webcast.com^$xmlhttprequest
-||*.amemv.com^$domain=ixigua.com,script
-||*.douyinvod.com^$domain=bytedance.com,script
-||*.snssdk.com^$domain=~snssdk.com,xmlhttprequest
-||bytecdn.cn^$third-party
-||pstatp.com^$third-party,domain=~pstatp.com
-||snssdk.com^$third-party,domain=~snssdk.com
-||douyin.com^$third-party,domain=~douyin.com
-||tiktok.com^$third-party,domain=~tiktok.com
-||musical.ly^$third-party,domain=~musical.ly
-||bytegecko.com^$third-party,script
-||zijieapi.com^$third-party,script
-||amemv.com^$third-party,script
-||douyinvod.com^$third-party,script
-||pstatp.com^$third-party,image
-||snssdk.com^$third-party,image
-
-# 元素隐藏规则（移动端）
-luna.music.com##div[class*="ad-container"]
-luna.music.com##div[id*="ad-view"]
-luna.music.com##div[data-ad-type="reward"]
-luna.music.com##button:has-text(/立即观看|观看广告/)
-luna.music.com##a[href*="ad.douyin.com"]
-douyin.com##div[class*="sponsored"]
-douyin.com##div[data-e2e="ad-banner"]
-douyin.com##div[class*="ad为空"]
-douyin.com##div[class*="-ad"]
-douyin.com##div[class^="ad-"]
-douyin.com##div[data-ad-id]
-douyin.com##div:has(> div[data-e2e*="ad"])
-douyin.com##a[href*=".douyin.com/ad"]
-tiktok.com##div[class*="-ad"]
-tiktok.com##div[class^="ad-"]
-tiktok.com##div[data-ad-id]
-tiktok.com##div:has(> [data-e2e*="ad"])
-toutiao.com##div[class*="-ad"]
-toutiao.com##div[class^="ad-"]
-toutiao.com##div[data-ad-id]
-##div[id^="ads"]
-##div[class*="ads"]
-
-# ====== 通用广告拦截规则 =====
-! 国内主流广告SDK拦截
+! ##### 常见广告SDK与平台 #####
 ||ad.*.cn^
 ||*.adsensor.org^
 ||*.ad.*.com^
 ||*.ad*.com^
 ||*.ad*.cn^
-||*.umeng.*^
 ||*.umeng.com^
 ||*.umengcdn.com^
 ||*.mob.com^
@@ -175,7 +78,7 @@ toutiao.com##div[data-ad-id]
 ||*.adjust.com^
 ||*.appsflyer.com^
 
-! 主流APP广告拦截
+! ##### 国内主流APP广告 #####
 ||*.baidu.com/ad/
 ||*.bdstatic.com/ad/
 ||*.iqiyi.com/*/ad/
@@ -188,12 +91,11 @@ toutiao.com##div[data-ad-id]
 ||*.sina.com.cn/ad/
 ||*.sohu.com/ad/
 ||*.bilibili.com/ad/
-||*.douyin.com/ad/
 ||*.kuaishou.com/ad/
 ||*.zhihu.com/ad/
 ||*.xiaohongshu.com/ad/
 
-! 运营商广告拦截
+! ##### 运营商广告 #####
 ||*.10086.cn/ad/
 ||*.10010.com/ad/
 ||*.189.cn/ad/
@@ -201,7 +103,7 @@ toutiao.com##div[data-ad-id]
 ||*.chinaunicom.com/ad/
 ||*.chinatelecom.com/ad/
 
-! 常见APP开屏广告
+! ##### 应用开屏广告 #####
 ||*/splashad*
 ||*/splash/*ad*
 ||*/launchad*
@@ -210,7 +112,7 @@ toutiao.com##div[data-ad-id]
 ||*/startpage/ad*
 ||*/ad/startpage*
 
-! 通用广告拦截规则
+! ##### 通用广告模式与追踪 #####
 ||*/*advert*
 ||*/*banner*ad*
 ||*/*popup*ad*
@@ -224,8 +126,16 @@ toutiao.com##div[data-ad-id]
 ||*/*ad/*.jpg
 ||*/*ad/*.png
 ||*/*ad/*.gif
+||**/adsense/
+||**/advertiser/
+||**/promotion/
+||**/commercial/
+||**/sponsor/
+||**/tracking/
+||**/log/
+||**/monitor/
 
-! 屏蔽常见统计和追踪
+! ##### 常见统计和追踪 #####
 ||*.cnzz.com^
 ||*.baidu.com/analytics/
 ||*.google-analytics.com^
@@ -233,90 +143,6 @@ toutiao.com##div[data-ad-id]
 ||*.mmstat.com^
 ||*.sogou.com/analytics/
 ||*.taobao.com/monitor/
-
-# ====== 腾讯系广告 ======
-||*.gdtimg.com^
-||gdt?.qq.com^
-||adxlog?.v.qq.com^
-||adxlog??.v.qq.com^
-||ads*.qq.com^
-||ad*.qq.com^
-||e.qq.com^
-||tanx.com^
-||ad.qun.qq.com^
-||adpm.app.qq.com^
-||adxlog-upload.v.qq.com^
-||adsmind.gdtimg.com^
-||adver.qq.com^
-||adui.tgideas.qq.com^
-||ad.weixin.qq.com^
-||adn.weixin.qq.com^
-||adtest.weixin.qq.com^
-||adcdn.weixin.qq.com^
-||ad.*.qq.com^
-||ad.*.tencent.com^
-||gdt.qq.com^
-||mp.weixin.qq.com/mp/ad*
-||mp.weixin.qq.com/mp/advertisement*
-||mp.weixin.qq.com/wxopen/ad*
-||a*.qq.com/tws*
-||tbskip.qq.com^
-||mini-program-ads.qq.com^
-||qq.com/ylh/
-||qpic.cn/ylh/
-||ylh.qq.com^
-||e.qq.com/ylh/
-||mi.gdt.qq.com/ylh/
-||ssl.gdt.qq.com/ylh/
-||v.gdt.qq.com/ylh/
-||qq.com/adx/
-||qq.com/adjs/
-||qq.com/ad-material/
-||finder.weixin.qq.com^
-||finder*.weixin.qq.com^
-||recommend.weread.qq.com^
-||mp.weixin.qq.com/api/recommend^
-||szextshort.weixin.qq.com^
-||tcss.qq.com^
-||analytics.qq.com^
-||weixin.qq.com/cgi-bin/recommend^
-||push.weread.qq.com^
-||miniprogram.qq.com/recommend^
-
-# ====== 百度系广告 =====
-||baidu.com/als/ad
-||baidu.com/cpro/
-||baidu.com/pos/
-||baidu.com/adx/
-||cpro.baidu.com^
-||pos.baidu.com^
-||dup.baidustatic.com/js/du^
-||mbd.baidu.com/ad/
-||hmma.baidu.com^
-
-# ====== 阿里系广告 =====
-||alimama.com^$domain=~alimama.com
-||taobao.com/adx/
-||tbcdn.cn/adx/
-||amdc.alipay.com/ad/
-||adashx.ut.taobao.com^
-||ykad-data.youku.com^
-
-# ====== 其他平台广告 =====
-||360.cn/adx/
-||qhres.com/ad/
-||gifshow.com/adx/
-||ksad.ksapisrv.com^
-||meituan.com/adx/
-||dpfile.com/adx/
-
-# ====== 媒体资源拦截 =====
-||*/ad-*.jpg^$image
-||*/ads/*.mp4^$media
-||*/adx/*.js^
-||*/stats?type=ad^
-||*/log?ad=^
-||*/tracking/ad^
 
 !屏蔽B站直播P2P上传
 *.chat.bilibili.com
