@@ -80,7 +80,7 @@
 | Mihomo      | 拦截规则   | [adb.mrs](https://raw.githubusercontent.com/045200/ad-filter/multi/adb.mrs)             | [adb.mrs](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adb.mrs)             |
 | Mihomo      | 放行规则   | [allow.mrs](https://raw.githubusercontent.com/045200/ad-filter/multi/allow.mrs)             | [allow.mrs](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow.mrs)             |
 | Surge       | 拦截规则   | [adblock_surge.conf](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.conf) | [adblock_surge.conf](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.conf) |
-| Surge       | 放行规则   | [adblock_clash.yaml](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_surge.conf) | [adblock_clash.yaml](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_surge.conf) |
+| Surge       | 放行规则   | [allow_surge.conf](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_surge.conf) | [allow_surge.conf](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_surge.conf) |
 | Pi-hole     | 拦截规则   | [adblock_pihole.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_pihole.txt) | [adblock_pihole.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_pihole.txt) |
 | Pi-hole     | 白名单规则 | [allow_pihole.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_pihole.txt) | [allow_pihole.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_pihole.txt) |
 
