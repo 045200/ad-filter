@@ -35,9 +35,18 @@ class RuleType(Enum):
 
 @dataclass
 class AppConfig:
-    """应用程序配置"""
-    input_dir: Path = Path("data/filter")
-    output_dir: Path = Path(".")
+    """应用程序配置 - 支持GitHub环境变量"""
+    # GitHub环境变量
+    github_workspace: Path = Path(os.getenv('GITHUB_WORKSPACE', Path.cwd()))
+    github_actions: bool = os.getenv('GITHUB_ACTIONS', 'false').lower() == 'true'
+    
+    # 输入输出目录
+    input_dir: Path = github_workspace / "data" / "filter"
+    output_dir: Path = github_workspace
+    data_dir: Path = github_workspace / "data"
+    python_scripts: Path = github_workspace / "data" / "python"
+    
+    # 布隆过滤器配置
     bloom_init_cap: int = 1000000
     bloom_error_rate: float = 0.001
     max_rule_length: int = 2000
@@ -52,13 +61,30 @@ class AppConfig:
 
     def __post_init__(self):
         """从环境变量初始化配置"""
-        self.input_dir = Path(os.getenv("INPUT_DIR", str(self.input_dir)))
-        self.output_dir = Path(os.getenv("OUTPUT_DIR", str(self.output_dir)))
+        # 从环境变量获取路径配置
+        data_dir = os.getenv("DATA_DIR")
+        if data_dir:
+            self.data_dir = Path(data_dir)
+            self.input_dir = self.data_dir / "filter"
+            self.python_scripts = self.data_dir / "python"
+        
+        # 从环境变量获取输出目录
+        output_dir = os.getenv("OUTPUT_DIR")
+        if output_dir:
+            self.output_dir = Path(output_dir)
+        
+        # 从环境变量获取其他配置
         self.bloom_init_cap = int(os.getenv("BLOOM_INIT_CAP", self.bloom_init_cap))
         self.bloom_error_rate = float(os.getenv("BLOOM_ERROR_RATE", self.bloom_error_rate))
         self.max_rule_length = int(os.getenv("MAX_RULE_LENGTH", self.max_rule_length))
         self.min_rule_length = int(os.getenv("MIN_RULE_LENGTH", self.min_rule_length))
         self.batch_size = int(os.getenv("BATCH_SIZE", self.batch_size))
+        
+        logger.info(f"GitHub工作空间: {self.github_workspace}")
+        logger.info(f"输入目录: {self.input_dir}")
+        logger.info(f"输出目录: {self.output_dir}")
+        logger.info(f"数据目录: {self.data_dir}")
+        logger.info(f"Python脚本目录: {self.python_scripts}")
 
 class EnhancedBloomFilter:
     """增强版布隆过滤器"""
@@ -101,8 +127,9 @@ class EnhancedBloomFilter:
 class SyntaxDatabase:
     """语法数据库管理器"""
     
-    def __init__(self, db_path: Path):
-        self.db_path = db_path
+    def __init__(self, config: AppConfig):
+        self.config = config
+        self.db_path = config.python_scripts / "adblock_syntax_db.json"
         self.syntax_patterns = {}
         self.rule_types = {}
         self.platform_support = {}
@@ -318,13 +345,9 @@ class RuleProcessor:
 def main():
     """主函数"""
     config = AppConfig()
-    db_path = Path("data/python/adblock_syntax_db.json")
-    
-    # 确保输出目录存在
-    config.output_dir.mkdir(parents=True, exist_ok=True)
     
     # 初始化语法数据库
-    syntax_db = SyntaxDatabase(db_path)
+    syntax_db = SyntaxDatabase(config)
     if not syntax_db.load_database():
         logger.error("无法加载语法数据库，使用基本规则处理")
         # 即使数据库加载失败，也继续处理，但只处理基本规则类型
