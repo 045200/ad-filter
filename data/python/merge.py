@@ -19,15 +19,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class RuleType(Enum):
-    """规则类型枚举"""
-    DOMAIN = "domain_rule"
-    EXCEPTION = "exception_rule"
-    HOSTS = "hosts_rule"
-    ELEMENT_HIDING = "element_hiding_basic"
-    SCRIPTLET = "adguard_scriptlet"
-    DNS = "adguard_dns_rule"
-    UNSUPPORTED = "unsupported"
+    """规则类型枚举 - 修复版，与语法数据库保持一致"""
+    BLOCK = "block"
+    ALLOW = "allow"
+    COSMETIC = "cosmetic"
+    COSMETIC_ALLOW = "cosmetic_allow"
+    COSMETIC_EXTENDED = "cosmetic_extended"
+    SCRIPTLET = "scriptlet"
+    DNS_REWRITE = "dns_rewrite"
+    CLIENT_BLOCK = "client_block"
+    DNS_TYPE_BLOCK = "dns_type_block"
+    MODIFIER = "modifier"
     INVALID = "invalid"
+    UNSUPPORTED = "unsupported"
 
 @dataclass
 class AppConfig:
@@ -40,7 +44,7 @@ class AppConfig:
     min_rule_length: int = 3
     batch_size: int = 1000
     
-    # 输出文件名（保持与原始脚本兼容）
+    # 输出文件名
     output_adg_block: str = "adblock_adg.txt"
     output_adg_allow: str = "allow_adg.txt"
     output_adh_block: str = "adblock_adh.txt"
@@ -126,7 +130,7 @@ class SyntaxDatabase:
             return False
 
     def identify_rule_type(self, rule: str) -> RuleType:
-        """识别规则类型"""
+        """识别规则类型 - 修复版"""
         rule = rule.strip()
         
         if not rule or len(rule) < 3:
@@ -138,7 +142,16 @@ class SyntaxDatabase:
         for pattern_name, pattern in self.syntax_patterns.items():
             try:
                 if re.match(pattern, rule):
-                    return RuleType(self.rule_types.get(pattern_name, "invalid"))
+                    # 获取规则类型字符串
+                    rule_type_str = self.rule_types.get(pattern_name, "invalid")
+                    
+                    # 将字符串映射到RuleType枚举
+                    try:
+                        return RuleType(rule_type_str)
+                    except ValueError:
+                        # 如果枚举中没有对应的值，返回UNSUPPORTED
+                        logger.debug(f"未知规则类型: {rule_type_str}")
+                        return RuleType.UNSUPPORTED
             except re.error:
                 continue
                 
@@ -152,7 +165,10 @@ class SyntaxDatabase:
         platform_info = self.platform_support[platform]
         rule_type = self.identify_rule_type(rule)
         
-        return rule_type.value in platform_info.get("supported_rule_types", [])
+        # 获取规则类型字符串
+        rule_type_str = rule_type.value
+        
+        return rule_type_str in platform_info.get("supported_rule_types", [])
 
 class RuleProcessor:
     """规则处理器（保持文件分离）"""
@@ -210,7 +226,7 @@ class RuleProcessor:
         except Exception as e:
             logger.error(f"处理文件 {file_path} 时出错: {e}")
 
-    def _process_rule(self, rule: str, is_allow_rule: bool) -> None:
+    def _process_rule(self, rule: str, is_allow_file: bool) -> None:
         """处理单个规则"""
         self.stats['processed'] += 1
         
@@ -220,7 +236,8 @@ class RuleProcessor:
             return
             
         # 更新类型统计
-        self.stats['by_type'][rule_type.value] = self.stats['by_type'].get(rule_type.value, 0) + 1
+        rule_type_str = rule_type.value
+        self.stats['by_type'][rule_type_str] = self.stats['by_type'].get(rule_type_str, 0) + 1
         
         # 检查AdGuard支持
         adguard_supported = self.syntax_db.is_supported_by_platform(rule, "adguard")
@@ -229,6 +246,9 @@ class RuleProcessor:
         if not adguard_supported and not adhome_supported:
             self.stats['unsupported'] += 1
             return
+        
+        # 判断规则是否为允许规则
+        is_allow_rule = rule_type in [RuleType.ALLOW, RuleType.COSMETIC_ALLOW]
         
         # 处理AdGuard规则
         if adguard_supported:
