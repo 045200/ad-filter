@@ -234,6 +234,23 @@ class UnifiedRuleParser:
         # 确定动作
         action = "DIRECT" if is_exception else "REJECT"
 
+        # 特殊处理：uBlock Origin白名单移除$important修饰符
+        if platform == "ublock_origin" and is_exception:
+            if "$important" in original_rule:
+                # 移除$important修饰符
+                if "," in original_rule.split("$", 1)[1]:
+                    # 有多个修饰符的情况
+                    parts = original_rule.split("$", 1)
+                    modifiers = parts[1].split(",")
+                    filtered_modifiers = [mod for mod in modifiers if "important" not in mod]
+                    if filtered_modifiers:
+                        return f"{parts[0]}${','.join(filtered_modifiers)}"
+                    else:
+                        return parts[0]
+                else:
+                    # 只有important修饰符的情况
+                    return original_rule.split("$", 1)[0]
+
         # 应用平台特定转换规则
         if rule_type in rule_format:
             format_str = rule_format[rule_type]
@@ -435,13 +452,13 @@ class UnifiedConverter:
         """确保放行规则优先于拦截规则（用于混合输出的平台）"""
         allow_rules = []
         block_rules = []
-        
+
         for rule in rules:
             if rule.startswith('@@') or ',DIRECT' in rule:
                 allow_rules.append(rule)
             else:
                 block_rules.append(rule)
-        
+
         return allow_rules + block_rules
 
     def save_results(self, platform_rules: Dict):
@@ -455,9 +472,9 @@ class UnifiedConverter:
                 if rules["block"] or rules["allow"]:
                     # 合并并确保白名单优先
                     mixed_rules = self.ensure_allowlist_priority(rules["block"] + rules["allow"])
-                    
+
                     output_file = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform]["mixed"]
-                    
+
                     # Clash需要payload头
                     if platform == "clash":
                         content_with_header = ["payload:"] + [f"  - {line}" for line in mixed_rules]
@@ -466,20 +483,20 @@ class UnifiedConverter:
                     else:
                         with open(output_file, 'w', encoding='utf-8') as f:
                             f.write("\n".join(mixed_rules))
-                    
+
                     logger.info(f"已保存 {platform} 混合规则: {output_file} ({len(mixed_rules)} 条)")
-            
+
             # 其他平台使用独立输出
             else:
                 for rule_type in ["block", "allow"]:
                     if platform == "hosts" and rule_type == "allow":
                         continue
-                    
+
                     if rules[rule_type]:
                         output_file = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform][rule_type]
                         with open(output_file, 'w', encoding='utf-8') as f:
                             f.write("\n".join(rules[rule_type]))
-                        
+
                         logger.info(f"已保存 {platform} {rule_type} 规则: {output_file} ({len(rules[rule_type])} 条)")
 
         # 编译Mihomo规则集（使用独立文件）
@@ -497,7 +514,7 @@ class UnifiedConverter:
         try:
             # 1. 编译黑名单（adb.mrs）
             mihomo_block_output = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_output"]["block"]
-            
+
             if platform_rules["clash"]["block"]:
                 # 创建临时的Clash格式黑名单文件
                 temp_block_file = self.config.OUTPUT_DIR / "temp_block_clash.yaml"
@@ -524,7 +541,7 @@ class UnifiedConverter:
                     logger.error(f"adb.mrs编译失败，退出码: {result.returncode}")
                     logger.error(f"标准错误: {result.stderr}")
                     logger.error(f"标准输出: {result.stdout}")
-                
+
                 # 清理临时文件
                 temp_block_file.unlink(missing_ok=True)
             else:
@@ -532,7 +549,7 @@ class UnifiedConverter:
 
             # 2. 编译白名单（allow.mrs）
             mihomo_allow_output = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_output"]["allow"]
-            
+
             if platform_rules["clash"]["allow"]:
                 # 创建临时的Clash格式白名单文件
                 temp_allow_file = self.config.OUTPUT_DIR / "temp_allow_clash.yaml"
@@ -558,7 +575,7 @@ class UnifiedConverter:
                     logger.error(f"allow.mrs编译失败，退出码: {result.returncode}")
                     logger.error(f"标准错误: {result.stderr}")
                     logger.error(f"标准输出: {result.stdout}")
-                
+
                 # 清理临时文件
                 temp_allow_file.unlink(missing_ok=True)
             else:
