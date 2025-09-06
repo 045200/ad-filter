@@ -40,13 +40,13 @@
 
 ## 📊 规则统计（每12小时更新一次）
 
-最后更新时间：2025-09-06 00:25:02
+最后更新时间：2025-09-06 08:51:33
 
 - Hosts规则数量：92428
 - Adblock Plus 拦截规则数量：89201
 - Adblock Plus 白名单数量：3970
 - uBlock Origin 拦截规则数量：89222
-- uBlock Origin 白名单数量：3970
+- uBlock Origin 白名单数量：3665
 - AdGuard 拦截规则数量：97216
 - AdGuard 白名单数量：5010
 - AdGuard Home 拦截规则数量：95754
