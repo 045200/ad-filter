@@ -231,25 +231,35 @@ class UnifiedRuleParser:
         original_rule = rule_info["original"]
         is_exception = rule_info["is_exception"]
 
+        # 特殊处理：uBlock Origin白名单仅支持纯域名
+        if platform == "ublock_origin" and is_exception:
+            # 只处理域名规则，忽略其他类型
+            if rule_type == "domain_rule":
+                # 移除任何修饰符和前缀，只保留纯域名
+                pure_domain = content
+                
+                # 移除通配符前缀
+                if pure_domain.startswith('*.'):
+                    pure_domain = pure_domain[2:]
+                elif pure_domain.startswith('||'):
+                    pure_domain = pure_domain[2:]
+                
+                # 移除锚点后缀
+                if pure_domain.endswith('^'):
+                    pure_domain = pure_domain[:-1]
+                
+                # 确保是有效域名格式
+                if re.match(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', pure_domain):
+                    return pure_domain
+                else:
+                    logger.debug(f"UBO白名单跳过无效域名格式: {pure_domain}")
+                    return None
+            else:
+                # 非域名规则不添加到UBO白名单
+                return None
+
         # 确定动作
         action = "DIRECT" if is_exception else "REJECT"
-
-        # 特殊处理：uBlock Origin白名单移除$important修饰符
-        if platform == "ublock_origin" and is_exception:
-            if "$important" in original_rule:
-                # 移除$important修饰符
-                if "," in original_rule.split("$", 1)[1]:
-                    # 有多个修饰符的情况
-                    parts = original_rule.split("$", 1)
-                    modifiers = parts[1].split(",")
-                    filtered_modifiers = [mod for mod in modifiers if "important" not in mod]
-                    if filtered_modifiers:
-                        return f"{parts[0]}${','.join(filtered_modifiers)}"
-                    else:
-                        return parts[0]
-                else:
-                    # 只有important修饰符的情况
-                    return original_rule.split("$", 1)[0]
 
         # 应用平台特定转换规则
         if rule_type in rule_format:
@@ -293,15 +303,17 @@ class UnifiedRuleParser:
             elif rule_type == "hosts_rule":
                 return original_rule
 
-        # uBlock Origin和AdBlock Plus保持原格式，但过滤不支持的修饰符
+        # uBlock Origin黑名单和AdBlock Plus保持原格式，但过滤不支持的修饰符
         elif platform in ["ublock_origin", "adblock_plus"]:
-            unsupported_mods = platform_config.get("unsupported_modifiers", [])
-            for mod in unsupported_mods:
-                if f"${mod}" in original_rule:
-                    if "$" in original_rule:
-                        parts = original_rule.split("$", 1)
-                        return parts[0].strip()
-                    break
+            # 对于UBO黑名单，移除不支持的修饰符
+            if platform == "ublock_origin" and not is_exception:
+                unsupported_mods = platform_config.get("unsupported_modifiers", [])
+                for mod in unsupported_mods:
+                    if f"${mod}" in original_rule:
+                        if "$" in original_rule:
+                            parts = original_rule.split("$", 1)
+                            return parts[0].strip()
+                        break
             return original_rule
 
         return None
