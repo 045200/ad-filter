@@ -49,8 +49,6 @@
 - uBlock Origin 白名单数量：2764
 - AdGuard 拦截规则数量：21998
 - AdGuard 白名单数量：4099
-- AdGuard Home 拦截规则数量：20538
-- AdGuard Home 白名单数量：4099
 - Clash 混合规则数量：18514
 - Surge 混合规则数量：18513
 - Pi-hole 拦截规则数量：20523
@@ -69,10 +67,8 @@
 | Adblock Plus | 白名单规则 | [allow_abp.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_abp.txt)     | [allow_abp.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_abp.txt)     |
 | uBlock Origin | 拦截规则   | [adblock_ubo.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_ubo.txt) | [adblock_ubo.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_ubo.txt) |
 | uBlock Origin | 白名单规则 | [allow_ubo.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_ubo.txt)     | [allow_ubo.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_ubo.txt)     |
-| AdGuard     | 拦截规则   | [adblock_adg.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_adg.txt) | [adblock_adg.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_adg.txt) |
-| AdGuard     | 白名单规则 | [allow_adg.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_adg.txt)     | [allow_adg.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_adg.txt)     |
-| AdGuard Home | 拦截规则   | [adblock_adh.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_adh.txt) | [adblock_adh.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_adh.txt) |
-| AdGuard Home | 白名单规则 | [allow_adh.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_adh.txt)     | [allow_adh.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_adh.txt)     |
+| AdGuard含Adguard Home | 拦截规则   | [adblock_adg.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_adg.txt) | [adblock_adg.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_adg.txt) |
+| AdGuard含Adguard Home | 白名单规则 | [allow_adg.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_adg.txt)     | [allow_adg.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_adg.txt)     |
 | Clash       | 混合规则   | [adblock_clash.yaml](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_clash.yaml) | [adblock_clash.yaml](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_clash.yaml) |
 | Mihomo      | 拦截规则   | [adb.mrs](https://raw.githubusercontent.com/045200/ad-filter/multi/adb.mrs)             | [adb.mrs](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adb.mrs)             |
 | Mihomo      | 放行规则   | [allow.mrs](https://raw.githubusercontent.com/045200/ad-filter/multi/allow.mrs)             | [allow.mrs](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow.mrs)             |
