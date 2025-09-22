@@ -54,7 +54,7 @@ class UnifiedConfig:
             "allow": "allow_clash.yaml"     # 独立白名单
         },
         "surge": {
-            "block": "adblock_surge.conf"   # 仅黑名单，DOMAIN-SET格式
+            "block": "adblock_surge.txt"   # 仅黑名单，DOMAIN-SET格式
         },
         "pihole": {
             "block": "adblock_pihole.txt",
