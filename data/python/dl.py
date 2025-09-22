@@ -18,7 +18,7 @@ BASE_DIR = Path(GITHUB_WORKSPACE)
 DATA_DIR = BASE_DIR / os.getenv('DATA_DIR', 'data')
 FILTER_DIR = DATA_DIR / 'filter'
 MOD_PATH = DATA_DIR / 'mod'
-RULES_CONFIG = BASE_DIR / 'data' / 'rules.txt'
+RULES_CONFIG = BASE_DIR / 'data' / 'python' / 'rules.txt'
 
 # 从环境变量获取配置，提供默认值
 config = {

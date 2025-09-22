@@ -186,6 +186,9 @@ class EnhancedBloomFilter:
 class AdGuardMerger:
     def __init__(self, config: AdGuardConfig):
         self.config = config
+        # 移除：错误IP规则匹配正则（不再跳过||IP^格式规则）
+        # 新增：纯域名匹配正则（不含协议、前缀，符合域名格式）
+        self.pure_domain_pattern = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9\-\.]{1,61}[a-zA-Z0-9]$')
         try:
             self.syntax_db = AdGuardSyntaxDatabase(config)
         except (FileNotFoundError, RuntimeError, ValueError) as e:
@@ -203,6 +206,7 @@ class AdGuardMerger:
             "adhome_compatible_rules": 0,
             "adhome_incompatible_rules": 0,
             "bloom_false_positives": 0
+            # 移除：跳过的错误IP规则计数
         }
         self.file_stats = {
             "total_files": 0,
@@ -231,7 +235,9 @@ class AdGuardMerger:
             'is_valid': False,
             'normalized': rule.strip(),
             'is_allow': False
+            # 移除：is_invalid_ip_rule标记
         }
+        # 移除：错误IP规则优先检查逻辑
         if re.match(r'^[!#]', rule):
             result['type'] = 'comment'
             return result
@@ -277,27 +283,40 @@ class AdGuardMerger:
             return None
         normalized = analysis['normalized']
 
-        # 白名单自动补全
+        # 保留：白名单纯域名补全逻辑
         if analysis['is_allow']:
-            # 只含@@domain.com自动补全为@@||domain.com^
-            m = re.match(r'^@@([a-zA-Z0-9\.\-\_]+)$', normalized)
-            if m:
-                normalized = f'@@||{m.group(1)}^'
-            # 只含@@http(s)://xxx自动补全为@@|url|
-            elif re.match(r'^@@https?://', normalized):
-                url = normalized[2:] if normalized.startswith('@@') else normalized
-                normalized = f'@@|{url[2:]}|'
-            elif not (normalized.startswith('@@||') or normalized.startswith('@@|')):
-                # 兜底全部加@@||xxx^
-                normalized = f'@@||{normalized}^'
+            # 情况1：纯域名（无@@、无||、无协议）
+            if self.pure_domain_pattern.match(normalized.lstrip('@')):
+                # 移除可能的多余@（如@@@@domain.com），保留@@前缀
+                clean_domain = normalized.lstrip('@')
+                normalized = f'@@||{clean_domain}^'
+            # 情况2：含@@但无||和^（如@@domain.com）
+            elif normalized.startswith('@@') and not normalized.startswith('@@||') and not normalized.endswith('^'):
+                clean_domain = normalized[2:].strip()
+                if self.pure_domain_pattern.match(clean_domain):
+                    normalized = f'@@||{clean_domain}^'
+            # 原有补全逻辑保留，作为兜底
+            else:
+                # 只含@@domain.com自动补全为@@||domain.com^
+                m = re.match(r'^@@([a-zA-Z0-9\.\-\_]+)$', normalized)
+                if m:
+                    normalized = f'@@||{m.group(1)}^'
+                # 只含@@http(s)://xxx自动补全为@@|url|
+                elif re.match(r'^@@https?://', normalized):
+                    url = normalized[2:] if normalized.startswith('@@') else normalized
+                    normalized = f'@@|{url[2:]}|'
+                elif not (normalized.startswith('@@||') or normalized.startswith('@@|')):
+                    # 兜底全部加@@||xxx^
+                    normalized = f'@@||{normalized}^'
 
-        # 域名规则标准化
+        # 域名规则标准化（支持||IP^格式，统一小写处理）
         if analysis['pattern_type'] == 'domain_rule':
             try:
+                # 匹配||xxx^格式（含域名和IP）
                 match = re.match(r'^\|\|([^\^]+)\^', normalized)
                 if match:
-                    domain = match.group(1).lower()
-                    normalized = f'||{domain}^'
+                    target = match.group(1).lower()
+                    normalized = f'||{target}^'
             except re.error:
                 pass
         # URL规则标准化
@@ -319,6 +338,7 @@ class AdGuardMerger:
 
     def is_valid_rule(self, rule: str) -> bool:
         analysis = self.analyze_rule_syntax(rule)
+        # 移除：错误IP规则排除逻辑
         return analysis['is_valid']
 
     def get_files_by_prefix(self, directory: Path) -> Tuple[List[Path], List[Path]]:
@@ -359,6 +379,7 @@ class AdGuardMerger:
     def process_batch(self, batch: List[str], is_allow_file: bool = False):
         for rule in batch:
             self.stats["total_processed"] += 1
+            # 移除：错误IP规则跳过逻辑
             if not rule or re.match(r'^[!#]', rule):
                 continue
             if not self.is_valid_rule(rule):
@@ -408,7 +429,7 @@ class AdGuardMerger:
         self.config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         logger.info(f"\n=== 开始保存规则 ===")
         
-        # 只保存AdGuard格式规则
+        # 保存AdGuard格式规则（包含||IP^格式规则）
         adg_block_path = self.config.OUTPUT_DIR / self.config.OUTPUT_ADG_BLOCK
         with open(adg_block_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(sorted(self.adguard_block_rules)))
@@ -464,7 +485,7 @@ class AdGuardMerger:
 - AdGuard拦截规则: {self.config.OUTPUT_ADG_BLOCK}
 - AdGuard允许规则: {self.config.OUTPUT_ADG_ALLOW}
 
-**说明**: 输出规则完全兼容AdGuard Home，AdGuard Home会自动忽略不支持的规则类型。
+**说明**: 输出规则完全兼容AdGuard Home，包含||IP^格式的有效规则。
 
 """
         if os.getenv('GITHUB_STEP_SUMMARY'):
