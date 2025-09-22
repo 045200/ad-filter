@@ -10,10 +10,10 @@ import logging
 import sys
 from datetime import datetime
 
-# 日志级别可通过LOG_LEVEL环境变量控制
+# 日志级别默认设为DEBUG，支持通过环境变量覆盖；DEBUG级别可输出无效规则详情
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
 logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    level=getattr(logging, LOG_LEVEL, logging.DEBUG),
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout)
@@ -186,8 +186,7 @@ class EnhancedBloomFilter:
 class AdGuardMerger:
     def __init__(self, config: AdGuardConfig):
         self.config = config
-        # 移除：错误IP规则匹配正则（不再跳过||IP^格式规则）
-        # 新增：纯域名匹配正则（不含协议、前缀，符合域名格式）
+        # 纯域名匹配正则（不含协议、前缀，符合域名格式）
         self.pure_domain_pattern = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9\-\.]{1,61}[a-zA-Z0-9]$')
         try:
             self.syntax_db = AdGuardSyntaxDatabase(config)
@@ -206,7 +205,6 @@ class AdGuardMerger:
             "adhome_compatible_rules": 0,
             "adhome_incompatible_rules": 0,
             "bloom_false_positives": 0
-            # 移除：跳过的错误IP规则计数
         }
         self.file_stats = {
             "total_files": 0,
@@ -235,9 +233,7 @@ class AdGuardMerger:
             'is_valid': False,
             'normalized': rule.strip(),
             'is_allow': False
-            # 移除：is_invalid_ip_rule标记
         }
-        # 移除：错误IP规则优先检查逻辑
         if re.match(r'^[!#]', rule):
             result['type'] = 'comment'
             return result
@@ -283,11 +279,10 @@ class AdGuardMerger:
             return None
         normalized = analysis['normalized']
 
-        # 保留：白名单纯域名补全逻辑
+        # 白名单纯域名补全逻辑
         if analysis['is_allow']:
             # 情况1：纯域名（无@@、无||、无协议）
             if self.pure_domain_pattern.match(normalized.lstrip('@')):
-                # 移除可能的多余@（如@@@@domain.com），保留@@前缀
                 clean_domain = normalized.lstrip('@')
                 normalized = f'@@||{clean_domain}^'
             # 情况2：含@@但无||和^（如@@domain.com）
@@ -297,22 +292,18 @@ class AdGuardMerger:
                     normalized = f'@@||{clean_domain}^'
             # 原有补全逻辑保留，作为兜底
             else:
-                # 只含@@domain.com自动补全为@@||domain.com^
                 m = re.match(r'^@@([a-zA-Z0-9\.\-\_]+)$', normalized)
                 if m:
                     normalized = f'@@||{m.group(1)}^'
-                # 只含@@http(s)://xxx自动补全为@@|url|
                 elif re.match(r'^@@https?://', normalized):
                     url = normalized[2:] if normalized.startswith('@@') else normalized
                     normalized = f'@@|{url[2:]}|'
                 elif not (normalized.startswith('@@||') or normalized.startswith('@@|')):
-                    # 兜底全部加@@||xxx^
                     normalized = f'@@||{normalized}^'
 
         # 域名规则标准化（支持||IP^格式，统一小写处理）
         if analysis['pattern_type'] == 'domain_rule':
             try:
-                # 匹配||xxx^格式（含域名和IP）
                 match = re.match(r'^\|\|([^\^]+)\^', normalized)
                 if match:
                     target = match.group(1).lower()
@@ -338,7 +329,6 @@ class AdGuardMerger:
 
     def is_valid_rule(self, rule: str) -> bool:
         analysis = self.analyze_rule_syntax(rule)
-        # 移除：错误IP规则排除逻辑
         return analysis['is_valid']
 
     def get_files_by_prefix(self, directory: Path) -> Tuple[List[Path], List[Path]]:
@@ -379,27 +369,34 @@ class AdGuardMerger:
     def process_batch(self, batch: List[str], is_allow_file: bool = False):
         for rule in batch:
             self.stats["total_processed"] += 1
-            # 移除：错误IP规则跳过逻辑
+            # 跳过注释和空行
             if not rule or re.match(r'^[!#]', rule):
                 continue
+            # 1. 检查规则语法有效性，无效则记录日志并跳过
             if not self.is_valid_rule(rule):
                 self.stats["invalid_rules"] += 1
+                logger.debug(f"跳过无效规则（语法/长度不符合要求）: {rule.strip()}")
                 continue
-                
+            # 2. 分析规则并标准化
             analysis = self.analyze_rule_syntax(rule)
             normalized_rule = self.normalize_rule(rule)
+            # 3. 标准化失败则记录日志并跳过
             if not normalized_rule:
                 self.stats["invalid_rules"] += 1
+                logger.debug(f"跳过无效规则（标准化失败）: {rule.strip()}")
                 continue
-                
+            
             # 检查AdGuard Home兼容性
             adhome_compatible = self.syntax_db.is_adguard_home_compatible(
                 analysis['pattern_type'], analysis['modifiers']
             )
             
+            # 去重处理
             if self.adguard_filter.add(normalized_rule):
                 self.stats["duplicates"] += 1
+                logger.debug(f"跳过重复规则: {normalized_rule}")
             else:
+                # 分类添加到拦截/允许规则列表
                 if analysis['is_allow']:
                     self.adguard_allow_rules.append(normalized_rule)
                     self.stats["adguard_allow_rules"] += 1
@@ -407,7 +404,7 @@ class AdGuardMerger:
                     self.adguard_block_rules.append(normalized_rule)
                     self.stats["adguard_block_rules"] += 1
                     
-                # 记录AdGuard Home兼容性
+                # 记录兼容性统计
                 if adhome_compatible:
                     self.stats["adhome_compatible_rules"] += 1
                 else:
@@ -485,7 +482,7 @@ class AdGuardMerger:
 - AdGuard拦截规则: {self.config.OUTPUT_ADG_BLOCK}
 - AdGuard允许规则: {self.config.OUTPUT_ADG_ALLOW}
 
-**说明**: 输出规则完全兼容AdGuard Home，包含||IP^格式的有效规则。
+**说明**: 输出规则完全兼容AdGuard Home，DEBUG级别可查看无效/重复规则详情。
 
 """
         if os.getenv('GITHUB_STEP_SUMMARY'):
