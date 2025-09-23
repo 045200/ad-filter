@@ -40,20 +40,20 @@
 
 ## 📊 规则统计（每12小时更新一次）
 
-最后更新时间：2025-09-23 20:23:43
+最后更新时间：2025-09-23 22:01:48
 
-- Hosts规则数量：18318
-- Adblock Plus 拦截规则数量：18317
-- Adblock Plus 白名单数量：3345
-- uBlock Origin 拦截规则数量：18317
-- uBlock Origin 白名单数量：3345
-- AdGuard 拦截规则数量：18597
-- AdGuard 白名单数量：3489
-- Clash 拦截规则数量：18319
+- Hosts规则数量：0
+- Adblock Plus 拦截规则数量：0
+- Adblock Plus 白名单数量：0
+- uBlock Origin 拦截规则数量：0
+- uBlock Origin 白名单数量：0
+- AdGuard 拦截规则数量：14862
+- AdGuard 白名单数量：1460
+- Clash 拦截规则数量：0
 - Clash 白名单数量: 2357
 - Surge 拦截规则数量：399
-- Pi-hole 拦截规则数量：18318
-- Pi-hole 白名单数量：3345
+- Pi-hole 拦截规则数量：0
+- Pi-hole 白名单数量：0
 
 
 ## 📥 规则订阅
