@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+"""
+增强版统一规则转换器 - 支持AdGuard到多平台规则转换
+支持平台：Clash, Surge, Mihomo, Pi-hole, uBlock Origin, Adblock Plus, Hosts文件
+"""
+
 import os
 import re
 import json
@@ -41,7 +47,7 @@ class UnifiedConfig:
     # 输出目录 - 也是GitHub根目录
     OUTPUT_DIR: Path = BASE_DIR
 
-    # 语法数据库 - 放在根目录
+    # 语法数据库 - 放在根目录的data/python目录下
     SYNTAX_DB_FILE: Path = BASE_DIR / "data" / "python" / "adblock_syntax_db.json"
 
     # Mihomo工具配置 - 修正为github根目录的data路径下
@@ -81,16 +87,21 @@ class UnifiedConfig:
     ENABLE_DEDUPLICATION: bool = True
     ENABLE_BLOOM_FILTER: bool = BLOOM_AVAILABLE
     ENABLE_WHITELIST_FILTERING: bool = True
-    VERBOSE_LOGGING: bool = False
+    VERBOSE_LOGGING: bool = os.getenv('VERBOSE_LOGGING', 'false').lower() == 'true'
 
     # 性能配置
     BATCH_PROCESSING_SIZE: int = 1000
     BLOOM_FILTER_CAPACITY: int = 1000000
     BLOOM_FILTER_ERROR_RATE: float = 0.001
 
-    # 新增：AdGuard特定配置
+    # AdGuard特定配置
     ENABLE_ADGUARD_SPECIFIC_PARSING: bool = True
     STRICT_SYNTAX_VALIDATION: bool = True
+
+    # GitHub Actions环境变量
+    GITHUB_ACTIONS: bool = os.getenv('GITHUB_ACTIONS', 'false').lower() == 'true'
+    GITHUB_REPOSITORY: str = os.getenv('GITHUB_REPOSITORY', 'unknown/repository')
+    GITHUB_SHA: str = os.getenv('GITHUB_SHA', 'unknown')
 
 
 class UnifiedRuleParser:
@@ -106,21 +117,36 @@ class UnifiedRuleParser:
         self.adguard_domain_pattern = re.compile(r'^\|\|([a-zA-Z0-9.*-]+[a-zA-Z0-9])\^?$')
         self.adguard_pattern = re.compile(r'^\|\|([a-zA-Z0-9.*-]+)\^?\$?(.*)$')
         
-        # AdGuard特定修饰符检测模式
-        self.adguard_modifier_pattern = re.compile(r'\$([a-zA-Z-]+)(?:=([^,\s]+))?')
+        # AdGuard特定修饰符检测模式 - 增强支持复杂组合
+        self.adguard_modifier_pattern = re.compile(r'\$([a-zA-Z-]+)(?:=([^,\s]+))?(?:,|$)')
 
     def load_syntax_database(self) -> Dict:
         """加载语法数据库 - 完全依赖外部数据库"""
-        if not self.config.SYNTAX_DB_FILE.exists():
+        # 尝试多个可能的路径
+        possible_paths = [
+            self.config.SYNTAX_DB_FILE,
+            self.config.BASE_DIR / "adblock_syntax_db.json",
+            Path(__file__).parent / "adblock_syntax_db.json"
+        ]
+        
+        db_path = None
+        for path in possible_paths:
+            if path.exists():
+                db_path = path
+                break
+        
+        if not db_path:
             raise FileNotFoundError(
-                f"语法数据库文件不存在: {self.config.SYNTAX_DB_FILE}。"
-                "请确保已正确配置外部语法数据库。"
+                f"语法数据库文件不存在。尝试路径: {possible_paths}"
             )
         
+        logger.info(f"使用语法数据库: {db_path}")
+        
         try:
-            with open(self.config.SYNTAX_DB_FILE, 'r', encoding='utf-8') as f:
+            with open(db_path, 'r', encoding='utf-8') as f:
                 db = json.load(f)
                 self.validate_syntax_database(db)
+                logger.info(f"语法数据库版本: {db.get('version', '未知')}")
                 return db
         except Exception as e:
             raise RuntimeError(f"加载语法数据库失败: {e}")
@@ -145,6 +171,9 @@ class UnifiedRuleParser:
 
         for name, pattern_str in patterns.items():
             try:
+                # 对特殊字符进行转义处理
+                if name.endswith('_rule') and not pattern_str.startswith('^'):
+                    pattern_str = '^' + pattern_str
                 compiled[name] = re.compile(pattern_str)
             except re.error as e:
                 logger.warning(f"无法编译模式 {name}: {e}")
@@ -239,11 +268,11 @@ class UnifiedRuleParser:
         return result
 
     def extract_adguard_modifiers(self, rule_content: str, result: Dict[str, Any]) -> None:
-        """提取AdGuard特定修饰符"""
+        """提取AdGuard特定修饰符 - 支持复杂组合"""
         if '$' not in rule_content:
             return
         
-        # 使用正则表达式提取所有修饰符
+        # 使用正则表达式提取所有修饰符，支持$popup,third-party等多修饰符组合
         modifiers = self.adguard_modifier_pattern.findall(rule_content)
         for modifier_name, modifier_value in modifiers:
             if modifier_name:  # 确保修饰符名称不为空
@@ -528,7 +557,7 @@ class UnifiedConverter:
                 "block": 0,
                 "allow": 0
             },
-            "adguard_specific_rules": 0  # 新增：统计AdGuard特定规则
+            "adguard_specific_rules": 0
         }
 
         # 初始化平台统计
@@ -538,7 +567,7 @@ class UnifiedConverter:
                 "allow_rules": 0,
                 "supported": 0,
                 "unsupported": 0,
-                "adguard_rules_converted": 0  # 新增：AdGuard规则转换统计
+                "adguard_rules_converted": 0
             }
 
         # 初始化布隆过滤器和哈希表
@@ -695,7 +724,7 @@ class UnifiedConverter:
                 # 保存黑名单
                 if rules["block"]:
                     output_file = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform]["block"]
-                    content_with_header = ["#RULE-SET,ad-filter,REJECT", "payload:"] + [f"  - '{line}'" for line in rules["block"]]
+                    content_with_header = ["# AdBlock规则集 - Clash格式", "payload:"] + [f"  - '{line}'" for line in rules["block"]]
                     with open(output_file, 'w', encoding='utf-8') as f:
                         f.write("\n".join(content_with_header))
                     logger.info(f"已保存 {platform} 黑名单规则: {output_file} ({len(rules['block'])} 条)")
@@ -703,7 +732,7 @@ class UnifiedConverter:
                 # 保存白名单
                 if rules["allow"]:
                     output_file = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform]["allow"]
-                    content_with_header = ["#RULE-SET,ad-filter,DIRECT", "payload:"] + [f"  - '{line}'" for line in rules["allow"]]
+                    content_with_header = ["# 白名单规则集 - Clash格式", "payload:"] + [f"  - '{line}'" for line in rules["allow"]]
                     with open(output_file, 'w', encoding='utf-8') as f:
                         f.write("\n".join(content_with_header))
                     logger.info(f"已保存 {platform} 白名单规则: {output_file} ({len(rules['allow'])} 条)")
@@ -712,8 +741,8 @@ class UnifiedConverter:
             elif platform == "surge":
                 if rules["block"]:
                     output_file = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform]["block"]
-                    # Surge DOMAIN-SET格式：每行一个域名，前面加点
-                    content_with_header = ["#DOMAIN-SET,ad-filter,REJECT"] + rules["block"]
+                    # Surge DOMAIN-SET格式
+                    content_with_header = ["# AdBlock规则集 - Surge格式", "#DOMAIN-SET,ad-filter,REJECT"] + rules["block"]
                     with open(output_file, 'w', encoding='utf-8') as f:
                         f.write("\n".join(content_with_header))
                     logger.info(f"已保存 {platform} 黑名单规则: {output_file} ({len(rules['block'])} 条)")
@@ -761,15 +790,14 @@ class UnifiedConverter:
             # 3. 编译过滤后的黑名单（adb.mrs）
             mihomo_block_output = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_output"]["block"]
 
-            # 创建临时的Clash格式黑名单文件，保持隐式格式
+            # 创建临时的Clash格式黑名单文件
             temp_block_file = self.config.OUTPUT_DIR / "temp_block_clash.yaml"
             
-            # 直接使用+.domain.com格式
             content_with_header = ["payload:"] + [f"  - '{rule}'" for rule in clash_rules]
             with open(temp_block_file, 'w', encoding='utf-8') as f:
                 f.write("\n".join(content_with_header))
 
-            # Mihomo命令：输入格式为yaml，规则类型为domain
+            # Mihomo命令
             cmd_block = [
                 str(self.config.MIHOMO_TOOL_PATH),
                 "convert-ruleset",
@@ -943,11 +971,10 @@ class UnifiedConverter:
                 logger.warning(f"文件为空: {file_path}")
                 return False
             
-            # 检查文件头（Mihomo规则集文件通常有特定格式）
+            # 检查文件头
             with open(file_path, 'rb') as f:
-                header = f.read(100)  # 读取前100字节
+                header = f.read(100)
             
-            # 基本的二进制文件检查
             if len(header) < 10:
                 logger.warning(f"文件过小: {file_path}")
                 return False
@@ -960,7 +987,7 @@ class UnifiedConverter:
             return False
 
     def print_statistics(self):
-        """打印转换统计信息 - 增强AdGuard统计"""
+        """打印转换统计信息"""
         logger.info("=" * 60)
         logger.info("规则转换统计")
         logger.info("=" * 60)
@@ -995,6 +1022,41 @@ class UnifiedConverter:
                 logger.info("✓ 所有Mihomo规则集文件验证通过")
             else:
                 logger.warning("⚠ 部分Mihomo规则集文件验证失败")
+
+        # GitHub Actions环境下的额外输出
+        if self.config.GITHUB_ACTIONS:
+            self.generate_github_summary()
+
+    def generate_github_summary(self):
+        """生成GitHub Actions摘要"""
+        summary = f"""## 多平台规则转换结果
+
+**处理时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+**仓库**: {self.config.GITHUB_REPOSITORY}
+**提交**: {self.config.GITHUB_SHA[:7]}
+
+### 处理统计
+- 总处理规则: {self.stats['total_processed']}
+- AdGuard特定规则: {self.stats['adguard_specific_rules']}
+- 重复规则移除: {self.stats['duplicates']}
+- 不支持规则: {self.stats['unsupported']}
+- Mihomo白名单过滤: {self.stats['whitelist_filtered']}
+
+### 平台支持情况
+"""
+        
+        for platform, stats in self.stats['platforms'].items():
+            total_rules = stats['block_rules'] + stats['allow_rules']
+            summary += f"- **{platform.upper()}**: {total_rules} 条规则\n"
+        
+        if self.stats['mihomo_hashes']:
+            summary += "\n### Mihomo规则集校验\n"
+            for filename, hash_value in self.stats['mihomo_hashes'].items():
+                summary += f"- {filename}: `{hash_value}`\n"
+
+        if os.getenv('GITHUB_STEP_SUMMARY'):
+            with open(os.getenv('GITHUB_STEP_SUMMARY'), 'a', encoding='utf-8') as f:
+                f.write(summary)
 
 
 def main():
