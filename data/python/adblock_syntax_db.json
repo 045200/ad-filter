@@ -1,12 +1,12 @@
 {
-  "version": "4.1",
-  "description": "增强版统一规则语法数据库 - 支持多平台规则转换",
-  "last_updated": "2025-09-02",
+  "version": "4.2",
+  "description": "增强版统一规则语法数据库 - 支持多平台规则转换，专注AdGuard语法兼容性",
+  "last_updated": "2025-09-23",
   "author": "AI Assistant",
   "database_integrity": {
     "checksum": "sha256:...",
-    "validation_rules": "complete",
-    "normalization_rules": "enhanced",
+    "validation_rules": "enhanced",
+    "normalization_rules": "adguard_optimized",
     "compatibility_mapping": "detailed"
   },
   "syntax_patterns": {
@@ -20,12 +20,11 @@
     "element_hiding_exception": "#@#[^#\\n]+$",
     "extended_css": "#\\?#[^#\\n]+$",
     "adguard_scriptlet": "#%#[^#\\n]+$",
-    "adguard_dns_rule": "^\\|\\|[^\\^\\n]*\\^\\$dnstype=",
+    "adguard_dns_rewrite": ".*\\$dnsrewrite=([^\\s,]+)",
+    "adguard_removeparam": ".*\\$removeparam=([^\\s,]+)",
+    "adguard_redirect": ".*\\$redirect=([^\\s,]+)",
+    "adguard_csp": ".*\\$csp=([^\\s,]+)",
     "adguard_stealth_rule": "^\\|\\|[^\\^\\n]*\\^\\$stealth",
-    "adguard_redirect_rule": "\\$redirect=[^\\s]+",
-    "adguard_removeparam_rule": "\\$removeparam=[^\\s]+",
-    "adguard_csp_rule": "\\$csp=[^\\s]+",
-    "adguard_replace_rule": "\\$replace=[^\\s]+",
     "adguard_cookie_rule": "\\$cookie=[^\\s]+",
     "adguard_generichide": "\\$generichide(?:=|$)",
     "adguard_specific_domain": "^[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$",
@@ -53,7 +52,10 @@
     "surge_domain_suffix": "^DOMAIN-SUFFIX,[^,]+,[^,]+$",
     "surge_domain_keyword": "^DOMAIN-KEYWORD,[^,]+,[^,]+$",
     "surge_url_regex": "^URL-REGEX,[^,]+,[^,]+$",
-    "surge_ip_cidr": "^IP-CIDR(6)?,[^,]+,[^,]+$"
+    "surge_ip_cidr": "^IP-CIDR(6)?,[^,]+,[^,]+$",
+    "ubo_element_hiding": "^##[^#\\n]+$",
+    "ubo_element_hiding_exception": "^#@#[^#\\n]+$",
+    "abp_element_hiding": "^##[^#\\n]+$"
   },
   "rule_types": {
     "comment": "invalid",
@@ -66,13 +68,12 @@
     "element_hiding_exception": "cosmetic_allow",
     "extended_css": "cosmetic_extended",
     "adguard_scriptlet": "scriptlet",
-    "adguard_dns_rule": "block",
-    "adguard_stealth_rule": "block",
-    "adguard_redirect_rule": "block",
-    "adguard_removeparam_rule": "block",
-    "adguard_csp_rule": "block",
-    "adguard_replace_rule": "block",
-    "adguard_cookie_rule": "block",
+    "adguard_dns_rewrite": "dns_rewrite",
+    "adguard_removeparam": "remove_param",
+    "adguard_redirect": "redirect",
+    "adguard_csp": "content_security_policy",
+    "adguard_stealth_rule": "stealth",
+    "adguard_cookie_rule": "cookie_block",
     "adguard_generichide": "cosmetic",
     "adguard_specific_domain": "block",
     "adguard_home_dns_rewrite": "dns_rewrite",
@@ -99,7 +100,10 @@
     "surge_domain_suffix": "block",
     "surge_domain_keyword": "block",
     "surge_url_regex": "block",
-    "surge_ip_cidr": "block"
+    "surge_ip_cidr": "block",
+    "ubo_element_hiding": "cosmetic",
+    "ubo_element_hiding_exception": "cosmetic_allow",
+    "abp_element_hiding": "cosmetic"
   },
   "modifiers": {
     "domain": "domain=([^\\s,]+)",
@@ -156,37 +160,38 @@
   },
   "platform_support": {
     "adguard": {
-      "supported_rule_types": ["domain_rule", "exception_rule", "element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule", "adguard_dns_rule", "adguard_stealth_rule", "regex_rule", "hosts_rule", "adguard_header", "adguard_jsonprune", "adguard_hls", "adguard_all"],
+      "supported_rule_types": ["domain_rule", "exception_rule", "element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect", "adguard_removeparam", "adguard_csp", "adguard_dns_rewrite", "adguard_stealth_rule", "regex_rule", "hosts_rule", "adguard_header", "adguard_jsonprune", "adguard_hls", "adguard_all"],
       "unsupported_rule_types": [],
       "unsupported_modifiers": [],
-      "conversion_notes": "原生AdGuard格式，支持所有功能"
+      "special_modifiers": ["dnsrewrite", "removeparam", "redirect", "csp", "cookie", "client", "dnstype", "important", "badfilter", "denyallow", "app", "network", "method", "jsonprune", "hls", "all"],
+      "conversion_notes": "原生AdGuard格式，支持所有功能[citation:2]"
     },
     "adguard_home": {
-      "supported_rule_types": ["domain_rule", "exception_rule", "adguard_dns_rule", "adguard_home_dns_rewrite", "adguard_home_client", "adguard_home_dnstype", "hosts_rule", "regex_rule", "adguard_important", "adguard_badfilter", "adguard_denyallow"],
-      "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule", "adguard_header", "adguard_jsonprune", "adguard_hls", "adguard_all"],
-      "unsupported_modifiers": ["removeparam", "csp", "replace", "cookie", "redirect", "header", "scriptlet", "elemhide", "generichide", "specifichide", "jsonprune", "hls", "all"],
+      "supported_rule_types": ["domain_rule", "exception_rule", "adguard_dns_rewrite", "adguard_home_dns_rewrite", "adguard_home_client", "adguard_home_dnstype", "hosts_rule", "regex_rule", "adguard_important", "adguard_badfilter", "adguard_denyallow"],
+      "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect", "adguard_removeparam", "adguard_csp", "adguard_header", "adguard_jsonprune", "adguard_hls", "adguard_all"],
+      "unsupported_modifiers": ["removeparam", "csp", "redirect", "header", "scriptlet", "elemhide", "generichide", "specifichide", "jsonprune", "hls", "all"],
       "special_modifiers": ["client", "dnstype", "dnsrewrite", "important", "badfilter", "denyallow"],
-      "conversion_notes": "DNS级别过滤，不支持页面内容修改"
+      "conversion_notes": "DNS级别过滤，不支持页面内容修改[citation:10]"
     },
     "clash": {
       "supported_rule_types": ["domain_rule", "exception_rule", "regex_rule"],
-      "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule", "adguard_header", "adguard_jsonprune", "adguard_hls", "adguard_all", "adguard_dns_rule", "adguard_stealth_rule"],
+      "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect", "adguard_removeparam", "adguard_csp", "adguard_dns_rewrite", "adguard_stealth_rule"],
       "supported_modifiers": ["domain", "important"],
       "rule_format": {
-        "domain_rule": "DOMAIN-SUFFIX,{domain},{action}",
-        "exception_rule": "DOMAIN-SUFFIX,{domain},DIRECT",
-        "regex_rule": "DOMAIN-KEYWORD,{pattern},{action}"
+        "domain_rule": "+.{domain}",
+        "exception_rule": "-.{domain}",
+        "regex_rule": "/{pattern}/"
       },
       "conversion_notes": "使用Clash规则格式，支持域名和正则匹配"
     },
     "surge": {
       "supported_rule_types": ["domain_rule", "exception_rule", "regex_rule", "surge_domain_suffix", "surge_domain_keyword", "surge_url_regex", "surge_ip_cidr"],
-      "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule", "adguard_header", "adguard_jsonprune", "adguard_hls", "adguard_all", "adguard_dns_rule", "adguard_stealth_rule"],
+      "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect", "adguard_removeparam", "adguard_csp", "adguard_dns_rewrite", "adguard_stealth_rule"],
       "supported_modifiers": ["domain", "important"],
       "rule_format": {
-        "domain_rule": "DOMAIN-SUFFIX,{domain},{action}",
-        "exception_rule": "DOMAIN-SUFFIX,{domain},DIRECT",
-        "regex_rule": "URL-REGEX,{pattern},{action}",
+        "domain_rule": ".{domain}",
+        "exception_rule": "@.{domain}",
+        "regex_rule": "URL-REGEX,{pattern},REJECT",
         "surge_domain_suffix": "{rule}",
         "surge_domain_keyword": "{rule}",
         "surge_url_regex": "{rule}",
@@ -196,7 +201,7 @@
     },
     "mihomo": {
       "supported_rule_types": ["domain_rule", "exception_rule"],
-      "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule", "regex_rule", "adguard_header", "adguard_jsonprune", "adguard_hls", "adguard_all", "adguard_dns_rule", "adguard_stealth_rule"],
+      "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect", "adguard_removeparam", "adguard_csp", "regex_rule", "adguard_dns_rewrite", "adguard_stealth_rule"],
       "supported_modifiers": ["domain", "important"],
       "conversion_notes": "需要从Clash规则编译为MRS格式，不支持复杂正则",
       "compilation_required": true,
@@ -204,35 +209,50 @@
     },
     "pihole": {
       "supported_rule_types": ["domain_rule", "exception_rule", "hosts_rule", "pihole_domain"],
-      "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule", "regex_rule", "adguard_header", "adguard_jsonprune", "adguard_hls", "adguard_all", "adguard_dns_rule", "adguard_stealth_rule"],
+      "unsupported_rule_types": ["element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect", "adguard_removeparam", "adguard_csp", "regex_rule", "adguard_dns_rewrite", "adguard_stealth_rule"],
       "rule_format": {
         "domain_rule": "{domain}",
         "exception_rule": "@@{domain}",
         "hosts_rule": "0.0.0.0 {domain}",
         "pihole_domain": "{domain}"
       },
-      "conversion_notes": "仅支持简单域名规则，不支持修饰符"
+      "conversion_notes": "仅支持简单域名规则，不支持修饰符[citation:10]"
     },
     "ublock_origin": {
-      "supported_rule_types": ["domain_rule", "exception_rule", "element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "regex_rule"],
-      "unsupported_rule_types": ["adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule", "adguard_header", "adguard_home_dns_rewrite", "adguard_home_client", "adguard_home_dnstype"],
+      "supported_rule_types": ["domain_rule", "exception_rule", "ubo_element_hiding", "ubo_element_hiding_exception", "extended_css", "adguard_scriptlet", "regex_rule"],
+      "unsupported_rule_types": ["adguard_redirect", "adguard_removeparam", "adguard_csp", "adguard_dns_rewrite", "adguard_home_dns_rewrite", "adguard_home_client", "adguard_home_dnstype"],
       "unsupported_modifiers": ["dnsrewrite", "cname", "client", "dnstype", "denyallow", "ctag", "badfilter", "redirect", "removeheader", "removeparam", "app", "network", "method"],
-      "conversion_notes": "支持大部分AdGuard语法，但过滤不支持的修饰符"
+      "rule_format": {
+        "domain_rule": "||{domain}^",
+        "exception_rule": "@@||{domain}^",
+        "ubo_element_hiding": "##{pattern}",
+        "ubo_element_hiding_exception": "#@#{pattern}",
+        "extended_css": "#?#{pattern}",
+        "adguard_scriptlet": "#%#{pattern}",
+        "regex_rule": "/{pattern}/"
+      },
+      "conversion_notes": "支持大部分AdGuard语法，但过滤不支持的修饰符[citation:1]"
     },
     "adblock_plus": {
-      "supported_rule_types": ["domain_rule", "exception_rule", "element_hiding_basic", "element_hiding_exception"],
-      "unsupported_rule_types": ["adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule", "adguard_header", "adguard_jsonprune", "adguard_hls", "adguard_all", "adguard_dns_rule", "adguard_stealth_rule", "extended_css", "adguard_scriptlet", "regex_rule"],
+      "supported_rule_types": ["domain_rule", "exception_rule", "abp_element_hiding", "element_hiding_exception"],
+      "unsupported_rule_types": ["adguard_redirect", "adguard_removeparam", "adguard_csp", "adguard_dns_rewrite", "adguard_stealth_rule", "extended_css", "adguard_scriptlet", "regex_rule"],
       "unsupported_modifiers": ["dnsrewrite", "cname", "client", "dnstype", "denyallow", "ctag", "badfilter", "redirect", "removeheader", "removeparam", "app", "network", "method", "jsonprune", "hls", "all"],
+      "rule_format": {
+        "domain_rule": "||{domain}^",
+        "exception_rule": "@@||{domain}^",
+        "abp_element_hiding": "##{pattern}",
+        "element_hiding_exception": "#@#{pattern}"
+      },
       "conversion_notes": "类似uBlock Origin，但支持度略低"
     },
     "hosts": {
       "supported_rule_types": ["hosts_rule", "domain_rule"],
-      "unsupported_rule_types": ["exception_rule", "element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect_rule", "adguard_removeparam_rule", "adguard_csp_rule", "adguard_replace_rule", "adguard_cookie_rule", "regex_rule", "adguard_header", "adguard_jsonprune", "adguard_hls", "adguard_all", "adguard_dns_rule", "adguard_stealth_rule"],
+      "unsupported_rule_types": ["exception_rule", "element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect", "adguard_removeparam", "adguard_csp", "regex_rule", "adguard_dns_rewrite", "adguard_stealth_rule"],
       "rule_format": {
         "hosts_rule": "{rule}",
         "domain_rule": "0.0.0.0 {domain}"
       },
-      "conversion_notes": "仅支持hosts格式规则，不支持例外规则"
+      "conversion_notes": "仅支持hosts格式规则，不支持例外规则[citation:10]"
     }
   },
   "common_patterns": {
@@ -291,8 +311,8 @@
     }
   },
   "performance_optimization": {
-    "rule_compilation_notes": "AdGuard最近在Safari转换器上进行了优化，使过滤规则转换速度提高了30倍（从10-30秒减少到0.5-2秒）",
-    "dnr_rule_handling": "AdGuard浏览器扩展MV3版本中使用预构建的DNR（Declarative Net Request）规则集，提高了性能和安全性",
+    "rule_compilation_notes": "AdGuard最近在Safari转换器上进行了优化，使过滤规则转换速度提高了30倍[citation:2]",
+    "dnr_rule_handling": "AdGuard浏览器扩展MV3版本中使用预构建的DNR规则集，提高了性能和安全性",
     "recommended_practices": "对于大型规则集，建议使用分块处理和增量更新来优化性能",
     "bloom_filter_config": {
       "initial_capacity": 1000000,
@@ -304,13 +324,21 @@
   "integrity_checks": {
     "required_fields": ["version", "syntax_patterns", "rule_types", "modifiers", "validation_rules", "platform_support"],
     "recommended_fields": ["common_patterns", "normalization_rules", "performance_optimization"],
-    "version_compatibility": "4.x"
+    "version_compatibility": "4.2"
   },
-  "adguard_home_specific": {
-    "supported_rule_types": ["domain_rule", "exception_rule", "adguard_dns_rule", "adguard_home_dns_rewrite", "adguard_home_client", "adguard_home_dnstype", "hosts_rule", "regex_rule"],
-    "unsupported_patterns": ["##", "#@#", "#%#", "$$", "script:inject", "##^", "##*"],
+  "adguard_specific_enhancements": {
+    "supported_rule_types": ["domain_rule", "exception_rule", "element_hiding_basic", "element_hiding_exception", "extended_css", "adguard_scriptlet", "adguard_redirect", "adguard_removeparam", "adguard_csp", "adguard_dns_rewrite", "adguard_stealth_rule", "regex_rule", "hosts_rule", "adguard_header", "adguard_jsonprune", "adguard_hls", "adguard_all"],
+    "unsupported_patterns": [],
     "dns_rewrite_types": ["A", "AAAA", "CNAME", "TXT", "MX", "PTR", "SRV", "SOA", "NS"],
     "max_dns_rewrite_length": 1000,
-    "valid_client_pattern": "^([0-9a-fA-F.:]+|[a-zA-Z0-9.-]+)$"
+    "valid_client_pattern": "^([0-9a-fA-F.:]+|[a-zA-Z0-9.-]+)$",
+    "recent_enhancements": [
+      "增加对 ABP CSS 注入语法的支持[citation:2]",
+      "增加移除空属性内容的权限[citation:2]",
+      "通过合理使用浏览器缓存提升内容脚本性能[citation:2]",
+      "改进内容脚本加载性能[citation:2]",
+      "移除$domain修饰符的复杂逻辑[citation:2]",
+      "增加对zstd编码的支持[citation:2]"
+    ]
   }
 }
