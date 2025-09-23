@@ -54,7 +54,7 @@ class UnifiedConfig:
             "allow": "allow_clash.yaml"     # 独立白名单
         },
         "surge": {
-            "block": "adblock_surge.txt"   # 仅黑名单，DOMAIN-SET格式
+            "block": "adblock_surge.conf"   # 仅黑名单，DOMAIN-SET格式
         },
         "pihole": {
             "block": "adblock_pihole.txt",
@@ -87,12 +87,6 @@ class UnifiedConfig:
     BATCH_PROCESSING_SIZE: int = 1000
     BLOOM_FILTER_CAPACITY: int = 1000000
     BLOOM_FILTER_ERROR_RATE: float = 0.001
-
-    # 白名单过滤配置
-    WHITELIST_FILTER_DOMAINS: Set[str] = field(default_factory=lambda: {
-        "microsoft.com", "apple.com", "google.com", "github.com", 
-        "adobe.com", "amazon.com", "cloudflare.com", "akamaiedge.net"
-    })
 
 
 class UnifiedRuleParser:
@@ -142,7 +136,8 @@ class UnifiedRuleParser:
             "modifiers": [],
             "is_exception": rule.startswith("@@"),
             "is_comment": rule.startswith(("!", "#")),
-            "is_valid": False
+            "is_valid": False,
+            "domain": ""  # 新增：提取的纯净域名
         }
 
         if result["is_comment"] or not rule.strip():
@@ -157,6 +152,7 @@ class UnifiedRuleParser:
             result["pattern_type"] = "adguard_domain_rule"
             result["type"] = "block"
             result["content"] = adguard_match.group(1)
+            result["domain"] = self.extract_clean_domain(result["content"])
             result["is_valid"] = True
             return result
 
@@ -174,6 +170,9 @@ class UnifiedRuleParser:
                         result["content"] = match.group(1)
                     else:
                         result["content"] = match.group(0)
+                    
+                    # 尝试提取域名
+                    result["domain"] = self.extract_clean_domain(result["content"])
                     break
             except Exception as e:
                 logger.debug(f"模式 {pattern_name} 匹配失败: {e}")
@@ -185,6 +184,7 @@ class UnifiedRuleParser:
                 result["pattern_type"] = "domain_rule"
                 result["type"] = "block"
                 result["content"] = rule_content
+                result["domain"] = self.extract_clean_domain(rule_content)
                 result["is_valid"] = True
 
         # 增强修饰符提取
@@ -204,6 +204,24 @@ class UnifiedRuleParser:
             result["modifiers"] = modifiers
 
         return result
+
+    def extract_clean_domain(self, content: str) -> str:
+        """从规则内容中提取纯净域名"""
+        # 处理AdGuard格式 (||domain.com^)
+        if content.startswith('||') and content.endswith('^'):
+            return content[2:-1]
+        
+        # 处理包含通配符的域名
+        domain = content.replace('*.', '').replace('*', '')
+        
+        # 移除其他特殊字符
+        domain = re.sub(r'[^a-zA-Z0-9.-]', '', domain)
+        
+        # 确保是有效域名格式
+        if re.match(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', domain):
+            return domain
+        
+        return content  # 如果无法提取纯净域名，返回原内容
 
     def is_supported_by_platform(self, rule_info: Dict[str, Any], platform: str) -> bool:
         """检查规则是否被特定平台支持"""
@@ -243,104 +261,58 @@ class UnifiedRuleParser:
         if not self.is_supported_by_platform(rule_info, platform):
             return None
 
-        platform_config = self.platform_support.get(platform, {})
-        rule_format = platform_config.get("rule_format", {})
         rule_type = rule_info["pattern_type"]
         content = rule_info["content"]
-        original_rule = rule_info["original"]
+        domain = rule_info["domain"]
         is_exception = rule_info["is_exception"]
 
-        # 确定动作
-        action = "DIRECT" if is_exception else "REJECT"
-
-        # 特殊处理：uBlock Origin白名单移除$important修饰符
-        if platform == "ublock_origin" and is_exception:
-            if "$important" in original_rule:
-                # 移除$important修饰符
-                if "," in original_rule.split("$", 1)[1]:
-                    # 有多个修饰符的情况
-                    parts = original_rule.split("$", 1)
-                    modifiers = parts[1].split(",")
-                    filtered_modifiers = [mod for mod in modifiers if "important" not in mod]
-                    if filtered_modifiers:
-                        return f"{parts[0]}${','.join(filtered_modifiers)}"
-                    else:
-                        return parts[0]
-                else:
-                    # 只有important修饰符的情况
-                    return original_rule.split("$", 1)[0]
-
-        # 应用平台特定转换规则
-        if rule_type in rule_format:
-            format_str = rule_format[rule_type]
-            format_params = {
-                'domain': content,
-                'pattern': content,
-                'action': action,
-                'rule': original_rule
-            }
-
-            try:
-                return format_str.format(**format_params)
-            except KeyError as e:
-                logger.warning(f"格式化字符串缺少键 {e}，使用原始规则: {original_rule}")
-                return original_rule
-
-        # 默认转换逻辑
+        # Clash平台转换 - 使用+.domain.com格式
         if platform == "clash":
-            if rule_type in ["domain_rule", "adguard_domain_rule"]:
-                if content.startswith('*.'):
-                    base_domain = content[2:]
-                    return f"DOMAIN-SUFFIX,{base_domain},{action}"
-                else:
-                    return f"DOMAIN-SUFFIX,{content},{action}"
-            elif rule_type == "regex_rule":
-                return f"DOMAIN-KEYWORD,{content},{action}"
+            if rule_type in ["domain_rule", "adguard_domain_rule"] and domain:
+                # Clash格式：+.domain.com
+                return f"+.{domain}"
+            return None
 
+        # Surge平台转换 (DOMAIN-SET格式) - 使用.domain.com格式
         elif platform == "surge":
-            # Surge只处理黑名单，且使用DOMAIN-SET格式
-            if not is_exception and rule_type in ["domain_rule", "adguard_domain_rule"]:
-                domain = content[2:] if content.startswith('*.') else content
-                return f".{domain}"  # DOMAIN-SET格式，前面加点
+            if not is_exception and rule_type in ["domain_rule", "adguard_domain_rule"] and domain:
+                # Surge DOMAIN-SET格式：.domain.com
+                return f".{domain}"
+            return None
 
+        # Pi-hole转换
         elif platform == "pihole":
-            if rule_type in ["domain_rule", "adguard_domain_rule"]:
-                return f"@@{content}" if is_exception else content
+            if rule_type in ["domain_rule", "adguard_domain_rule"] and domain:
+                return f"@@{domain}" if is_exception else domain
             elif rule_type == "hosts_rule":
-                return original_rule if "0.0.0.0" in original_rule else f"0.0.0.0 {content}"
+                return rule_info["original"] if "0.0.0.0" in rule_info["original"] else f"0.0.0.0 {domain}"
 
+        # Hosts文件转换
         elif platform == "hosts":
-            if rule_type in ["domain_rule", "adguard_domain_rule"] and not is_exception:
-                return f"0.0.0.0 {content}"
+            if rule_type in ["domain_rule", "adguard_domain_rule"] and not is_exception and domain:
+                return f"0.0.0.0 {domain}"
             elif rule_type == "hosts_rule" and not is_exception:
-                return original_rule
+                return rule_info["original"]
 
-        # uBlock Origin和AdBlock Plus保持原格式，但过滤不支持的修饰符
+        # uBlock Origin和AdBlock Plus保持原格式
         elif platform in ["ublock_origin", "adblock_plus"]:
-            unsupported_mods = platform_config.get("unsupported_modifiers", [])
-            for mod in unsupported_mods:
-                if f"${mod}" in original_rule:
-                    if "$" in original_rule:
-                        parts = original_rule.split("$", 1)
-                        return parts[0].strip()
-                    break
-            return original_rule
+            return rule_info["original"]
 
         return None
 
 
 class WhitelistFilter:
-    """白名单过滤器 - 用于过滤误杀域名"""
+    """白名单过滤器 - 专门用于Mihomo编译前的过滤"""
     
     def __init__(self, config: UnifiedConfig):
         self.config = config
         self.whitelist_domains = self.load_whitelist_domains()
         
     def load_whitelist_domains(self) -> Set[str]:
-        """加载白名单域名集合"""
-        domains = set(self.config.WHITELIST_FILTER_DOMAINS)
+        """从allow文件加载白名单域名集合"""
+        domains = set()
         
-        # 从白名单文件加载额外域名
+        # 从白名单文件加载域名
         if self.config.INPUT_ALLOW.exists():
             try:
                 with open(self.config.INPUT_ALLOW, 'r', encoding='utf-8') as f:
@@ -353,6 +325,11 @@ class WhitelistFilter:
                         domain = self.extract_domain_from_rule(line)
                         if domain:
                             domains.add(domain)
+                            # 同时添加父域名
+                            parts = domain.split('.')
+                            if len(parts) > 2:
+                                parent_domain = '.'.join(parts[-2:])
+                                domains.add(parent_domain)
             except Exception as e:
                 logger.warning(f"加载白名单文件失败: {e}")
         
@@ -372,14 +349,17 @@ class WhitelistFilter:
         # 处理普通域名规则
         if re.match(r'^[a-zA-Z0-9.*-]+$', rule):
             # 移除通配符
-            domain = rule.replace('*.', '')
-            if '.' in domain:  # 确保是有效域名
+            domain = rule.replace('*.', '').replace('*', '')
+            if '.' in domain and re.match(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', domain):
                 return domain
         
         return None
     
     def should_filter_domain(self, domain: str) -> bool:
         """检查域名是否应该被过滤（在白名单中）"""
+        if not domain or '.' not in domain:
+            return False
+            
         # 检查完整域名
         if domain in self.whitelist_domains:
             return True
@@ -402,13 +382,14 @@ class WhitelistFilter:
         filtered_count = 0
         
         for rule in block_rules:
-            # 提取域名进行过滤检查
-            domain = self.extract_domain_from_clash_rule(rule)
-            if domain and self.should_filter_domain(domain):
-                filtered_count += 1
-                if self.config.VERBOSE_LOGGING:
-                    logger.debug(f"过滤误杀域名: {domain} (规则: {rule})")
-                continue
+            # 从Clash规则中提取域名 (+.domain.com)
+            if rule.startswith('+.'):
+                domain = rule[2:]  # 移除'+.'前缀
+                if self.should_filter_domain(domain):
+                    filtered_count += 1
+                    if self.config.VERBOSE_LOGGING:
+                        logger.debug(f"过滤误杀域名: {domain} (规则: {rule})")
+                    continue
             
             filtered_rules.append(rule)
         
@@ -416,22 +397,6 @@ class WhitelistFilter:
             logger.info(f"白名单过滤: 移除了 {filtered_count} 条可能误杀的规则")
         
         return filtered_rules, filtered_count
-    
-    def extract_domain_from_clash_rule(self, rule: str) -> Optional[str]:
-        """从Clash规则中提取域名"""
-        # DOMAIN-SUFFIX,example.com,REJECT
-        if rule.startswith('DOMAIN-SUFFIX,'):
-            parts = rule.split(',')
-            if len(parts) >= 2:
-                return parts[1].strip()
-        
-        # DOMAIN-KEYWORD,example,REJECT
-        elif rule.startswith('DOMAIN-KEYWORD,'):
-            parts = rule.split(',')
-            if len(parts) >= 2:
-                return parts[1].strip()
-        
-        return None
 
 
 class UnifiedConverter:
@@ -570,7 +535,7 @@ class UnifiedConverter:
                     converted = self.parser.convert_rule_for_platform(parsed, platform)
 
                     if converted:
-                        # 确保规则被正确分类（解决白名单被错误归类的问题）
+                        # 确保规则被正确分类
                         target_class = rule_class
                         if parsed["is_exception"]:
                             target_class = "allow"
@@ -599,7 +564,7 @@ class UnifiedConverter:
                 # 保存黑名单
                 if rules["block"]:
                     output_file = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform]["block"]
-                    content_with_header = ["#RULE-SET,ad-filter,REJECT", "payload:"] + [f"  - '+.{line.split(',')[1]}'" if line.startswith('DOMAIN-SUFFIX,') else f"  - '{line}'" for line in rules["block"]]
+                    content_with_header = ["#RULE-SET,ad-filter,REJECT", "payload:"] + [f"  - '{line}'" for line in rules["block"]]
                     with open(output_file, 'w', encoding='utf-8') as f:
                         f.write("\n".join(content_with_header))
                     logger.info(f"已保存 {platform} 黑名单规则: {output_file} ({len(rules['block'])} 条)")
@@ -607,7 +572,7 @@ class UnifiedConverter:
                 # 保存白名单
                 if rules["allow"]:
                     output_file = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform]["allow"]
-                    content_with_header = ["#RULE-SET,ad-filter,DIRECT", "payload:"] + [f"  - '+.{line.split(',')[1]}'" if line.startswith('DOMAIN-SUFFIX,') else f"  - '{line}'" for line in rules["allow"]]
+                    content_with_header = ["#RULE-SET,ad-filter,DIRECT", "payload:"] + [f"  - '{line}'" for line in rules["allow"]]
                     with open(output_file, 'w', encoding='utf-8') as f:
                         f.write("\n".join(content_with_header))
                     logger.info(f"已保存 {platform} 白名单规则: {output_file} ({len(rules['allow'])} 条)")
@@ -616,6 +581,7 @@ class UnifiedConverter:
             elif platform == "surge":
                 if rules["block"]:
                     output_file = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform]["block"]
+                    # Surge DOMAIN-SET格式：每行一个域名，前面加点
                     content_with_header = ["#DOMAIN-SET,ad-filter,REJECT"] + rules["block"]
                     with open(output_file, 'w', encoding='utf-8') as f:
                         f.write("\n".join(content_with_header))
@@ -641,7 +607,7 @@ class UnifiedConverter:
             self.compile_mihomo_rules(platform_rules)
 
     def compile_mihomo_rules(self, platform_rules: Dict):
-        """编译Mihomo规则集 - 使用白名单过滤预处理"""
+        """编译Mihomo规则集 - 使用allow文件过滤adblock文件"""
         if not self.config.MIHOMO_TOOL_PATH.exists():
             logger.warning("Mihomo工具不存在，跳过编译")
             return
@@ -649,22 +615,28 @@ class UnifiedConverter:
         logger.info("编译Mihomo规则集...")
 
         try:
-            # 1. 预处理：使用白名单过滤黑名单规则
-            filtered_block_rules, filtered_count = self.whitelist_filter.filter_block_rules(
-                platform_rules["clash"]["block"]
-            )
+            # 1. 预处理：使用allow文件过滤黑名单规则
+            # 注意：这里直接使用原始黑名单规则，而不是已经转换的Clash规则
+            # 这样可以确保过滤逻辑更准确
+            original_block_rules = self.load_original_block_rules()
+            filtered_block_rules, filtered_count = self.filter_block_rules_with_allowlist(original_block_rules)
             self.stats["whitelist_filtered"] = filtered_count
 
             if not filtered_block_rules:
                 logger.warning("过滤后没有剩余的黑名单规则，跳过Mihomo编译")
                 return
 
-            # 2. 编译过滤后的黑名单（adb.mrs）
+            # 2. 将过滤后的规则转换为Clash格式
+            clash_rules = self.convert_rules_to_clash_format(filtered_block_rules)
+
+            # 3. 编译过滤后的黑名单（adb.mrs）
             mihomo_block_output = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_output"]["block"]
 
-            # 创建临时的Clash格式黑名单文件
+            # 创建临时的Clash格式黑名单文件，保持隐式格式
             temp_block_file = self.config.OUTPUT_DIR / "temp_block_clash.yaml"
-            content_with_header = ["payload:"] + [f"  - {rule}" for rule in filtered_block_rules]
+            
+            # 直接使用+.domain.com格式
+            content_with_header = ["payload:"] + [f"  - '{rule}'" for rule in clash_rules]
             with open(temp_block_file, 'w', encoding='utf-8') as f:
                 f.write("\n".join(content_with_header))
 
@@ -708,6 +680,115 @@ class UnifiedConverter:
             logger.error(f"Mihomo编译异常: {e}")
             import traceback
             logger.error(f"详细错误信息: {traceback.format_exc()}")
+
+    def load_original_block_rules(self) -> List[str]:
+        """加载原始黑名单规则"""
+        rules = []
+        if self.config.INPUT_BLOCK.exists():
+            try:
+                with open(self.config.INPUT_BLOCK, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith(('!', '#')):
+                            rules.append(line)
+            except Exception as e:
+                logger.error(f"加载原始黑名单规则失败: {e}")
+        return rules
+
+    def filter_block_rules_with_allowlist(self, block_rules: List[str]) -> Tuple[List[str], int]:
+        """使用allow文件过滤黑名单规则"""
+        if not self.config.ENABLE_WHITELIST_FILTERING or not self.config.INPUT_ALLOW.exists():
+            return block_rules, 0
+
+        # 加载白名单域名
+        allow_domains = set()
+        try:
+            with open(self.config.INPUT_ALLOW, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith(('!', '#')):
+                        continue
+                    
+                    # 提取域名
+                    domain = self.extract_domain_from_adguard_rule(line)
+                    if domain:
+                        allow_domains.add(domain)
+        except Exception as e:
+            logger.error(f"加载白名单文件失败: {e}")
+            return block_rules, 0
+
+        filtered_rules = []
+        filtered_count = 0
+
+        for rule in block_rules:
+            # 提取规则中的域名
+            rule_domain = self.extract_domain_from_adguard_rule(rule)
+            
+            # 如果规则域名在白名单中，则过滤掉
+            if rule_domain and any(self.is_domain_match(rule_domain, allow_domain) for allow_domain in allow_domains):
+                filtered_count += 1
+                if self.config.VERBOSE_LOGGING:
+                    logger.debug(f"过滤误杀规则: {rule} (匹配白名单)")
+                continue
+            
+            filtered_rules.append(rule)
+
+        if filtered_count > 0:
+            logger.info(f"Mihomo编译前白名单过滤: 移除了 {filtered_count} 条可能误杀的规则")
+
+        return filtered_rules, filtered_count
+
+    def extract_domain_from_adguard_rule(self, rule: str) -> Optional[str]:
+        """从AdGuard规则中提取域名"""
+        # 处理@@开头的例外规则
+        if rule.startswith('@@'):
+            rule = rule[2:]
+        
+        # 处理AdGuard域名规则 (||domain^)
+        if rule.startswith('||') and rule.endswith('^'):
+            return rule[2:-1]
+        
+        # 处理普通域名规则
+        if re.match(r'^[a-zA-Z0-9.*-]+$', rule):
+            # 移除通配符
+            domain = rule.replace('*.', '').replace('*', '')
+            if '.' in domain and re.match(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', domain):
+                return domain
+        
+        return None
+
+    def is_domain_match(self, rule_domain: str, allow_domain: str) -> bool:
+        """检查规则域名是否与白名单域名匹配"""
+        # 精确匹配
+        if rule_domain == allow_domain:
+            return True
+        
+        # 子域名匹配：rule_domain是allow_domain的子域名
+        if rule_domain.endswith('.' + allow_domain):
+            return True
+        
+        # 通配符匹配：如果白名单域名包含通配符
+        if '*' in allow_domain:
+            # 将通配符转换为正则表达式
+            pattern = allow_domain.replace('.', '\\.').replace('*', '.*')
+            if re.match(f'^{pattern}$', rule_domain):
+                return True
+        
+        return False
+
+    def convert_rules_to_clash_format(self, rules: List[str]) -> List[str]:
+        """将规则转换为Clash格式"""
+        clash_rules = []
+        parser = UnifiedRuleParser(self.config)
+        
+        for rule in rules:
+            parsed = parser.parse_rule(rule)
+            if parsed["is_valid"] and not parsed["is_exception"]:
+                domain = parsed["domain"]
+                if domain:
+                    clash_rules.append(f"+.{domain}")
+        
+        return clash_rules
 
     def calculate_file_hash(self, file_path: Path) -> str:
         """计算文件的SHA256散列值"""
@@ -758,7 +839,7 @@ class UnifiedConverter:
         logger.info(f"总共处理规则: {self.stats['total_processed']}")
         logger.info(f"重复规则移除: {self.stats['duplicates']}")
         logger.info(f"不支持规则: {self.stats['unsupported']}")
-        logger.info(f"白名单过滤规则: {self.stats['whitelist_filtered']}")
+        logger.info(f"Mihomo白名单过滤规则: {self.stats['whitelist_filtered']}")
 
         for platform, stats in self.stats['platforms'].items():
             logger.info(f"{platform.upper()} - 支持规则: {stats['supported']}, 不支持规则: {stats['unsupported']}")
