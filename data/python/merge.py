@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-AdGuard规则合并器 - 支持allow/adblock规则独立处理
+AdGuard规则合并器 - 支持allow/adblock规则独立处理（纯净输出版）
 输入支持：AdGuard规则、AdGuard Home规则、Hosts规则、纯Domains域名；
-输出：独立的允许规则文件(allow_adg.txt)和拦截规则文件(adblock_adg.txt)，均为AdGuard Home兼容语法
+输出：独立的允许规则文件(allow_adg.txt)和拦截规则文件(adblock_adg.txt)，仅含纯净语法规则
 支持RFC 1034/1035/1123/2181（域名）、RFC 791（IPv4）、RFC 2373/5952（IPv6）
 """
 
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AdGuardConfig:
-    """配置类 - 新增独立输出文件配置"""
+    """配置类 - 独立输出文件配置"""
     BASE_DIR: Path = Path(os.getenv('GITHUB_WORKSPACE', Path.cwd()))
     INPUT_DIR: Path = BASE_DIR / "data" / "filter"
     OUTPUT_DIR: Path = BASE_DIR
@@ -41,7 +41,7 @@ class AdGuardConfig:
     # 允许的DNS重写记录类型（AdGuard Home支持）
     ALLOWED_DNS_RECORD_TYPES: List[str] = field(default_factory=lambda: ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'PTR', 'SRV', 'SOA', 'NS'])
 
-    # 独立输出文件配置（核心改进：分allow/adblock输出）
+    # 独立输出文件配置（核心：分allow/adblock输出）
     OUTPUT_ALLOW: str = 'allow_adg.txt'    # 允许规则输出文件
     OUTPUT_BLOCK: str = 'adblock_adg.txt'  # 拦截规则输出文件
     ADBLOCK_PATTERNS: List[str] = field(default_factory=lambda: ['*.txt', '*.filter', '*.list'])
@@ -187,16 +187,16 @@ class EnhancedBloomFilter:
 
 
 class AdGuardConverter:
-    """核心转换器 - 核心改进：allow/adblock规则独立存储+独立输出"""
+    """核心转换器 - allow/adblock规则独立存储+纯净输出"""
     def __init__(self, config: AdGuardConfig):
         self.config = config
         self.syntax_db = AdGuardSyntaxDatabase(config)
         
-        # 核心改进1：分允许/拦截规则独立存储
+        # 分允许/拦截规则独立存储
         self.allow_rules = []   # 仅存储允许规则
         self.block_rules = []   # 仅存储拦截规则
         
-        # 核心改进2：分类型统计数据
+        # 分类型统计数据
         self.stats = {
             "total_processed": 0, "invalid_rules": 0, "rfc_violation_rules": 0, 
             "fixed_rules_count": 0, "pure_domains_converted": 0,
@@ -206,7 +206,7 @@ class AdGuardConverter:
             "block": {"processed": 0, "valid": 0, "duplicates": 0, "incompatible": 0}
         }
         
-        # 核心改进3：分类型去重（避免allow/block规则互相干扰）
+        # 分类型去重（避免allow/block规则互相干扰）
         self.allow_bloom = EnhancedBloomFilter(config)  # allow规则去重
         self.block_bloom = EnhancedBloomFilter(config)  # block规则去重
         
@@ -221,7 +221,7 @@ class AdGuardConverter:
         else:
             getattr(logger, level)(message)
 
-    # -------------------------- 基础验证逻辑（保留原功能） --------------------------
+    # -------------------------- 基础验证逻辑 --------------------------
     def validate_domain(self, domain: str) -> Tuple[bool, str]:
         domain = domain.strip().lstrip('*.@|').rstrip('^')
         if not domain:
@@ -308,7 +308,7 @@ class AdGuardConverter:
         else:
             return False, f"未实现DNS[{record_type}]记录验证（RFC 1035）"
 
-    # -------------------------- 规则分析逻辑（保留原功能） --------------------------
+    # -------------------------- 规则分析逻辑 --------------------------
     def analyze_rule_syntax(self, rule: str, is_allow_file: bool) -> Dict[str, Any]:
         result = {
             'type': 'unknown', 'pattern_type': 'unknown', 'modifiers': [],
@@ -440,7 +440,7 @@ class AdGuardConverter:
         result['adhome_compatible'] = self.syntax_db.is_adguard_home_compatible(result['pattern_type'], result['modifiers'])
         return result
 
-    # -------------------------- 规则标准化逻辑（保留原功能） --------------------------
+    # -------------------------- 规则标准化逻辑 --------------------------
     def normalize_rule(self, rule: str, analysis: Dict[str, Any]) -> Optional[str]:
         if not analysis['is_valid'] and analysis['rfc_violation_msg'] and self.config.AUTO_FIX_RFC_VIOLATIONS:
             fixed_rule = self.fix_rfc_violation(rule, analysis)
@@ -491,7 +491,7 @@ class AdGuardConverter:
 
         return normalized
 
-    # -------------------------- RFC修复逻辑（保留原功能） --------------------------
+    # -------------------------- RFC修复逻辑 --------------------------
     def fix_rfc_violation(self, rule: str, analysis: Dict[str, Any]) -> Optional[str]:
         rule_clean = rule.strip()
         fixed_rule = rule_clean
@@ -530,7 +530,7 @@ class AdGuardConverter:
                 return fixed_rule
         return None
 
-    # -------------------------- 核心改进4：分类型批次处理 --------------------------
+    # -------------------------- 分类型批次处理 --------------------------
     def process_batch(self, batch: List[str], is_allow_file: bool):
         for rule in batch:
             self.stats["total_processed"] += 1
@@ -577,7 +577,7 @@ class AdGuardConverter:
                 self.stats[rule_type_key]["incompatible"] += 1
                 self.github_log('debug', f"[{rule_type_key.upper()}]AdGuard Home不支持（跳过）: {normalized_rule[:50]}...")
 
-    # -------------------------- 文件处理逻辑（保留原功能） --------------------------
+    # -------------------------- 文件处理逻辑 --------------------------
     def get_input_files(self, directory: Path) -> List[Tuple[Path, bool]]:
         if not directory.exists():
             self.github_log('warning', f"输入目录不存在，自动创建: {directory}")
@@ -626,39 +626,29 @@ class AdGuardConverter:
                 self.github_log('error', f"文件处理失败: {file.name} - {str(e)}")
                 self.file_stats["processed_files"] -= 1
 
-    # -------------------------- 核心改进5：分文件保存结果 --------------------------
+    # -------------------------- 核心：纯净规则输出（无文件头元信息） --------------------------
     def save_results(self):
-        """分允许/拦截规则独立保存输出文件"""
+        """分允许/拦截规则独立保存，仅含纯净语法规则"""
         self.config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         allow_path = self.config.OUTPUT_DIR / self.config.OUTPUT_ALLOW
         block_path = self.config.OUTPUT_DIR / self.config.OUTPUT_BLOCK
 
-        # 1. 保存允许规则文件
+        # 1. 保存允许规则文件（仅纯净规则）
         unique_allow = sorted(list(set(self.allow_rules)))
         with open(allow_path, 'w', encoding='utf-8') as f:
-            f.write(f"# AdGuard Home 允许规则\n")
-            f.write(f"# 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"# 规则来源: {self.config.INPUT_DIR}（仅允许文件）\n")
-            f.write(f"# 规则数量: {len(unique_allow)}（纯Domains转换: {self.stats['pure_domains_converted']}条）\n")
-            f.write(f"# 语法说明: 所有规则自动添加@@前缀，支持AdGuard Home直接导入\n\n")
             f.write('\n'.join(unique_allow))
 
-        # 2. 保存拦截规则文件
+        # 2. 保存拦截规则文件（仅纯净规则）
         unique_block = sorted(list(set(self.block_rules)))
         with open(block_path, 'w', encoding='utf-8') as f:
-            f.write(f"# AdGuard Home 拦截规则\n")
-            f.write(f"# 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"# 规则来源: {self.config.INPUT_DIR}（仅拦截文件）\n")
-            f.write(f"# 规则数量: {len(unique_block)}（纯Domains转换: {self.stats['pure_domains_converted']}条）\n")
-            f.write(f"# 语法说明: 支持AdGuard标准域名规则、Hosts规则、DNS重写规则\n\n")
             f.write('\n'.join(unique_block))
 
         logger.info(f"\n=== 结果保存 ===")
-        logger.info(f"允许规则文件: {allow_path}（{len(unique_allow)}条有效规则）")
-        logger.info(f"拦截规则文件: {block_path}（{len(unique_block)}条有效规则）")
+        logger.info(f"允许规则文件: {allow_path}（{len(unique_allow)}条纯净规则）")
+        logger.info(f"拦截规则文件: {block_path}（{len(unique_block)}条纯净规则）")
         self.print_statistics()
 
-    # -------------------------- 核心改进6：分类型打印统计 --------------------------
+    # -------------------------- 统计报告打印 --------------------------
     def print_statistics(self):
         """打印分允许/拦截的详细统计报告"""
         logger.info(f"\n=== 处理统计报告 ===")
@@ -696,9 +686,9 @@ class AdGuardConverter:
 
 def main():
     config = AdGuardConfig()
-    logger.info(f"=== AdGuard规则转换器（allow/adblock独立版） ===")
+    logger.info(f"=== AdGuard规则转换器（allow/adblock纯净输出版） ===")
     logger.info(f"运行配置: RFC严格验证={config.STRICT_RFC_VALIDATION}，纯Domains转换={config.AUTO_CONVERT_PURE_DOMAINS}")
-    logger.info(f"输出配置: 允许规则→{config.OUTPUT_ALLOW}，拦截规则→{config.OUTPUT_BLOCK}")
+    logger.info(f"输出配置: 允许规则→{config.OUTPUT_ALLOW}，拦截规则→{config.OUTPUT_BLOCK}（均为纯净规则，无文件头）")
     if config.GITHUB_ACTIONS:
         logger.info(f"运行环境: GitHub Actions")
 

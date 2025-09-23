@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-增强版统一规则转换器 - 支持AdGuard到多平台规则转换
+增强版统一规则转换器 - 支持AdGuard到多平台规则转换（纯净规则版）
 支持平台：Clash, Surge, Mihomo, Pi-hole, uBlock Origin, Adblock Plus, Hosts文件
 核心逻辑：仅Mihomo黑名单执行白名单过滤（防止误杀），其他平台保持原始黑白名单独立逻辑
+输出特性：无文件头元信息，仅含纯净规则；按语法数据库补充Clash/Surge规则集头与动作
 """
 
 import os
@@ -392,7 +393,8 @@ class UnifiedRuleParser:
             format_params = {
                 'domain': rule_info["domain"] or rule_info["content"],
                 'pattern': rule_info["content"],
-                'rule': rule_info["original"]
+                'rule': rule_info["original"],
+                'name': self._get_ruleset_name(platform, rule_info["is_exception"])
             }
             try:
                 converted = rule_format.format(**format_params)
@@ -402,6 +404,14 @@ class UnifiedRuleParser:
 
         # 兜底转换逻辑
         return self._fallback_conversion(rule_info, platform)
+
+    def _get_ruleset_name(self, platform: str, is_exception: bool) -> str:
+        """根据平台和规则类型获取规则集名称（匹配输出文件名）"""
+        if platform == "clash":
+            return "allow_clash" if is_exception else "adblock_clash"
+        elif platform == "surge":
+            return "allow_surge" if is_exception else "adblock_surge"
+        return "default_ruleset"
 
     def _adjust_platform_specific(self, rule: str, rule_info: Dict[str, Any], platform: str) -> str:
         """平台特定调整（如例外规则前缀）"""
@@ -605,7 +615,7 @@ class UnifiedConverter:
                 
                 # 保存转换后的规则
                 platform_rules[platform][target_class].append(converted)
-                self.stats["platforms"][platform][target_class] += 1  # 此处不再报KeyError
+                self.stats["platforms"][platform][target_class] += 1
                 self.stats["platforms"][platform]["supported"] += 1
                 
                 # 统计AdGuard规则转换数
@@ -650,7 +660,7 @@ class UnifiedConverter:
         return platform_rules
 
     def _save_platform_rules(self, platform_rules: Dict) -> None:
-        """保存各平台规则文件（Mihomo除外）"""
+        """保存各平台规则文件（Mihomo除外）- 无文件头，补充Clash/Surge规则集头"""
         self.config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         logger.info(f"开始保存规则文件到：{self.config.OUTPUT_DIR}")
 
@@ -669,63 +679,54 @@ class UnifiedConverter:
             handler(platform, rules)
 
     def _save_clash_rules(self, platform: str, rules: Dict[str, List[str]]) -> None:
-        """保存Clash规则（YAML格式）"""
+        """保存Clash规则 - 无文件头，补充RULE-SET头+payload结构（语法数据库标准）"""
         for rule_type in ["block", "allow"]:
             if not rules[rule_type]:
                 continue
             
             output_path = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform][rule_type]
-            header = [
-                f"# AdBlock规则集 - Clash {rule_type.upper()} 格式",
-                f"# 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                f"# 规则数量：{len(rules[rule_type])}",
-                "payload:"
-            ]
+            # 1. 补充Clash规则集头（按语法数据库：#RULE-SET,{name},{action}）
+            ruleset_name = "adblock_clash" if rule_type == "block" else "allow_clash"
+            ruleset_action = "REJECT" if rule_type == "block" else "DIRECT"
+            ruleset_header = f"#RULE-SET,{ruleset_name},{ruleset_action}"
+            # 2. 构建纯净规则内容（仅payload+规则）
             rule_lines = [f"  - '{rule}'" for rule in rules[rule_type]]
-            content = "\n".join(header + rule_lines)
+            content = "\n".join([ruleset_header, "payload:"] + rule_lines)
             
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write(content)
             logger.info(f"已保存Clash {rule_type} 规则：{output_path}（{len(rules[rule_type])}条）")
 
     def _save_surge_rules(self, platform: str, rules: Dict[str, List[str]]) -> None:
-        """保存Surge规则（DOMAIN-SET格式）"""
+        """保存Surge规则 - 无文件头，补充DOMAIN-SET头（语法数据库标准）"""
         if not rules["block"]:
             return
         
         output_path = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform]["block"]
-        header = [
-            f"# AdBlock规则集 - Surge DOMAIN-SET 格式",
-            f"# 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            f"# 规则数量：{len(rules['block'])}",
-            "#DOMAIN-SET,ad-filter,REJECT"
-        ]
-        content = "\n".join(header + rules["block"])
+        # 1. 补充Surge域名集头（按语法数据库：#DOMAIN-SET,{name},REJECT）
+        ruleset_header = "#DOMAIN-SET,adblock_surge,REJECT"
+        # 2. 构建纯净规则内容（仅头+规则）
+        content = "\n".join([ruleset_header] + rules["block"])
         
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(content)
         logger.info(f"已保存Surge 规则：{output_path}（{len(rules['block'])}条）")
 
     def _save_hosts_rules(self, platform: str, rules: Dict[str, List[str]]) -> None:
-        """保存Hosts规则"""
+        """保存Hosts规则 - 无文件头，仅纯净规则"""
         if not rules["block"]:
             return
         
         output_path = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform]["block"]
-        header = [
-            f"# AdBlock规则集 - Hosts 格式",
-            f"# 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            f"# 规则数量：{len(rules['block'])}",
-            "# 注释：0.0.0.0 表示将域名解析到无效IP，实现拦截"
-        ]
-        content = "\n".join(header + rules["block"])
+        # 仅保留纯净规则，无任何头信息
+        content = "\n".join(rules["block"])
         
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(content)
         logger.info(f"已保存Hosts 规则：{output_path}（{len(rules['block'])}条）")
 
     def _save_default_rules(self, platform: str, rules: Dict[str, List[str]]) -> None:
-        """默认保存逻辑（Pi-hole、uBlock等）"""
+        """默认保存逻辑（Pi-hole、uBlock等）- 无文件头，仅纯净规则"""
         for rule_type in ["block", "allow"]:
             if platform in ["hosts", "surge"] and rule_type == "allow":
                 continue
@@ -736,12 +737,8 @@ class UnifiedConverter:
                 continue
             
             output_path = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform][rule_type]
-            header = [
-                f"# AdBlock规则集 - {platform.upper()} {rule_type.upper()} 格式",
-                f"# 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                f"# 规则数量：{len(rules[rule_type])}"
-            ]
-            content = "\n".join(header + rules[rule_type])
+            # 仅保留纯净规则，无任何头信息
+            content = "\n".join(rules[rule_type])
             
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write(content)
@@ -766,12 +763,13 @@ class UnifiedConverter:
             return
         logger.info(f"Mihomo白名单过滤：移除{filtered_count}条误杀规则，剩余{len(filtered_rules)}条")
 
-        # 3. 编译Mihomo规则
+        # 3. 编译Mihomo规则（使用语法数据库标准Clash规则格式）
         output_path = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_output"]["block"]
         temp_path = ""
         try:
-            # 创建临时Clash规则文件
+            # 创建临时Clash规则文件（含标准RULE-SET头）
             with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.yaml', delete=False) as temp_f:
+                temp_f.write("#RULE-SET,adblock_clash,REJECT\n")
                 temp_f.write("payload:\n")
                 for rule in filtered_rules:
                     temp_f.write(f"  - '{rule}'\n")
@@ -833,7 +831,7 @@ class UnifiedConverter:
         for platform, stats in self.stats["platforms"].items():
             if platform == "mihomo":
                 continue
-            total = stats["block"] + stats["allow"]  # 同步修改为block/allow
+            total = stats["block"] + stats["allow"]
             logger.info(f"   - {platform.upper()}：")
             logger.info(f"     总规则：{total} | 拦截规则：{stats['block']} | 放行规则：{stats['allow']}")
             logger.info(f"     支持规则：{stats['supported']} | 不支持规则：{stats['unsupported']}")
@@ -884,7 +882,7 @@ class UnifiedConverter:
         for platform, stats in self.stats["platforms"].items():
             if platform == "mihomo":
                 continue
-            total = stats["block"] + stats["allow"]  # 同步修改为block/allow
+            total = stats["block"] + stats["allow"]
             summary += f"| {platform.upper()} | {total} | {stats['block']} | {stats['allow']} |\n"
         
         if self.stats["mihomo_hashes"]:
