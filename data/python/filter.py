@@ -491,11 +491,11 @@ class UnifiedConverter:
             return None
 
     def _init_stats(self) -> Dict[str, Any]:
-        """初始化统计信息"""
+        """初始化统计信息（核心修复：将block_rules/allow_rules改为block/allow）"""
         platform_stats = {}
         for platform in self.parser.platform_support.keys():
             platform_stats[platform] = {
-                "block_rules": 0, "allow_rules": 0, "supported": 0, 
+                "block": 0, "allow": 0, "supported": 0, 
                 "unsupported": 0, "adguard_converted": 0
             }
         
@@ -605,7 +605,7 @@ class UnifiedConverter:
                 
                 # 保存转换后的规则
                 platform_rules[platform][target_class].append(converted)
-                self.stats["platforms"][platform][target_class] += 1
+                self.stats["platforms"][platform][target_class] += 1  # 此处不再报KeyError
                 self.stats["platforms"][platform]["supported"] += 1
                 
                 # 统计AdGuard规则转换数
@@ -806,7 +806,7 @@ class UnifiedConverter:
                 logger.debug(f"清理Mihomo临时文件：{temp_path}")
 
     def _print_stats(self) -> None:
-        """打印统计报告"""
+        """打印统计报告（同步修改统计项名称）"""
         logger.info("\n" + "="*60)
         logger.info("规则转换统计报告")
         logger.info("="*60)
@@ -833,9 +833,9 @@ class UnifiedConverter:
         for platform, stats in self.stats["platforms"].items():
             if platform == "mihomo":
                 continue
-            total = stats["block_rules"] + stats["allow_rules"]
+            total = stats["block"] + stats["allow"]  # 同步修改为block/allow
             logger.info(f"   - {platform.upper()}：")
-            logger.info(f"     总规则：{total} | 拦截规则：{stats['block_rules']} | 放行规则：{stats['allow_rules']}")
+            logger.info(f"     总规则：{total} | 拦截规则：{stats['block']} | 放行规则：{stats['allow']}")
             logger.info(f"     支持规则：{stats['supported']} | 不支持规则：{stats['unsupported']}")
             logger.info(f"     AdGuard规则转换：{stats['adguard_converted']}")
         
@@ -850,7 +850,7 @@ class UnifiedConverter:
             self._generate_github_summary()
 
     def _generate_github_summary(self) -> None:
-        """生成GitHub Actions步骤摘要"""
+        """生成GitHub Actions步骤摘要（同步修改统计项名称）"""
         summary_path = os.getenv('GITHUB_STEP_SUMMARY')
         if not summary_path:
             return
@@ -884,8 +884,8 @@ class UnifiedConverter:
         for platform, stats in self.stats["platforms"].items():
             if platform == "mihomo":
                 continue
-            total = stats["block_rules"] + stats["allow_rules"]
-            summary += f"| {platform.upper()} | {total} | {stats['block_rules']} | {stats['allow_rules']} |\n"
+            total = stats["block"] + stats["allow"]  # 同步修改为block/allow
+            summary += f"| {platform.upper()} | {total} | {stats['block']} | {stats['allow']} |\n"
         
         if self.stats["mihomo_hashes"]:
             summary += "\n### 4. Mihomo规则校验\n"
