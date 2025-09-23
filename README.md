@@ -49,7 +49,8 @@
 - uBlock Origin 白名单数量：876
 - AdGuard 拦截规则数量：17579
 - AdGuard 白名单数量：3489
-- Clash 混合规则数量：18571
+- Clash 拦截规则数量：18571
+- Clash 白名单数量: 2357
 - Surge 混合规则数量：399
 - Pi-hole 拦截规则数量：399
 - Pi-hole 白名单数量：855
@@ -69,10 +70,11 @@
 | uBlock Origin | 白名单规则 | [allow_ubo.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_ubo.txt)     | [allow_ubo.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_ubo.txt)     |
 | AdGuard含Adguard Home | 拦截规则   | [adblock_adg.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_adg.txt) | [adblock_adg.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_adg.txt) |
 | AdGuard含Adguard Home | 白名单规则 | [allow_adg.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_adg.txt)     | [allow_adg.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_adg.txt)     |
-| Clash       | 混合规则   | [adblock_clash.yaml](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_clash.yaml) | [adblock_clash.yaml](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_clash.yaml) |
+| Clash       | 拦截规则   | [adblock_clash.yaml](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_clash.yaml) | [adblock_clash.yaml](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_clash.yaml) |
+| Clash       | 白名单   | [adblock_clash.yaml](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_clash.yaml) | [adblock_clash.yaml](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_clash.yaml) |
 | Mihomo      | 拦截规则   | [adb.mrs](https://raw.githubusercontent.com/045200/ad-filter/multi/adb.mrs)             | [adb.mrs](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adb.mrs)             |
 | Mihomo      | 放行规则   | [allow.mrs](https://raw.githubusercontent.com/045200/ad-filter/multi/allow.mrs)             | [allow.mrs](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow.mrs)             |
-| Surge       | 混合规则   | [adblock_surge.conf](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.conf) | [adblock_surge.conf](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.conf) |
+| Surge       | 拦截规则   | [adblock_surge.conf](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.txt) | [adblock_surge.conf](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.txt) |
 | Pi-hole     | 拦截规则   | [adblock_pihole.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_pihole.txt) | [adblock_pihole.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_pihole.txt) |
 | Pi-hole     | 白名单规则 | [allow_pihole.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_pihole.txt) | [allow_pihole.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_pihole.txt) |
 
