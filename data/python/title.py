@@ -57,7 +57,7 @@ def detect_files(base_dir: Path) -> Dict[str, Dict[str, Path]]:
                 detected["allow"][ab_key] = allow_path
 
     # 检测hosts文件
-    for suffix in (".txt", ".conf"):
+    for suffix in (".txt"):
         hosts_path = base_dir / f"hosts{suffix}"
         if hosts_path.is_file():
             detected["hosts"] = hosts_path
