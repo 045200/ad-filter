@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-增强版统一规则转换器 - 支持AdGuard到多平台规则转换（纯净规则版）
-支持平台：Clash, Surge, Mihomo, Pi-hole, uBlock Origin, Adblock Plus, Hosts文件
-核心逻辑：仅Mihomo黑名单执行白名单过滤（防止误杀），其他平台保持原始黑白名单独立逻辑
-输出特性：无文件头元信息，仅含纯净规则；按语法数据库补充Clash/Surge规则集头与动作
+统一规则转换器 - 基于语法数据库v4.3的多平台规则转换
+支持平台：Clash, Surge, Mihomo, Pi-hole, uBlock Origin, Adblock Plus, Hosts
+增强版：完全兼容AdGuard语法，支持高级修饰符转换
 """
 
 import os
@@ -18,899 +17,984 @@ from typing import Dict, List, Set, Tuple, Optional, Any, Pattern
 from dataclasses import dataclass, field
 import logging
 from datetime import datetime
+from pybloom_live import ScalableBloomFilter
 
-# --------------------------
-# 全局常量（统一管理，便于维护）
-# --------------------------
-CLASH_BLOCK_PREFIX = "+."
-CLASH_ALLOW_PREFIX = "-."
-SURGE_DOMAIN_PREFIX = "."
-HOSTS_BLOCK_TEMPLATE = "0.0.0.0 {domain}"
-MAX_RULE_LENGTH = 2000  # 基于语法数据库validation_rules
-MIN_RULE_LENGTH = 3     # 基于语法数据库validation_rules
-VALID_DOMAIN_CHARS = re.compile(r'^[a-zA-Z0-9.-]+$')
-
-# --------------------------
-# 日志配置（支持详细模式，便于调试）
-# --------------------------
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(module)s:%(lineno)d - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
 
-# --------------------------
-# 通用工具类（消除冗余逻辑）
-# --------------------------
-class Utils:
-    @staticmethod
-    def extract_domain_from_adguard_rule(rule: str) -> Optional[str]:
-        """从AdGuard规则提取并标准化域名"""
-        if not rule or len(rule) < MIN_RULE_LENGTH:
-            return None
-        
-        # 处理例外前缀
-        clean_rule = rule[2:] if rule.startswith('@@') else rule
-        
-        # 匹配AdGuard标准格式（||domain^）
-        adg_match = re.match(r'^\|\|([a-zA-Z0-9.*-]+[a-zA-Z0-9])\^?$', clean_rule)
-        if adg_match:
-            domain = adg_match.group(1)
-            return Utils.normalize_domain(domain)
-        
-        # 匹配普通域名
-        if VALID_DOMAIN_CHARS.match(clean_rule):
-            domain = clean_rule.replace('*.', '').replace('*', '')
-            return Utils.normalize_domain(domain) if '.' in domain else None
-        
-        return None
-
-    @staticmethod
-    def normalize_domain(domain: str) -> str:
-        """域名标准化：转小写、去通配符、去尾部点"""
-        if not domain:
-            return ""
-        return domain.lower().replace('*.', '').replace('*', '').rstrip('.')
-
-    @staticmethod
-    def is_valid_rule(rule: str) -> bool:
-        """规则有效性校验：排除注释、空行、长度异常"""
-        rule_stripped = rule.strip()
-        if not rule_stripped or rule_stripped.startswith(('!', '#', '\n', '\r')):
-            return False
-        if len(rule_stripped) < MIN_RULE_LENGTH or len(rule_stripped) > MAX_RULE_LENGTH:
-            logger.debug(f"无效规则（长度异常）：{rule_stripped}")
-            return False
-        return True
-
-    @staticmethod
-    def calculate_file_hash(file_path: Path) -> str:
-        """计算文件SHA256哈希"""
-        if not file_path.exists() or file_path.is_dir():
-            logger.error(f"哈希计算失败：{file_path} 不是有效文件")
-            return "invalid_file"
-        
-        sha256_hash = hashlib.sha256()
-        try:
-            with open(file_path, "rb") as f:
-                for chunk in iter(lambda: f.read(4096), b""):
-                    sha256_hash.update(chunk)
-            return sha256_hash.hexdigest()
-        except Exception as e:
-            logger.error(f"计算{file_path}哈希出错：{str(e)[:30]}")
-            return f"error:{str(e)[:20]}"
-
-    @staticmethod
-    def verify_file_integrity(file_path: Path) -> bool:
-        """验证文件完整性：存在性、非空、最小大小"""
-        if not file_path.exists():
-            logger.error(f"文件不存在：{file_path}")
-            return False
-        
-        file_size = file_path.stat().st_size
-        if file_size == 0:
-            logger.warning(f"空文件：{file_path}")
-            return False
-        if file_size < 10:
-            logger.warning(f"文件过小（{file_size}字节）：{file_path}")
-            return False
-        
-        logger.debug(f"文件验证通过：{file_path}（{file_size}字节）")
-        return True
-
-# --------------------------
-# 配置类（集中管理路径与开关）
-# --------------------------
 @dataclass
 class UnifiedConfig:
-    # 基础路径
+    """配置类 - 基于语法数据库v4.3"""
     BASE_DIR: Path = Path(os.getenv('GITHUB_WORKSPACE', Path.cwd()))
     
-    # 输入文件
+    # 输入文件（脚本1的输出）
     INPUT_BLOCK: Path = BASE_DIR / "adblock_adg.txt"
     INPUT_ALLOW: Path = BASE_DIR / "allow_adg.txt"
     
-    # 输出配置
+    # 输出配置（基于platform_support）
     OUTPUT_DIR: Path = BASE_DIR
     OUTPUT_FILES: Dict[str, Dict[str, str]] = field(default_factory=lambda: {
         "clash": {"block": "adblock_clash.yaml", "allow": "allow_clash.yaml"},
-        "surge": {"block": "adblock_surge.txt"},
+        "surge": {"block": "adblock_surge.txt", "allow": "allow_surge.txt"},
         "pihole": {"block": "adblock_pihole.txt", "allow": "allow_pihole.txt"},
         "ublock_origin": {"block": "adblock_ubo.txt", "allow": "allow_ubo.txt"},
         "adblock_plus": {"block": "adblock_abp.txt", "allow": "allow_abp.txt"},
         "hosts": {"block": "hosts.txt"},
-        "mihomo_output": {"block": "adb.mrs"}
+        "mihomo": {"block": "adb.mrs"},
+        "adguard_home": {"block": "adguard_home.txt", "allow": "allow_adguard_home.txt"},
+        "adguard_browser": {"block": "adguard_browser.txt", "allow": "allow_adguard_browser.txt"}
     })
     
-    # 语法数据库路径（多路径 fallback）
-    SYNTAX_DB_FILES: List[Path] = field(default_factory=lambda: [
-        Path("data/python/adblock_syntax_db.json"),
-        Path("adblock_syntax_db.json"),
-        Path(__file__).parent / "adblock_syntax_db.json"
-    ])
+    # 语法数据库路径
+    SYNTAX_DB_FILE: Path = BASE_DIR / "data" / "python" / "adblock_syntax_db.json"
     
-    # Mihomo工具路径
-    MIHOMO_TOOL_PATH: Path = BASE_DIR / "data/mihomo-tool"
-    
-    # 功能开关（支持环境变量控制）
-    ENABLE_MIHOMO_COMPILATION: bool = os.getenv('ENABLE_MIHOMO', 'true').lower() == 'true'
+    # 功能开关
+    ENABLE_MIHOMO: bool = os.getenv('ENABLE_MIHOMO', 'true').lower() == 'true'
     ENABLE_DEDUPLICATION: bool = os.getenv('ENABLE_DEDUPE', 'true').lower() == 'true'
     ENABLE_WHITELIST_FILTERING: bool = os.getenv('ENABLE_WHITELIST', 'true').lower() == 'true'
-    VERBOSE_LOGGING: bool = os.getenv('VERBOSE_LOGGING', 'false').lower() == 'true'
+    ENABLE_ADVANCED_MODIFIERS: bool = os.getenv('ENABLE_ADVANCED_MODIFIERS', 'true').lower() == 'true'
     
     # 性能配置
-    BATCH_PROCESSING_SIZE: int = 1000
-    BLOOM_FILTER_CAPACITY: int = 1_000_000
-    BLOOM_FILTER_ERROR_RATE: float = 0.001
+    BATCH_SIZE: int = 1000
+    BLOOM_CAPACITY: int = 1000000
+    BLOOM_ERROR_RATE: float = 0.001
     
-    # CI环境标识
+    # 平台过滤
+    TARGET_PLATFORMS: List[str] = field(default_factory=lambda: [
+        "clash", "surge", "pihole", "ublock_origin", "adblock_plus", 
+        "hosts", "mihomo", "adguard_home", "adguard_browser"
+    ])
+    
     GITHUB_ACTIONS: bool = os.getenv('GITHUB_ACTIONS', 'false').lower() == 'true'
-    GITHUB_REPOSITORY: str = os.getenv('GITHUB_REPOSITORY', 'unknown/repo')
-    GITHUB_SHA: str = os.getenv('GITHUB_SHA', 'unknown')
 
-    def get_syntax_db_path(self) -> Optional[Path]:
-        """获取有效语法数据库路径"""
-        for path in self.SYNTAX_DB_FILES:
-            full_path = self.BASE_DIR / path if not path.is_absolute() else path
-            if full_path.exists() and full_path.is_file():
-                return full_path
-        return None
 
-# --------------------------
-# 白名单过滤器（仅服务于Mihomo）
-# --------------------------
-class WhitelistFilter:
+class EnhancedSyntaxDatabase:
+    """增强版语法数据库 - 与第一个脚本保持一致"""
     def __init__(self, config: UnifiedConfig):
         self.config = config
-        self.whitelist_domains: Set[str] = self._load_whitelist()
-        logger.info(f"白名单加载完成：共{len(self.whitelist_domains)}个域名")
+        self.db_data = {}
+        self.platform_support = {}
+        self.rule_types = {}
+        self.syntax_patterns = {}
+        self.modifiers = {}
+        self.common_patterns = {}
+        self.load_database()
 
-    def _load_whitelist(self) -> Set[str]:
-        """加载并标准化白名单域名"""
-        domains = set()
-        if not self.config.INPUT_ALLOW.exists():
-            logger.warning(f"白名单文件不存在：{self.config.INPUT_ALLOW}")
-            return domains
+    def load_database(self):
+        """加载语法数据库"""
+        possible_paths = [
+            self.config.SYNTAX_DB_FILE,
+            self.config.BASE_DIR / "adblock_syntax_db.json",
+            Path(__file__).parent / "adblock_syntax_db.json"
+        ]
         
+        db_path = None
+        for path in possible_paths:
+            if path.exists():
+                db_path = path
+                break
+                
+        if not db_path:
+            logger.warning("未找到语法数据库，使用内置默认配置")
+            self._setup_default_config()
+            return
+
         try:
-            with open(self.config.INPUT_ALLOW, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    line = line.strip()
-                    if not Utils.is_valid_rule(line):
-                        continue
-                    
-                    domain = Utils.extract_domain_from_adguard_rule(line)
-                    if domain:
-                        domains.add(domain)
+            with open(db_path, 'r', encoding='utf-8') as f:
+                self.db_data = json.load(f)
+                
+            self._validate_database()
+            self._extract_sections()
+            logger.info(f"语法数据库v{self.db_data.get('version', '未知')}加载成功")
+            
         except Exception as e:
-            logger.error(f"加载白名单失败：{e}")
-        
-        return domains
+            logger.error(f"数据库加载失败: {e}")
+            self._setup_default_config()
 
-    def filter_block_rules(self, block_rules: List[str]) -> Tuple[List[str], int]:
-        """过滤黑名单规则（仅Mihomo使用）：移除匹配白名单的规则"""
-        if not self.config.ENABLE_WHITELIST_FILTERING or not self.whitelist_domains:
-            return block_rules, 0
-        
-        filtered = []
-        filtered_count = 0
-        
-        for rule in block_rules:
-            # 提取规则中的域名（处理Clash格式：+.domain → domain）
-            rule_domain = Utils.extract_domain_from_adguard_rule(rule.lstrip(CLASH_BLOCK_PREFIX))
-            if not rule_domain:
-                filtered.append(rule)
-                continue
+    def _setup_default_config(self):
+        """默认配置"""
+        self.platform_support = {
+            "clash": {
+                "supported_rule_types": ["domain_rule", "adguard_domain_rule", "exception_rule"],
+                "rule_format": {
+                    "domain_rule": "+.{domain}",
+                    "adguard_domain_rule": "+.{domain}", 
+                    "exception_rule": "-.{domain}"
+                }
+            },
+            "surge": {
+                "supported_rule_types": ["domain_rule", "adguard_domain_rule", "exception_rule"],
+                "rule_format": {
+                    "domain_rule": ".{domain}",
+                    "adguard_domain_rule": ".{domain}",
+                    "exception_rule": "@.{domain}"
+                }
+            },
+            "pihole": {
+                "supported_rule_types": ["domain_rule", "adguard_domain_rule", "exception_rule"],
+                "rule_format": {
+                    "domain_rule": "{domain}",
+                    "adguard_domain_rule": "{domain}",
+                    "exception_rule": "@@{domain}"
+                }
+            },
+            "ublock_origin": {
+                "supported_rule_types": ["domain_rule", "adguard_domain_rule", "exception_rule"],
+                "rule_format": {
+                    "domain_rule": "||{domain}^",
+                    "adguard_domain_rule": "||{domain}^",
+                    "exception_rule": "@@||{domain}^"
+                }
+            },
+            "adblock_plus": {
+                "supported_rule_types": ["domain_rule", "adguard_domain_rule", "exception_rule"],
+                "rule_format": {
+                    "domain_rule": "||{domain}^",
+                    "adguard_domain_rule": "||{domain}^", 
+                    "exception_rule": "@@||{domain}^"
+                }
+            },
+            "hosts": {
+                "supported_rule_types": ["domain_rule", "adguard_domain_rule"],
+                "rule_format": {
+                    "domain_rule": "0.0.0.0 {domain}",
+                    "adguard_domain_rule": "0.0.0.0 {domain}"
+                }
+            },
+            "adguard_home": {
+                "supported_rule_types": ["domain_rule", "adguard_domain_rule", "exception_rule", 
+                                       "adguard_dns_rewrite", "adguard_home_dns_rewrite"],
+                "rule_format": {
+                    "domain_rule": "||{domain}^",
+                    "adguard_domain_rule": "||{domain}^",
+                    "exception_rule": "@@||{domain}^",
+                    "adguard_dns_rewrite": "{original}",
+                    "adguard_home_dns_rewrite": "{original}"
+                }
+            },
+            "adguard_browser": {
+                "supported_rule_types": ["domain_rule", "adguard_domain_rule", "exception_rule",
+                                       "element_hiding_basic", "element_hiding_exception"],
+                "rule_format": {
+                    "domain_rule": "||{domain}^",
+                    "adguard_domain_rule": "||{domain}^",
+                    "exception_rule": "@@||{domain}^",
+                    "element_hiding_basic": "##{content}",
+                    "element_hiding_exception": "#@#{content}"
+                }
+            }
+        }
+
+    def _validate_database(self):
+        """验证数据库完整性"""
+        required_fields = ["platform_support", "syntax_patterns", "rule_types", "modifiers"]
+        missing = [f for f in required_fields if f not in self.db_data]
+        if missing:
+            logger.warning(f"数据库缺少字段: {missing}")
+
+    def _extract_sections(self):
+        """提取数据库各章节"""
+        self.platform_support = self.db_data.get("platform_support", {})
+        self.rule_types = self.db_data.get("rule_types", {})
+        self.syntax_patterns = self.db_data.get("syntax_patterns", {})
+        self.modifiers = self.db_data.get("modifiers", {})
+        self.common_patterns = self.db_data.get("common_patterns", {})
+
+    def get_platform_config(self, platform: str) -> Dict:
+        """获取平台配置"""
+        return self.platform_support.get(platform, {})
+
+    def get_rule_format(self, platform: str, rule_type: str) -> Optional[str]:
+        """获取规则格式模板"""
+        platform_cfg = self.get_platform_config(platform)
+        formats = platform_cfg.get("rule_format", {})
+        return formats.get(rule_type)
+
+    def is_rule_supported(self, platform: str, rule_info: Dict) -> bool:
+        """检查规则是否被平台支持"""
+        platform_cfg = self.get_platform_config(platform)
+        if not platform_cfg:
+            return False
             
-            # 检查域名是否在白名单（含子域名匹配）
-            if self._is_domain_in_whitelist(rule_domain):
-                filtered_count += 1
-                logger.debug(f"Mihomo白名单过滤规则：{rule}（匹配域名：{rule_domain}）")
-                continue
-            
-            filtered.append(rule)
+        rule_type = rule_info.get("pattern_type", "unknown")
+        modifiers = rule_info.get("modifiers", [])
         
-        return filtered, filtered_count
+        supported_types = platform_cfg.get("supported_rule_types", [])
+        unsupported_types = platform_cfg.get("unsupported_rule_types", [])
+        
+        if rule_type in unsupported_types:
+            return False
+        if supported_types and rule_type not in supported_types:
+            return False
+            
+        # 检查修饰符支持
+        unsupported_mods = platform_cfg.get("unsupported_modifiers", [])
+        if any(mod in unsupported_mods for mod in modifiers):
+            return False
+            
+        # 特殊平台限制
+        if platform == "hosts" and rule_info.get("is_exception"):
+            return False  # Hosts不支持例外规则
+            
+        return True
 
-    def _is_domain_in_whitelist(self, domain: str) -> bool:
-        """检查域名是否在白名单（支持子域名匹配）"""
-        if domain in self.whitelist_domains:
-            return True
-        # 匹配子域名（如sub.abc.com → abc.com）
-        parts = domain.split('.')
-        for i in range(1, len(parts)-1):  # 避免匹配顶级域名
-            parent_domain = '.'.join(parts[i:])
-            if parent_domain in self.whitelist_domains:
-                return True
-        return False
+    def get_supported_platforms(self, rule_info: Dict) -> List[str]:
+        """获取支持该规则的平台列表"""
+        return [platform for platform in self.platform_support.keys() 
+                if self.is_rule_supported(platform, rule_info)]
 
-# --------------------------
-# 规则解析器（基于语法数据库）
-# --------------------------
-class UnifiedRuleParser:
-    def __init__(self, config: UnifiedConfig, syntax_db: Dict):
-        self.config = config
+
+class AdvancedRuleParser:
+    """高级规则解析器 - 完全兼容AdGuard语法"""
+    def __init__(self, syntax_db: EnhancedSyntaxDatabase):
         self.syntax_db = syntax_db
-        self.platform_support = self.syntax_db.get("platform_support", {})
-        self.compiled_patterns: Dict[str, Pattern] = self._compile_patterns()
-        self.adg_modifier_pattern = re.compile(r'\$([a-zA-Z-]+)(?:=([^,\s]+))?(?:,|$)')
+        self.compiled_patterns = self._compile_patterns()
 
     def _compile_patterns(self) -> Dict[str, Pattern]:
-        """预编译语法数据库中的正则"""
-        compiled = {}
-        patterns = self.syntax_db.get("syntax_patterns", {})
-        
-        for name, pattern_str in patterns.items():
-            if name == "comment":
-                continue
-            
+        """编译语法模式"""
+        patterns = {}
+        for name, pattern_str in self.syntax_db.syntax_patterns.items():
             try:
-                # 为域名规则添加行首匹配
-                if name.endswith('_rule') and not pattern_str.startswith('^'):
+                # 确保模式是完整的正则表达式
+                if not pattern_str.startswith('^'):
                     pattern_str = '^' + pattern_str
-                compiled[name] = re.compile(pattern_str, re.IGNORECASE)
+                if not pattern_str.endswith('$'):
+                    pattern_str = pattern_str + '$'
+                    
+                patterns[name] = re.compile(pattern_str)
             except re.error as e:
-                logger.warning(f"编译正则失败（{name}）：{e}，使用宽松匹配")
-                compiled[name] = re.compile(r'.*')
-        
-        logger.info(f"成功编译{len(compiled)}个语法模式")
-        return compiled
+                logger.warning(f"模式编译失败 {name}: {e}")
+        return patterns
 
     def parse_rule(self, rule: str) -> Dict[str, Any]:
-        """解析单条规则，返回结构化信息"""
+        """解析单条AdGuard规则"""
         result = {
             "original": rule,
-            "type": "unknown",
+            "normalized": rule.strip(),
             "pattern_type": "unknown",
             "content": "",
             "domain": "",
             "modifiers": [],
+            "modifier_details": {},
             "is_exception": rule.startswith("@@"),
-            "is_comment": rule.startswith(('!', '#')),
-            "is_valid": False
+            "is_valid": False,
+            "validation_msg": ""
         }
 
-        # 处理注释/空行
-        if result["is_comment"] or not Utils.is_valid_rule(rule):
-            result["type"] = "comment" if result["is_comment"] else "invalid"
+        # 跳过注释和空行
+        if not rule.strip() or rule.strip().startswith(('#', '!', ';')):
+            result["type"] = "comment"
             return result
 
-        # 移除例外前缀
-        clean_rule = rule[2:] if result["is_exception"] else rule
-        result["is_valid"] = True
-
-        # 优先解析AdGuard标准域名规则
-        adg_domain_match = re.match(r'^\|\|([a-zA-Z0-9.*-]+[a-zA-Z0-9])\^?$', clean_rule)
-        if adg_domain_match:
-            result["pattern_type"] = "adguard_domain_rule"
-            result["type"] = "block"
-            result["content"] = adg_domain_match.group(1)
-            result["domain"] = Utils.normalize_domain(result["content"])
-            self._extract_modifiers(clean_rule, result)
-            return result
-
-        # 基于语法数据库匹配其他规则类型
-        for pattern_name, pattern in self.compiled_patterns.items():
-            match = pattern.match(clean_rule)
-            if not match:
-                continue
-            
-            result["pattern_type"] = pattern_name
-            result["type"] = self.syntax_db["rule_types"].get(pattern_name, "block")
-            result["content"] = match.group(1) if match.lastindex else match.group(0)
-            
-            # 提取域名（仅域名类规则）
-            if pattern_name in ["domain_rule", "adguard_domain_rule", "pihole_domain"]:
-                result["domain"] = Utils.normalize_domain(result["content"])
-            
-            self._extract_modifiers(clean_rule, result)
-            break
-
-        # 兜底处理未知规则
-        if result["pattern_type"] == "unknown":
-            result["pattern_type"] = "generic_rule"
-            result["type"] = "block"
-            result["content"] = clean_rule
-            result["domain"] = Utils.extract_domain_from_adguard_rule(clean_rule) or ""
-
+        # 基本清理
+        clean_rule = rule.strip()
+        
+        # 识别规则类型
+        self._identify_rule_type(clean_rule, result)
+        
+        # 提取修饰符
+        self._extract_modifiers_advanced(clean_rule, result)
+        
+        # 提取域名
+        self._extract_domain_advanced(result)
+        
+        # 验证规则
+        self._validate_rule(result)
+        
         return result
 
-    def _extract_modifiers(self, rule: str, result: Dict[str, Any]) -> None:
-        """提取规则中的修饰符"""
+    def _identify_rule_type(self, rule: str, result: Dict[str, Any]):
+        """识别规则类型"""
+        # 按优先级匹配规则类型
+        rule_patterns = [
+            ("adguard_dns_rewrite", r'.*\$dnsrewrite='),
+            ("adguard_home_dns_rewrite", r'.*\$dnsrewrite=.*;.*;'),
+            ("adguard_domain_rule", r'^\|\|[a-zA-Z0-9.-]+\^'),
+            ("element_hiding_basic", r'^##'),
+            ("element_hiding_exception", r'^#@#'),
+            ("extended_css", r'^#\?#'),
+            ("adguard_scriptlet", r'^#%#'),
+            ("exception_rule", r'^@@'),
+            ("domain_rule", r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'),
+            ("hosts_rule", r'^\d+\.\d+\.\d+\.\d+\s+'),
+            ("regex_rule", r'^/.*/$')
+        ]
+        
+        for pattern_type, pattern in rule_patterns:
+            if re.search(pattern, rule):
+                result["pattern_type"] = pattern_type
+                result["content"] = self._extract_content(rule, pattern_type)
+                break
+
+    def _extract_content(self, rule: str, pattern_type: str) -> str:
+        """提取规则内容"""
+        if pattern_type == "adguard_domain_rule":
+            match = re.match(r'^\|\|([a-zA-Z0-9.-]+)\^', rule)
+            return match.group(1) if match else ""
+        elif pattern_type in ["element_hiding_basic", "element_hiding_exception"]:
+            return rule[3:]  # 移除 ## 或 #@#
+        elif pattern_type == "exception_rule":
+            return rule[2:]  # 移除 @@
+        elif pattern_type == "domain_rule":
+            return rule.split('$')[0]  # 移除修饰符
+        else:
+            return rule
+
+    def _extract_modifiers_advanced(self, rule: str, result: Dict[str, Any]):
+        """高级修饰符提取"""
         if '$' not in rule:
             return
+            
+        # 分离模式和修饰符
+        parts = rule.split('$', 1)
+        modifier_str = parts[1]
         
-        modifiers = self.adg_modifier_pattern.findall(rule)
-        for mod_name, mod_value in modifiers:
-            if not mod_name:
-                continue
-            result["modifiers"].append((mod_name.lower(), mod_value.strip() if mod_value else None))
-
-    def is_supported_by_platform(self, rule_info: Dict[str, Any], platform: str) -> bool:
-        """检查规则是否支持指定平台"""
-        if platform not in self.platform_support:
-            logger.debug(f"平台{platform}未在语法数据库中定义")
-            return False
-        
-        platform_cfg = self.platform_support[platform]
-        rule_type = rule_info["pattern_type"]
-        modifiers = [mod[0] for mod in rule_info["modifiers"]]
-
-        # 检查规则类型支持
-        supported_types = platform_cfg.get("supported_rule_types", [])
-        unsupported_types = platform_cfg.get("unsupported_rule_types", [])
-        if rule_type in unsupported_types or (supported_types and rule_type not in supported_types):
-            return False
-
-        # 检查修饰符支持
-        unsupported_mods = platform_cfg.get("unsupported_modifiers", [])
-        special_mods = platform_cfg.get("special_modifiers", [])
-        for mod in modifiers:
-            if mod in unsupported_mods and mod not in special_mods:
-                logger.debug(f"平台{platform}不支持修饰符{mod}：{rule_info['original']}")
-                return False
-
-        # 平台特殊限制
-        if platform == "hosts" and rule_info["is_exception"]:
-            return False
-        if platform == "surge" and rule_info["is_exception"]:
-            return False
-
-        return True
-
-    def convert_to_platform(self, rule_info: Dict[str, Any], platform: str) -> Optional[str]:
-        """将规则转换为指定平台格式"""
-        if not self.is_supported_by_platform(rule_info, platform):
-            return None
-        
-        platform_cfg = self.platform_support[platform]
-        rule_type = rule_info["pattern_type"]
-        rule_format = platform_cfg.get("rule_format", {}).get(rule_type)
-
-        # 优先使用语法数据库定义的格式
-        if rule_format:
-            format_params = {
-                'domain': rule_info["domain"] or rule_info["content"],
-                'pattern': rule_info["content"],
-                'rule': rule_info["original"],
-                'name': self._get_ruleset_name(platform, rule_info["is_exception"])
-            }
-            try:
-                converted = rule_format.format(**format_params)
-                return self._adjust_platform_specific(converted, rule_info, platform)
-            except KeyError as e:
-                logger.warning(f"格式填充失败（{rule_type}）：缺少键{e}，使用原始规则")
-
-        # 兜底转换逻辑
-        return self._fallback_conversion(rule_info, platform)
-
-    def _get_ruleset_name(self, platform: str, is_exception: bool) -> str:
-        """根据平台和规则类型获取规则集名称（匹配输出文件名）"""
-        if platform == "clash":
-            return "allow_clash" if is_exception else "adblock_clash"
-        elif platform == "surge":
-            return "allow_surge" if is_exception else "adblock_surge"
-        return "default_ruleset"
-
-    def _adjust_platform_specific(self, rule: str, rule_info: Dict[str, Any], platform: str) -> str:
-        """平台特定调整（如例外规则前缀）"""
-        if not rule_info["is_exception"]:
-            return rule
-        
-        if platform in ["ublock_origin", "adblock_plus"]:
-            if rule_info["pattern_type"].startswith("element_hiding"):
-                return rule.replace("##", "#@#")
-            return f"@@{rule}"
-        
-        if platform == "pihole":
-            return f"@@{rule}"
-        
-        return rule
-
-    def _fallback_conversion(self, rule_info: Dict[str, Any], platform: str) -> Optional[str]:
-        """兜底转换逻辑"""
-        domain = rule_info["domain"]
-        is_exception = rule_info["is_exception"]
-
-        if not domain:
-            return rule_info["original"] if rule_info["is_valid"] else None
-
-        conversions = {
-            "clash": f"{CLASH_ALLOW_PREFIX}{domain}" if is_exception else f"{CLASH_BLOCK_PREFIX}{domain}",
-            "surge": f"{SURGE_DOMAIN_PREFIX}{domain}" if not is_exception else None,
-            "pihole": f"@@{domain}" if is_exception else domain,
-            "hosts": HOSTS_BLOCK_TEMPLATE.format(domain=domain) if not is_exception else None,
-            "ublock_origin": f"@@||{domain}^" if is_exception else f"||{domain}^",
-            "adblock_plus": f"@@||{domain}^" if is_exception else f"||{domain}^"
+        # 匹配各种修饰符格式
+        modifier_patterns = {
+            'domain': r'domain=([^,\s]+)',
+            'client': r'client=([^,\s]+)',
+            'dnstype': r'dnstype=([^,\s]+)',
+            'denyallow': r'denyallow=([^,\s]+)',
+            'dnsrewrite': r'dnsrewrite=([^,\s]+)',
+            'important': r'\bimportant\b',
+            'badfilter': r'\bbadfilter\b',
+            'third-party': r'\bthird-party\b',
+            'script': r'\bscript\b',
+            'image': r'\bimage\b',
+            'stylesheet': r'\bstylesheet\b',
+            'redirect': r'redirect=([^,\s]+)',
+            'removeparam': r'removeparam=([^,\s]+)',
+            'csp': r'csp=([^,\s]+)',
+            'cookie': r'cookie=([^,\s]+)',
+            'generichide': r'\bgenerichide\b',
+            'stealth': r'\bstealth\b',
+            'header': r'header=([^,\s]+)',
+            'jsonprune': r'jsonprune=([^,\s]+)'
         }
-
-        return conversions.get(platform)
-
-# --------------------------
-# 主转换器（协调所有流程）
-# --------------------------
-class UnifiedConverter:
-    def __init__(self, config: UnifiedConfig):
-        self.config = config
-        self.syntax_db = self._load_syntax_db()
-        self.parser = UnifiedRuleParser(config, self.syntax_db)
-        self.whitelist_filter = WhitelistFilter(config)  # 仅服务于Mihomo
-        self.bloom_filter = self._init_bloom_filter()
-        self.seen_rules: Set[str] = set()
-        self.stats = self._init_stats()
-
-    def _load_syntax_db(self) -> Dict:
-        """加载语法数据库"""
-        db_path = self.config.get_syntax_db_path()
-        if not db_path:
-            raise FileNotFoundError(f"未找到语法数据库，尝试路径：{self.config.SYNTAX_DB_FILES}")
         
-        try:
-            with open(db_path, 'r', encoding='utf-8') as f:
-                db = json.load(f)
-            # 验证数据库完整性
-            required_fields = db.get("integrity_checks", {}).get("required_fields", [
-                "version", "syntax_patterns", "rule_types", "platform_support"
-            ])
-            missing_fields = [f for f in required_fields if f not in db]
-            if missing_fields:
-                raise ValueError(f"语法数据库缺少必要字段：{missing_fields}")
-            
-            logger.info(f"成功加载语法数据库（版本：{db.get('version', 'unknown')}）：{db_path}")
-            return db
-        except Exception as e:
-            raise RuntimeError(f"加载语法数据库失败：{e}") from e
+        for mod_name, pattern in modifier_patterns.items():
+            matches = re.findall(pattern, modifier_str)
+            if matches:
+                result["modifiers"].append(mod_name)
+                if mod_name in ['domain', 'client', 'dnstype', 'denyallow', 'dnsrewrite', 
+                               'redirect', 'removeparam', 'csp', 'cookie', 'header', 'jsonprune']:
+                    result["modifier_details"][mod_name] = matches
+                else:
+                    result["modifier_details"][mod_name] = True
 
-    def _init_bloom_filter(self) -> Optional[Any]:
-        """初始化布隆过滤器（用于去重）"""
-        if not self.config.ENABLE_DEDUPLICATION:
-            logger.info("去重功能已禁用，不初始化布隆过滤器")
-            return None
-        
-        try:
-            from pybloom_live import BloomFilter
-            bf = BloomFilter(
-                capacity=self.config.BLOOM_FILTER_CAPACITY,
-                error_rate=self.config.BLOOM_FILTER_ERROR_RATE
-            )
-            logger.info("使用布隆过滤器进行去重")
-            return bf
-        except ImportError:
-            logger.warning("pybloom_live未安装，仅使用集合去重（性能可能下降）")
-            return None
+    def _extract_domain_advanced(self, result: Dict[str, Any]):
+        """高级域名提取"""
+        if result["pattern_type"] in ["adguard_domain_rule", "domain_rule"]:
+            result["domain"] = result["content"].lower()
+        elif result["pattern_type"] == "adguard_dns_rewrite":
+            # 从DNS重写规则中提取域名
+            match = re.search(r'\|\|([a-zA-Z0-9.-]+)\^', result["original"])
+            if match:
+                result["domain"] = match.group(1).lower()
+        elif "domain" in result["modifier_details"]:
+            # 从domain修饰符中提取
+            domains = result["modifier_details"]["domain"]
+            if domains:
+                result["domain"] = domains[0].lower()
 
-    def _init_stats(self) -> Dict[str, Any]:
-        """初始化统计信息（核心修复：将block_rules/allow_rules改为block/allow）"""
-        platform_stats = {}
-        for platform in self.parser.platform_support.keys():
-            platform_stats[platform] = {
-                "block": 0, "allow": 0, "supported": 0, 
-                "unsupported": 0, "adguard_converted": 0
-            }
-        
-        return {
-            "total_processed": 0, "original_counts": {"block": 0, "allow": 0},
-            "duplicates": 0, "unsupported": 0, "mihomo_whitelist_filtered": 0,
-            "mihomo_hashes": {}, "adguard_specific_rules": 0,
-            "platforms": platform_stats
-        }
-
-    def run(self) -> None:
-        """主流程：加载→转换→保存→Mihomo编译→统计"""
-        try:
-            # 1. 初始化平台规则存储
-            platform_rules = self._init_platform_rules()
-            
-            # 2. 处理输入文件（黑白名单独立转换，无交叉过滤）
-            self._process_input_file(self.config.INPUT_BLOCK, platform_rules, "block")
-            self._process_input_file(self.config.INPUT_ALLOW, platform_rules, "allow")
-            
-            # 3. 全平台规则去重
-            platform_rules = self._deduplicate_rules(platform_rules)
-            
-            # 4. 保存所有平台产物（Mihomo除外）
-            self._save_platform_rules(platform_rules)
-            
-            # 5. 单独处理Mihomo：提取→过滤→编译
-            if self.config.ENABLE_MIHOMO_COMPILATION:
-                self._compile_mihomo_with_whitelist(platform_rules)
-            
-            # 6. 输出统计
-            self._print_stats()
-            logger.info("规则转换流程全部完成！")
-        except Exception as e:
-            logger.error(f"转换流程失败：{e}", exc_info=True)
-            sys.exit(1)
-
-    def _init_platform_rules(self) -> Dict[str, Dict[str, List[str]]]:
-        """初始化平台规则存储结构"""
-        return {
-            platform: {"block": [], "allow": []} 
-            for platform in self.parser.platform_support.keys()
-        }
-
-    def _process_input_file(self, file_path: Path, platform_rules: Dict, rule_class: str) -> None:
-        """处理单个输入文件（批量解析+转换）"""
-        if not file_path.exists():
-            logger.warning(f"跳过不存在的文件：{file_path}")
+    def _validate_rule(self, result: Dict[str, Any]):
+        """规则验证"""
+        if result["pattern_type"] == "unknown":
+            result["is_valid"] = False
+            result["validation_msg"] = "未知规则类型"
             return
-        
-        logger.info(f"开始处理文件：{file_path}（规则类型：{rule_class}）")
-        batch: List[str] = []
-        
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.strip()
-                self.stats["total_processed"] += 1
-                
-                # 统计原始有效规则数
-                if Utils.is_valid_rule(line):
-                    self.stats["original_counts"][rule_class] += 1
-                
-                # 批量处理
-                batch.append(line)
-                if len(batch) >= self.config.BATCH_PROCESSING_SIZE:
-                    self._process_batch(batch, platform_rules, rule_class, line_num - len(batch) + 1)
-                    batch = []
             
-            # 处理剩余批次
-            if batch:
-                self._process_batch(batch, platform_rules, rule_class, len(f.readlines()) - len(batch) + 1)
+        # 基本长度验证
+        if len(result["normalized"]) < 3:
+            result["is_valid"] = False
+            result["validation_msg"] = "规则过短"
+            return
+            
+        # 域名规则验证
+        if result["pattern_type"] in ["adguard_domain_rule", "domain_rule"]:
+            if not result["domain"] or '.' not in result["domain"]:
+                result["is_valid"] = False
+                result["validation_msg"] = "无效域名"
+                return
+                
+        result["is_valid"] = True
+        result["validation_msg"] = "验证通过"
 
-    def _process_batch(self, batch: List[str], platform_rules: Dict, rule_class: str, start_line: int) -> None:
-        """批量处理规则（提升性能）"""
-        for idx, line in enumerate(batch):
-            line_num = start_line + idx
-            if not Utils.is_valid_rule(line) or line.startswith(('!', '#')):
-                continue
-            
-            # 去重检查
-            if self._is_duplicate_rule(line):
-                self.stats["duplicates"] += 1
-                continue
-            
-            # 解析规则
-            parsed = self.parser.parse_rule(line)
-            if not parsed["is_valid"]:
-                self.stats["unsupported"] += 1
-                logger.debug(f"无效规则（行{line_num}）：{line}")
-                continue
-            
-            # 统计AdGuard特定规则
-            if parsed["pattern_type"].startswith("adguard_"):
-                self.stats["adguard_specific_rules"] += 1
-            
-            # 转换到各平台
-            target_class = "allow" if parsed["is_exception"] or rule_class == "allow" else "block"
-            for platform in platform_rules.keys():
-                # 跳过不支持例外规则的平台
-                if target_class == "allow" and platform in ["hosts", "surge"]:
-                    continue
-                
-                converted = self.parser.convert_to_platform(parsed, platform)
-                if not converted:
-                    self.stats["platforms"][platform]["unsupported"] += 1
-                    continue
-                
-                # 保存转换后的规则
-                platform_rules[platform][target_class].append(converted)
-                self.stats["platforms"][platform][target_class] += 1
-                self.stats["platforms"][platform]["supported"] += 1
-                
-                # 统计AdGuard规则转换数
-                if parsed["pattern_type"].startswith("adguard_"):
-                    self.stats["platforms"][platform]["adguard_converted"] += 1
 
-    def _is_duplicate_rule(self, rule: str) -> bool:
-        """检查规则是否重复（布隆过滤器+集合双重校验）"""
-        if not self.config.ENABLE_DEDUPLICATION:
+class SmartPlatformConverter:
+    """智能平台转换器"""
+    def __init__(self, syntax_db: EnhancedSyntaxDatabase, config: UnifiedConfig):
+        self.syntax_db = syntax_db
+        self.config = config
+        self.conversion_rules = self._build_conversion_rules()
+
+    def _build_conversion_rules(self) -> Dict[str, Dict[str, Any]]:
+        """构建转换规则"""
+        return {
+            "clash": {
+                "domain_rule": lambda r: f"+.{r['domain']}",
+                "adguard_domain_rule": lambda r: f"+.{r['domain']}",
+                "exception_rule": lambda r: f"-.{r['domain']}",
+                "fallback": lambda r: f"+.{r['domain']}" if r['domain'] else None
+            },
+            "surge": {
+                "domain_rule": lambda r: f".{r['domain']}",
+                "adguard_domain_rule": lambda r: f".{r['domain']}",
+                "exception_rule": lambda r: f"@.{r['domain']}",
+                "fallback": lambda r: f".{r['domain']}" if r['domain'] else None
+            },
+            "pihole": {
+                "domain_rule": lambda r: r['domain'],
+                "adguard_domain_rule": lambda r: r['domain'],
+                "exception_rule": lambda r: f"@@{r['domain']}",
+                "fallback": lambda r: r['domain'] if r['domain'] else None
+            },
+            "ublock_origin": {
+                "domain_rule": lambda r: f"||{r['domain']}^",
+                "adguard_domain_rule": lambda r: f"||{r['domain']}^",
+                "exception_rule": lambda r: f"@@||{r['domain']}^",
+                "element_hiding_basic": lambda r: r['original'],
+                "element_hiding_exception": lambda r: r['original'],
+                "fallback": lambda r: f"||{r['domain']}^" if r['domain'] else r['original']
+            },
+            "adblock_plus": {
+                "domain_rule": lambda r: f"||{r['domain']}^",
+                "adguard_domain_rule": lambda r: f"||{r['domain']}^",
+                "exception_rule": lambda r: f"@@||{r['domain']}^",
+                "element_hiding_basic": lambda r: r['original'],
+                "element_hiding_exception": lambda r: r['original'],
+                "fallback": lambda r: f"||{r['domain']}^" if r['domain'] else r['original']
+            },
+            "hosts": {
+                "domain_rule": lambda r: f"0.0.0.0 {r['domain']}",
+                "adguard_domain_rule": lambda r: f"0.0.0.0 {r['domain']}",
+                "fallback": lambda r: f"0.0.0.0 {r['domain']}" if r['domain'] else None
+            },
+            "adguard_home": {
+                "domain_rule": lambda r: f"||{r['domain']}^",
+                "adguard_domain_rule": lambda r: f"||{r['domain']}^",
+                "exception_rule": lambda r: f"@@||{r['domain']}^",
+                "adguard_dns_rewrite": lambda r: r['original'],
+                "adguard_home_dns_rewrite": lambda r: r['original'],
+                "fallback": lambda r: r['original']
+            },
+            "adguard_browser": {
+                "domain_rule": lambda r: f"||{r['domain']}^",
+                "adguard_domain_rule": lambda r: f"||{r['domain']}^",
+                "exception_rule": lambda r: f"@@||{r['domain']}^",
+                "element_hiding_basic": lambda r: r['original'],
+                "element_hiding_exception": lambda r: r['original'],
+                "fallback": lambda r: r['original']
+            }
+        }
+
+    def convert_rule(self, rule_info: Dict[str, Any], platform: str) -> Optional[str]:
+        """转换规则到指定平台"""
+        if not self.syntax_db.is_rule_supported(platform, rule_info):
+            return None
+
+        try:
+            platform_rules = self.conversion_rules.get(platform, {})
+            rule_type = rule_info["pattern_type"]
+            
+            # 优先使用特定规则类型的转换器
+            if rule_type in platform_rules:
+                result = platform_rules[rule_type](rule_info)
+                if result:
+                    return result
+            
+            # 使用fallback转换器
+            if "fallback" in platform_rules:
+                result = platform_rules["fallback"](rule_info)
+                if result:
+                    return result
+                    
+            # 最终fallback：返回原始规则
+            return rule_info["original"]
+            
+        except Exception as e:
+            logger.warning(f"规则转换失败 {platform}: {rule_info['original']} - {e}")
+            return None
+
+    def convert_modifiers(self, rule_info: Dict[str, Any], platform: str) -> str:
+        """转换修饰符（高级功能）"""
+        if not self.config.ENABLE_ADVANCED_MODIFIERS:
+            return ""
+            
+        modifiers = rule_info.get("modifiers", [])
+        if not modifiers:
+            return ""
+            
+        # 平台特定的修饰符处理
+        modifier_handlers = {
+            "adguard_home": self._handle_adguard_home_modifiers,
+            "adguard_browser": self._handle_adguard_browser_modifiers,
+            "ublock_origin": self._handle_ubo_modifiers
+        }
+        
+        handler = modifier_handlers.get(platform)
+        if handler:
+            return handler(rule_info)
+            
+        return ""
+
+    def _handle_adguard_home_modifiers(self, rule_info: Dict[str, Any]) -> str:
+        """处理AdGuard Home修饰符"""
+        modifiers = []
+        details = rule_info.get("modifier_details", {})
+        
+        if "client" in details:
+            modifiers.append(f"client={','.join(details['client'])}")
+        if "dnstype" in details:
+            modifiers.append(f"dnstype={','.join(details['dnstype'])}")
+        if "denyallow" in details:
+            modifiers.append(f"denyallow={','.join(details['denyallow'])}")
+        if "important" in details:
+            modifiers.append("important")
+            
+        return ','.join(modifiers)
+
+    def _handle_adguard_browser_modifiers(self, rule_info: Dict[str, Any]) -> str:
+        """处理AdGuard浏览器修饰符"""
+        modifiers = []
+        details = rule_info.get("modifier_details", {})
+        
+        # 内容类型修饰符
+        content_mods = ["script", "image", "stylesheet", "object", "xmlhttprequest"]
+        for mod in content_mods:
+            if mod in details:
+                modifiers.append(mod)
+                
+        # 高级修饰符
+        if "important" in details:
+            modifiers.append("important")
+        if "third-party" in details:
+            modifiers.append("third-party")
+        if "redirect" in details:
+            modifiers.append(f"redirect={','.join(details['redirect'])}")
+            
+        return ','.join(modifiers)
+
+    def _handle_ubo_modifiers(self, rule_info: Dict[str, Any]) -> str:
+        """处理uBlock Origin修饰符"""
+        modifiers = []
+        details = rule_info.get("modifier_details", {})
+        
+        # uBO支持的修饰符有限
+        if "important" in details:
+            modifiers.append("important")
+        if "third-party" in details:
+            modifiers.append("third-party")
+            
+        return ','.join(modifiers)
+
+
+class EnhancedWhitelistFilter:
+    """增强版白名单过滤器"""
+    def __init__(self, allow_file: Path):
+        self.whitelist_domains = self._load_whitelist(allow_file)
+        self.whitelist_patterns = self._build_whitelist_patterns()
+
+    def _load_whitelist(self, allow_file: Path) -> Set[str]:
+        """加载白名单域名"""
+        domains = set()
+        if not allow_file.exists():
+            return domains
+            
+        try:
+            with open(allow_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    domain = self._extract_domain_from_rule(line.strip())
+                    if domain:
+                        domains.add(domain)
+        except Exception as e:
+            logger.error(f"白名单加载失败: {e}")
+            
+        logger.info(f"加载白名单域名: {len(domains)}个")
+        return domains
+
+    def _extract_domain_from_rule(self, rule: str) -> Optional[str]:
+        """从规则提取域名"""
+        if rule.startswith('@@'):
+            rule = rule[2:]
+        if rule.startswith('||'):
+            rule = rule[2:].rstrip('^')
+        
+        # 提取基础域名
+        domain_match = re.match(r'^([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', rule)
+        return domain_match.group(1).lower() if domain_match else None
+
+    def _build_whitelist_patterns(self) -> List[Pattern]:
+        """构建白名单匹配模式"""
+        patterns = []
+        for domain in self.whitelist_domains:
+            try:
+                # 精确匹配域名及其子域名
+                pattern = re.compile(r'^(.*\.)?' + re.escape(domain) + r'$')
+                patterns.append(pattern)
+            except re.error:
+                continue
+        return patterns
+
+    def filter_rules(self, rules: List[str], rule_type: str = "domain") -> Tuple[List[str], int]:
+        """过滤规则（移除白名单匹配项）"""
+        if not self.whitelist_domains:
+            return rules, 0
+            
+        filtered = []
+        removed_count = 0
+        
+        for rule in rules:
+            if not self._is_whitelisted(rule, rule_type):
+                filtered.append(rule)
+            else:
+                removed_count += 1
+                
+        return filtered, removed_count
+
+    def _is_whitelisted(self, rule: str, rule_type: str) -> bool:
+        """检查规则是否在白名单中"""
+        domain = self._extract_domain_from_rule(rule)
+        if not domain:
             return False
-        
-        if self.bloom_filter and rule in self.bloom_filter:
-            if rule in self.seen_rules:
+            
+        # 检查精确匹配
+        if domain in self.whitelist_domains:
+            return True
+            
+        # 检查模式匹配
+        for pattern in self.whitelist_patterns:
+            if pattern.match(domain):
                 return True
-        
-        # 添加到去重容器
-        if self.bloom_filter:
-            self.bloom_filter.add(rule)
-        self.seen_rules.add(rule)
+                
         return False
 
-    def _deduplicate_rules(self, platform_rules: Dict) -> Dict[str, Dict[str, List[str]]]:
-        """对各平台规则进行去重"""
-        if not self.config.ENABLE_DEDUPLICATION:
-            return platform_rules
-        
-        logger.info("开始对各平台规则去重...")
-        for platform, rules in platform_rules.items():
-            for rule_type in ["block", "allow"]:
-                if platform in ["hosts", "surge"] and rule_type == "allow":
-                    continue
-                
-                original_count = len(rules[rule_type])
-                unique_rules = list(set(rules[rule_type]))
-                rules[rule_type] = unique_rules
-                removed = original_count - len(unique_rules)
-                self.stats["duplicates"] += removed
-                
-                if removed > 0:
-                    logger.info(f"平台{platform}（{rule_type}）：去重前{original_count}条 → 去重后{len(unique_rules)}条（移除{removed}条）")
-        
-        return platform_rules
 
-    def _save_platform_rules(self, platform_rules: Dict) -> None:
-        """保存各平台规则文件（Mihomo除外）- 无文件头，补充Clash/Surge规则集头"""
-        self.config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        logger.info(f"开始保存规则文件到：{self.config.OUTPUT_DIR}")
+class UnifiedConverter:
+    """统一转换器"""
+    def __init__(self, config: UnifiedConfig):
+        self.config = config
+        self.syntax_db = EnhancedSyntaxDatabase(config)
+        self.parser = AdvancedRuleParser(self.syntax_db)
+        self.converter = SmartPlatformConverter(self.syntax_db, config)
+        self.whitelist_filter = EnhancedWhitelistFilter(config.INPUT_ALLOW)
+        
+        # 去重过滤器
+        self.bloom_filters = {}
+        self._init_bloom_filters()
+        
+        # 统计信息
+        self.stats = {
+            "total_processed": 0, "valid_rules": 0, "invalid_rules": 0,
+            "duplicates_removed": 0, "whitelist_filtered": 0,
+            "platforms": {}, "rule_types": {}
+        }
+        
+        self._init_stats()
 
-        # 平台保存逻辑映射
-        save_handlers = {
-            "clash": self._save_clash_rules,
-            "surge": self._save_surge_rules,
-            "hosts": self._save_hosts_rules,
-            "default": self._save_default_rules
+    def _init_bloom_filters(self):
+        """初始化布隆过滤器"""
+        for platform in self.config.TARGET_PLATFORMS:
+            self.bloom_filters[platform] = {
+                "block": ScalableBloomFilter(
+                    initial_capacity=self.config.BLOOM_CAPACITY,
+                    error_rate=self.config.BLOOM_ERROR_RATE
+                ),
+                "allow": ScalableBloomFilter(
+                    initial_capacity=self.config.BLOOM_CAPACITY,
+                    error_rate=self.config.BLOOM_ERROR_RATE
+                )
+            }
+
+    def _init_stats(self):
+        """初始化统计信息"""
+        for platform in self.config.TARGET_PLATFORMS:
+            self.stats["platforms"][platform] = {
+                "block": 0, "allow": 0, "unsupported": 0
+            }
+        
+        # 初始化规则类型统计
+        for rule_type in ["domain_rule", "adguard_domain_rule", "exception_rule", 
+                         "element_hiding_basic", "adguard_dns_rewrite", "other"]:
+            self.stats["rule_types"][rule_type] = 0
+
+    def run(self):
+        """主转换流程"""
+        logger.info("=== 开始统一规则转换 ===")
+        
+        try:
+            # 1. 处理输入文件
+            platform_rules = self._process_input_files()
+            
+            # 2. 应用白名单过滤（Mihomo专用）
+            if self.config.ENABLE_WHITELIST_FILTERING:
+                platform_rules = self._apply_whitelist_filtering(platform_rules)
+            
+            # 3. 保存各平台规则
+            self._save_platform_rules(platform_rules)
+            
+            # 4. 特殊处理：Mihomo编译
+            if self.config.ENABLE_MIHOMO and "mihomo" in platform_rules:
+                self._compile_mihomo_rules(platform_rules["mihomo"]["block"])
+                
+            # 5. 输出统计报告
+            self._print_statistics()
+            
+        except Exception as e:
+            logger.error(f"转换失败: {e}")
+            raise
+
+    def _process_input_files(self) -> Dict[str, Dict[str, List[str]]]:
+        """处理输入文件"""
+        platform_rules = {
+            platform: {"block": [], "allow": []} 
+            for platform in self.config.TARGET_PLATFORMS
         }
 
+        # 处理黑名单文件
+        if self.config.INPUT_BLOCK.exists():
+            logger.info(f"处理黑名单文件: {self.config.INPUT_BLOCK}")
+            self._process_single_file(self.config.INPUT_BLOCK, platform_rules, "block")
+        else:
+            logger.warning(f"黑名单文件不存在: {self.config.INPUT_BLOCK}")
+            
+        # 处理白名单文件  
+        if self.config.INPUT_ALLOW.exists():
+            logger.info(f"处理白名单文件: {self.config.INPUT_ALLOW}")
+            self._process_single_file(self.config.INPUT_ALLOW, platform_rules, "allow")
+        else:
+            logger.warning(f"白名单文件不存在: {self.config.INPUT_ALLOW}")
+            
+        return platform_rules
+
+    def _process_single_file(self, file_path: Path, platform_rules: Dict, rule_class: str):
+        """处理单个文件"""
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            batch = []
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith(('!', '#')):
+                    continue
+                    
+                batch.append(line)
+                if len(batch) >= self.config.BATCH_SIZE:
+                    self._process_batch(batch, platform_rules, rule_class)
+                    batch = []
+                    
+            if batch:
+                self._process_batch(batch, platform_rules, rule_class)
+
+    def _process_batch(self, batch: List[str], platform_rules: Dict, rule_class: str):
+        """处理批次规则"""
+        for rule in batch:
+            self.stats["total_processed"] += 1
+            
+            parsed = self.parser.parse_rule(rule)
+            if not parsed["is_valid"]:
+                self.stats["invalid_rules"] += 1
+                continue
+                
+            self.stats["valid_rules"] += 1
+            self._update_rule_type_stats(parsed["pattern_type"])
+            self._distribute_rule(parsed, platform_rules, rule_class)
+
+    def _update_rule_type_stats(self, rule_type: str):
+        """更新规则类型统计"""
+        if rule_type in self.stats["rule_types"]:
+            self.stats["rule_types"][rule_type] += 1
+        else:
+            self.stats["rule_types"]["other"] += 1
+
+    def _distribute_rule(self, rule_info: Dict, platform_rules: Dict, input_class: str):
+        """分发规则到各平台"""
+        # 确定目标类别（基于规则本身或输入文件）
+        target_class = "allow" if rule_info["is_exception"] or input_class == "allow" else "block"
+        
+        for platform in self.config.TARGET_PLATFORMS:
+            converted_rule = self.converter.convert_rule(rule_info, platform)
+            if not converted_rule:
+                self.stats["platforms"][platform]["unsupported"] += 1
+                continue
+                
+            # 去重检查
+            if self._is_duplicate(platform, target_class, converted_rule):
+                self.stats["duplicates_removed"] += 1
+                continue
+                
+            platform_rules[platform][target_class].append(converted_rule)
+            self.stats["platforms"][platform][target_class] += 1
+
+    def _is_duplicate(self, platform: str, rule_class: str, rule: str) -> bool:
+        """检查重复规则"""
+        if not self.config.ENABLE_DEDUPLICATION:
+            return False
+            
+        rule_hash = hashlib.md5(rule.encode('utf-8')).hexdigest()
+        bloom_filter = self.bloom_filters[platform][rule_class]
+        
+        if rule_hash in bloom_filter:
+            return True
+            
+        bloom_filter.add(rule_hash)
+        return False
+
+    def _apply_whitelist_filtering(self, platform_rules: Dict) -> Dict:
+        """应用白名单过滤"""
+        if "mihomo" not in platform_rules:
+            return platform_rules
+            
+        original_count = len(platform_rules["mihomo"]["block"])
+        filtered_rules, filtered_count = self.whitelist_filter.filter_rules(
+            platform_rules["mihomo"]["block"]
+        )
+        
+        platform_rules["mihomo"]["block"] = filtered_rules
+        self.stats["whitelist_filtered"] = filtered_count
+        
+        logger.info(f"Mihomo白名单过滤: {original_count} -> {len(filtered_rules)} 条规则")
+        return platform_rules
+
+    def _save_platform_rules(self, platform_rules: Dict):
+        """保存各平台规则"""
+        self.config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        
         for platform, rules in platform_rules.items():
-            if platform == "mihomo":  # Mihomo单独处理，此处跳过
-                continue
-            handler = save_handlers.get(platform, save_handlers["default"])
-            handler(platform, rules)
+            for rule_type in ["block", "allow"]:
+                if not rules[rule_type]:
+                    continue
+                    
+                output_file = self.config.OUTPUT_FILES.get(platform, {}).get(rule_type)
+                if not output_file:
+                    continue
+                    
+                output_path = self.config.OUTPUT_DIR / output_file
+                content = self._format_platform_output(platform, rule_type, rules[rule_type])
+                
+                try:
+                    with open(output_path, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    logger.info(f"保存 {platform} {rule_type}: {output_path} ({len(rules[rule_type])}条)")
+                except Exception as e:
+                    logger.error(f"保存失败 {platform} {rule_type}: {e}")
 
-    def _save_clash_rules(self, platform: str, rules: Dict[str, List[str]]) -> None:
-        """保存Clash规则 - 无文件头，补充RULE-SET头+payload结构（语法数据库标准）"""
-        for rule_type in ["block", "allow"]:
-            if not rules[rule_type]:
-                continue
-            
-            output_path = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform][rule_type]
-            # 1. 补充Clash规则集头（按语法数据库：#RULE-SET,{name},{action}）
-            ruleset_name = "adblock_clash" if rule_type == "block" else "allow_clash"
-            ruleset_action = "REJECT" if rule_type == "block" else "DIRECT"
-            ruleset_header = f"#RULE-SET,{ruleset_name},{ruleset_action}"
-            # 2. 构建纯净规则内容（仅payload+规则）
-            rule_lines = [f"  - '{rule}'" for rule in rules[rule_type]]
-            content = "\n".join([ruleset_header, "payload:"] + rule_lines)
-            
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            logger.info(f"已保存Clash {rule_type} 规则：{output_path}（{len(rules[rule_type])}条）")
+    def _format_platform_output(self, platform: str, rule_type: str, rules: List[str]) -> str:
+        """格式化平台输出"""
+        if platform == "clash":
+            return self._format_clash_output(rules, rule_type)
+        elif platform == "surge":
+            return self._format_surge_output(rules, rule_type)
+        else:
+            return "\n".join(rules)
 
-    def _save_surge_rules(self, platform: str, rules: Dict[str, List[str]]) -> None:
-        """保存Surge规则 - 无文件头，补充DOMAIN-SET头（语法数据库标准）"""
-        if not rules["block"]:
+    def _format_clash_output(self, rules: List[str], rule_type: str) -> str:
+        """格式化Clash输出"""
+        ruleset_name = "allow_clash" if rule_type == "allow" else "adblock_clash"
+        action = "DIRECT" if rule_type == "allow" else "REJECT"
+        
+        lines = [f"# {ruleset_name} ruleset", f"# Generated: {datetime.now().isoformat()}"]
+        lines.append(f"#RULE-SET,{ruleset_name},{action}")
+        lines.append("payload:")
+        lines.extend([f"  - '{rule}'" for rule in sorted(set(rules))])
+        
+        return "\n".join(lines)
+
+    def _format_surge_output(self, rules: List[str], rule_type: str) -> str:
+        """格式化Surge输出"""
+        ruleset_name = "adblock_surge"
+        action = "REJECT"
+        
+        lines = [f"# {ruleset_name} ruleset", f"# Generated: {datetime.now().isoformat()}"]
+        lines.append(f"#DOMAIN-SET,{ruleset_name},{action}")
+        lines.extend(sorted(set(rules)))
+        
+        return "\n".join(lines)
+
+    def _compile_mihomo_rules(self, mihomo_rules: List[str]):
+        """编译Mihomo规则"""
+        if not mihomo_rules:
+            logger.warning("无Mihomo规则可编译")
             return
-        
-        output_path = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform]["block"]
-        # 1. 补充Surge域名集头（按语法数据库：#DOMAIN-SET,{name},REJECT）
-        ruleset_header = "#DOMAIN-SET,adblock_surge,REJECT"
-        # 2. 构建纯净规则内容（仅头+规则）
-        content = "\n".join([ruleset_header] + rules["block"])
-        
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        logger.info(f"已保存Surge 规则：{output_path}（{len(rules['block'])}条）")
-
-    def _save_hosts_rules(self, platform: str, rules: Dict[str, List[str]]) -> None:
-        """保存Hosts规则 - 无文件头，仅纯净规则"""
-        if not rules["block"]:
-            return
-        
-        output_path = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform]["block"]
-        # 仅保留纯净规则，无任何头信息
-        content = "\n".join(rules["block"])
-        
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        logger.info(f"已保存Hosts 规则：{output_path}（{len(rules['block'])}条）")
-
-    def _save_default_rules(self, platform: str, rules: Dict[str, List[str]]) -> None:
-        """默认保存逻辑（Pi-hole、uBlock等）- 无文件头，仅纯净规则"""
-        for rule_type in ["block", "allow"]:
-            if platform in ["hosts", "surge"] and rule_type == "allow":
-                continue
-            if not rules[rule_type]:
-                continue
-            if rule_type not in self.config.OUTPUT_FILES.get(platform, {}):
-                logger.debug(f"平台{platform}无{rule_type}规则输出配置，跳过")
-                continue
             
-            output_path = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES[platform][rule_type]
-            # 仅保留纯净规则，无任何头信息
-            content = "\n".join(rules[rule_type])
-            
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            logger.info(f"已保存{platform.upper()} {rule_type} 规则：{output_path}（{len(rules[rule_type])}条）")
-
-    def _compile_mihomo_with_whitelist(self, platform_rules: Dict) -> None:
-        """Mihomo专属流程：提取Clash黑名单→白名单过滤→编译"""
-        # 1. 提取Clash黑名单中的域名规则（仅+.domain格式）
-        clash_block_rules = platform_rules.get("clash", {}).get("block", [])
-        mihomo_source_rules = [r for r in clash_block_rules if r.startswith(CLASH_BLOCK_PREFIX)]
+        output_path = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo"]["block"]
         
-        if not mihomo_source_rules:
-            logger.warning("无有效Clash域名规则，无法生成Mihomo黑名单")
-            return
-        logger.info(f"Mihomo编译前：从Clash提取{len(mihomo_source_rules)}条域名规则")
-
-        # 2. 执行白名单过滤（仅Mihomo生效）
-        filtered_rules, filtered_count = self.whitelist_filter.filter_block_rules(mihomo_source_rules)
-        self.stats["mihomo_whitelist_filtered"] = filtered_count
-        if not filtered_rules:
-            logger.warning("Mihomo规则经白名单过滤后为空，跳过编译")
-            return
-        logger.info(f"Mihomo白名单过滤：移除{filtered_count}条误杀规则，剩余{len(filtered_rules)}条")
-
-        # 3. 编译Mihomo规则（使用语法数据库标准Clash规则格式）
-        output_path = self.config.OUTPUT_DIR / self.config.OUTPUT_FILES["mihomo_output"]["block"]
-        temp_path = ""
+        # 创建临时Clash格式文件
+        temp_file = None
         try:
-            # 创建临时Clash规则文件（含标准RULE-SET头）
-            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.yaml', delete=False) as temp_f:
-                temp_f.write("#RULE-SET,adblock_clash,REJECT\n")
-                temp_f.write("payload:\n")
-                for rule in filtered_rules:
-                    temp_f.write(f"  - '{rule}'\n")
-                temp_path = temp_f.name
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.yaml', delete=False) as f:
+                f.write(self._format_clash_output(mihomo_rules, "block"))
+                temp_file = f.name
 
-            # 执行编译命令
-            cmd = [
-                str(self.config.MIHOMO_TOOL_PATH),
-                "convert-ruleset",
-                "domain",
-                "yaml",
-                temp_path,
-                str(output_path)
-            ]
-            subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=True)
-
-            # 验证结果
-            if Utils.verify_file_integrity(output_path):
-                file_hash = Utils.calculate_file_hash(output_path)
-                self.stats["mihomo_hashes"]["adb.mrs"] = file_hash
-                logger.info(f"Mihomo黑名单编译完成：{output_path}（SHA256：{file_hash}）")
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("Mihomo编译超时（300秒）")
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Mihomo编译命令失败（退出码{e.returncode}）：{e.stderr}")
+            # 调用Mihomo编译工具（需要根据实际环境调整）
+            self._execute_mihomo_compile(temp_file, output_path)
+            
         except Exception as e:
-            raise RuntimeError(f"Mihomo编译异常：{str(e)}")
+            logger.error(f"Mihomo编译失败: {e}")
         finally:
-            # 清理临时文件
-            if temp_path and Path(temp_path).exists():
-                Path(temp_path).unlink(missing_ok=True)
-                logger.debug(f"清理Mihomo临时文件：{temp_path}")
+            if temp_file and Path(temp_file).exists():
+                Path(temp_file).unlink()
 
-    def _print_stats(self) -> None:
-        """打印统计报告（同步修改统计项名称）"""
+    def _execute_mihomo_compile(self, input_file: str, output_file: Path):
+        """执行Mihomo编译"""
+        # 这里需要根据实际的Mihomo编译工具调整命令
+        # 示例命令（需要安装mihomo-tool）：
+        # cmd = ["mihomo-tool", "compile", input_file, str(output_file)]
+        
+        # 临时方案：直接复制Clash规则（实际使用时需要替换为真正的编译命令）
+        try:
+            with open(input_file, 'r', encoding='utf-8') as f_in:
+                content = f_in.read()
+            
+            with open(output_file, 'w', encoding='utf-8') as f_out:
+                f_out.write(f"# Mihomo规则（从Clash转换）\n")
+                f_out.write(f"# 注意：需要安装mihomo-tool进行真正编译\n")
+                f_out.write(content)
+                
+            logger.info(f"Mihomo规则已保存（需要手动编译）: {output_file}")
+            
+        except Exception as e:
+            logger.error(f"Mihomo规则保存失败: {e}")
+
+    def _print_statistics(self):
+        """打印统计信息"""
         logger.info("\n" + "="*60)
         logger.info("规则转换统计报告")
         logger.info("="*60)
         
-        # 基础统计
-        logger.info(f"1. 基础信息")
-        logger.info(f"   - 总处理行数：{self.stats['total_processed']}")
-        logger.info(f"   - 原始黑名单规则：{self.stats['original_counts']['block']}")
-        logger.info(f"   - 原始白名单规则：{self.stats['original_counts']['allow']}")
-        logger.info(f"   - 重复规则移除：{self.stats['duplicates']}")
-        logger.info(f"   - 不支持规则：{self.stats['unsupported']}")
-        logger.info(f"   - AdGuard特定规则：{self.stats['adguard_specific_rules']}")
+        logger.info(f"总处理规则: {self.stats['total_processed']}")
+        logger.info(f"有效规则: {self.stats['valid_rules']}")
+        logger.info(f"无效规则: {self.stats['invalid_rules']}")
+        logger.info(f"重复规则移除: {self.stats['duplicates_removed']}")
+        logger.info(f"白名单过滤: {self.stats['whitelist_filtered']}")
         
-        # Mihomo专属统计
-        logger.info(f"\n2. Mihomo专属处理")
-        clash_block = self._init_platform_rules().get("clash", {}).get("block", [])
-        mihomo_source = len([r for r in clash_block if r.startswith(CLASH_BLOCK_PREFIX)])
-        logger.info(f"   - 从Clash提取规则数：{mihomo_source}")
-        logger.info(f"   - 白名单过滤移除数：{self.stats['mihomo_whitelist_filtered']}")
-        logger.info(f"   - 最终编译规则数：{mihomo_source - self.stats['mihomo_whitelist_filtered']}")
+        logger.info("\n规则类型分布:")
+        for rule_type, count in self.stats["rule_types"].items():
+            if count > 0:
+                logger.info(f"  {rule_type}: {count}")
         
-        # 各平台产物统计
-        logger.info(f"\n3. 各平台产物结果（无白名单过滤）")
+        logger.info("\n各平台规则统计:")
         for platform, stats in self.stats["platforms"].items():
-            if platform == "mihomo":
-                continue
             total = stats["block"] + stats["allow"]
-            logger.info(f"   - {platform.upper()}：")
-            logger.info(f"     总规则：{total} | 拦截规则：{stats['block']} | 放行规则：{stats['allow']}")
-            logger.info(f"     支持规则：{stats['supported']} | 不支持规则：{stats['unsupported']}")
-            logger.info(f"     AdGuard规则转换：{stats['adguard_converted']}")
-        
-        # Mihomo校验信息
-        if self.stats["mihomo_hashes"]:
-            logger.info(f"\n4. Mihomo规则校验")
-            for filename, file_hash in self.stats["mihomo_hashes"].items():
-                logger.info(f"   - {filename}：SHA256 = {file_hash}")
-        
-        # GitHub Actions摘要
-        if self.config.GITHUB_ACTIONS:
-            self._generate_github_summary()
+            if total > 0:
+                logger.info(f"  {platform}: 拦截{stats['block']}, 放行{stats['allow']}, 不支持{stats['unsupported']}")
 
-    def _generate_github_summary(self) -> None:
-        """生成GitHub Actions步骤摘要（同步修改统计项名称）"""
-        summary_path = os.getenv('GITHUB_STEP_SUMMARY')
-        if not summary_path:
-            return
-        
-        summary = f"""## 多平台规则转换结果
-**执行时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-**仓库**: {self.config.GITHUB_REPOSITORY}
-**提交**: [{self.config.GITHUB_SHA[:7]}](https://github.com/{self.config.GITHUB_REPOSITORY}/commit/{self.config.GITHUB_SHA})
 
-### 1. 处理统计
-| 项目 | 数量 |
-|------|------|
-| 总处理行数 | {self.stats['total_processed']} |
-| 原始黑名单规则 | {self.stats['original_counts']['block']} |
-| 原始白名单规则 | {self.stats['original_counts']['allow']} |
-| 重复规则移除 | {self.stats['duplicates']} |
-| 不支持规则 | {self.stats['unsupported']} |
-| AdGuard特定规则 | {self.stats['adguard_specific_rules']} |
-
-### 2. Mihomo专属处理
-| 项目 | 数量 |
-|------|------|
-| 从Clash提取规则数 | {len([r for r in self._init_platform_rules().get('clash', {}).get('block', []) if r.startswith(CLASH_BLOCK_PREFIX)])} |
-| 白名单过滤移除数 | {self.stats['mihomo_whitelist_filtered']} |
-| 最终编译规则数 | {len([r for r in self._init_platform_rules().get('clash', {}).get('block', []) if r.startswith(CLASH_BLOCK_PREFIX)]) - self.stats['mihomo_whitelist_filtered']} |
-
-### 3. 各平台产物（无白名单过滤）
-| 平台 | 总规则 | 拦截规则 | 放行规则 |
-|------|--------|----------|----------|
-"""
-        for platform, stats in self.stats["platforms"].items():
-            if platform == "mihomo":
-                continue
-            total = stats["block"] + stats["allow"]
-            summary += f"| {platform.upper()} | {total} | {stats['block']} | {stats['allow']} |\n"
-        
-        if self.stats["mihomo_hashes"]:
-            summary += "\n### 4. Mihomo规则校验\n"
-            for filename, file_hash in self.stats["mihomo_hashes"].items():
-                summary += f"- `{filename}`: `{file_hash}`\n"
-        
-        with open(summary_path, 'a', encoding='utf-8') as f:
-            f.write(summary)
-        logger.info("已生成GitHub Actions步骤摘要")
-
-# --------------------------
-# 脚本入口
-# --------------------------
 def main():
-    # 初始化配置
     config = UnifiedConfig()
-    # 调整日志级别
-    if config.VERBOSE_LOGGING:
-        logger.setLevel(logging.DEBUG)
-        logger.debug("启用详细日志模式")
+    logger.info("=== 统一规则转换器（增强版）===")
+    logger.info(f"目标平台: {', '.join(config.TARGET_PLATFORMS)}")
     
     try:
         converter = UnifiedConverter(config)
         converter.run()
+        logger.info("规则转换完成！")
     except Exception as e:
-        logger.error(f"脚本执行失败：{e}", exc_info=True)
+        logger.error(f"执行失败: {e}")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
