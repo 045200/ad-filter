@@ -207,14 +207,14 @@ class AdGuardCommentFreeConverter:
         os.makedirs(self.output_dir, exist_ok=True)
 
         # 输出黑名单到项目根目录（./adblock_adg_clean.txt）
-        block_path = os.path.join(self.output_dir, "adblock_adg_clean.txt")
+        block_path = os.path.join(self.output_dir, "adblock_adg.txt")
         sorted_block = sorted([r for r in self.final_rules['block'] if not self._is_comment_by_config(r)], key=self._rule_sort_key)
         with open(block_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(sorted_block))
         print(f"  黑名单文件：{block_path}（{len(sorted_block)} 条）")
 
         # 输出白名单到项目根目录（./allow_adg_clean.txt）
-        allow_path = os.path.join(self.output_dir, "allow_adg_clean.txt")
+        allow_path = os.path.join(self.output_dir, "allow_adg.txt")
         sorted_allow = sorted([r for r in self.final_rules['allow'] if not self._is_comment_by_config(r)])
         with open(allow_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(sorted_allow))
