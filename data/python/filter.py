@@ -37,12 +37,12 @@ class ConvertConfig:
     OUTPUT_MIHOMO: str = "adb.mrs"
     
     # 新增目标平台输出配置
-    OUTPUT_ADBLOCK_PLUS_BLOCK: str = "adblock_plus_block.txt"
-    OUTPUT_ADBLOCK_PLUS_ALLOW: str = "adblock_plus_allow.txt"
-    OUTPUT_UBO_BLOCK: str = "ubo_block.txt"
-    OUTPUT_UBO_ALLOW: str = "ubo_allow.txt"
-    OUTPUT_PIHOLE: str = "pihole_block.list"
-    OUTPUT_HOSTS: str = "adblock_hosts.txt"
+    OUTPUT_ADBLOCK_PLUS_BLOCK: str = "adblock_abp.txt"
+    OUTPUT_ADBLOCK_PLUS_ALLOW: str = "allow_abp.txt"
+    OUTPUT_UBO_BLOCK: str = "adblock_ubo.txt"
+    OUTPUT_UBO_ALLOW: str = "allow_ubo.txt"
+    OUTPUT_PIHOLE: str = "pihole.list"
+    OUTPUT_HOSTS: str = "hosts.txt"
     OUTPUT_SURGE_BLOCK: str = "adblock_surge.yaml"
     OUTPUT_SURGE_ALLOW: str = "allow_surge.yaml"
     
@@ -72,7 +72,6 @@ class SyntaxParser:
         self.bloom = self._init_bloom()
         self.rule_type_cache: Dict[str, str] = {}
         self.domain_cache: Dict[str, str] = {}
-        # 加载各平台支持的规则类型（从外部语法数据库）
         self.platform_supported_rules: Dict[str, Set[str]] = self._load_platform_supported_rules()
 
     def _load_db(self) -> Dict:
@@ -90,7 +89,6 @@ class SyntaxParser:
             sys.exit(1)
 
     def _compile_patterns(self) -> Dict[str, Pattern]:
-        # 完全基于外部语法数据库编译正则，不内置
         compiled = {}
         # 基础通用规则（注释、空行）
         compiled["adblock_basic_comment"] = re.compile(
@@ -125,7 +123,8 @@ class SyntaxParser:
             "ubo": set(platform_support.get("ublock_origin", {}).get("supported_rule_types", [])),
             "pihole": set(platform_support.get("adguard_home", {}).get("supported_rule_types", [])),  # Pi-hole与AdGuard Home规则兼容
             "hosts": {"hosts_rule", "adblock_basic_domain_rule"},  # Hosts支持域名转IP格式
-            "surge": set(platform_support.get("adblock_plus", {}).get("supported_rule_types", []))  # Surge基础规则与Adblock Plus兼容
+            "surge": set(platform_support.get("adblock_plus", {}).get("supported_rule_types", [])),  # Surge基础规则与Adblock Plus兼容
+            "clash": set(platform_support.get("adblock_plus", {}).get("supported_rule_types", []))   # Clash基础规则与Adblock Plus兼容
         }
 
     def get_adguard_rule_type(self, rule: str) -> str:
@@ -199,21 +198,20 @@ class RuleConverter:
             "comment": 0, "empty": 0, "non_adguard": 0
         }
 
-        # 扩展可转换域名存储（按平台分类）- 修复1：给Pi-hole补充allow空集合
         self.convertible_domains: Dict[str, Dict[str, Set[str]]] = {
             "adblock_plus": {"block": set(), "allow": set()},
             "ubo": {"block": set(), "allow": set()},
-            "pihole": {"block": set(), "allow": set()},  # 新增allow空集合，避免KeyError
+            "pihole": {"block": set(), "allow": set()},
             "hosts": {"block": set(), "allow": set()},
             "surge": {"block": set(), "allow": set()},
-            "clash": {"block": set(), "allow": set()}  # 保留原有Clash
+            "clash": {"block": set(), "allow": set()}
         }
         self.convert_stats = {
             "total_convertible": 0, "duplicate": 0, "invalid_domain": 0,
             "valid": {
                 "adblock_plus": {"block": 0, "allow": 0},
                 "ubo": {"block": 0, "allow": 0},
-                "pihole": {"block": 0, "allow": 0},  # 对应添加allow统计项
+                "pihole": {"block": 0, "allow": 0},
                 "hosts": {"block": 0, "allow": 0},
                 "surge": {"block": 0, "allow": 0},
                 "clash": {"block": 0, "allow": 0}
@@ -286,13 +284,11 @@ class RuleConverter:
                             self.convert_stats["invalid_domain"] += 1
                             continue
                         
-                        # 按平台分配域名 - 修复2：Pi-hole不支持白名单，跳过allow目标
+                        # 按平台分配域名（Pi-hole跳过白名单）
                         target = "allow" if is_allow else "block"
                         for platform in self.convertible_domains.keys():
-                            # 核心修复：Pi-hole无白名单机制，跳过allow目标分配
                             if platform == "pihole" and target == "allow":
                                 continue
-                            # 原有逻辑：判断平台是否支持该规则类型
                             if self.parser.is_platform_support_rule(platform, adguard_rule_type):
                                 self._deduplicate_domain(domain, platform, target)
 
@@ -337,11 +333,11 @@ class RuleConverter:
         logger.info("="*60)
 
     def _get_current_time(self) -> str:
-        """获取当前时间（用于规则注释）"""
+        """获取当前时间（仅用于日志，不写入产物）"""
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def _generate_adblock_plus_product(self) -> None:
-        """生成Adblock Plus规则（基于外部数据库格式定义）"""
+        """生成Adblock Plus纯净规则（仅含标准规则行）"""
         adb_plus_cfg = {
             "block": {
                 "path": self.config.OUTPUT_DIR / self.config.OUTPUT_ADBLOCK_PLUS_BLOCK,
@@ -360,17 +356,14 @@ class RuleConverter:
                 logger.warning(f"Adblock Plus{target}无有效域名 → 跳过")
                 continue
             with open(cfg["path"], "w", encoding="utf-8") as f:
-                f.write(f"! Adblock Plus {target}规则（自动转换）\n")
-                f.write(f"! 生成时间：{self._get_current_time()}\n")
-                f.write(f"! 规则数量：{len(cfg['domains'])}条\n\n")
+                # 仅写入纯净规则，无任何注释
                 for domain in cfg["domains"]:
-                    # 替换格式占位符（如{domain}）
                     rule = cfg["rule_format"].format(domain=domain.rstrip('^'))
                     f.write(f"{rule}\n")
             logger.info(f"Adblock Plus{target}产物：{cfg['path']}（{len(cfg['domains'])}条）")
 
     def _generate_ubo_product(self) -> None:
-        """生成UBO规则（基于外部数据库格式定义）"""
+        """生成UBO纯净规则（仅含标准规则行）"""
         ubo_cfg = {
             "block": {
                 "path": self.config.OUTPUT_DIR / self.config.OUTPUT_UBO_BLOCK,
@@ -389,16 +382,14 @@ class RuleConverter:
                 logger.warning(f"UBO{target}无有效域名 → 跳过")
                 continue
             with open(cfg["path"], "w", encoding="utf-8") as f:
-                f.write(f"! uBlock Origin {target}规则（自动转换）\n")
-                f.write(f"! 生成时间：{self._get_current_time()}\n")
-                f.write(f"! 规则数量：{len(cfg['domains'])}条\n\n")
+                # 仅写入纯净规则，无任何注释
                 for domain in cfg["domains"]:
                     rule = cfg["domain_format"].format(domain=domain.rstrip('^'))
                     f.write(f"{rule}\n")
             logger.info(f"UBO{target}产物：{cfg['path']}（{len(cfg['domains'])}条）")
 
     def _generate_pihole_product(self) -> None:
-        """生成Pi-hole规则（纯域名格式）"""
+        """生成Pi-hole纯净规则（仅含纯域名列表）"""
         pihole_path = self.config.OUTPUT_DIR / self.config.OUTPUT_PIHOLE
         domains = sorted(self.convertible_domains["pihole"]["block"])
         if not domains:
@@ -406,15 +397,13 @@ class RuleConverter:
             return
 
         with open(pihole_path, "w", encoding="utf-8") as f:
-            f.write(f"# Pi-hole拦截规则（自动转换）\n")
-            f.write(f"# 生成时间：{self._get_current_time()}\n")
-            f.write(f"# 规则数量：{len(domains)}条\n\n")
+            # 仅写入纯净域名，无任何注释
             for domain in domains:
                 f.write(f"{domain}\n")
         logger.info(f"Pi-hole产物：{pihole_path}（{len(domains)}条）")
 
     def _generate_hosts_product(self) -> None:
-        """生成Hosts规则（IP+域名格式）"""
+        """生成Hosts纯净规则（仅含“IP 域名”行）"""
         hosts_cfg = {
             "block": {
                 "path": self.config.OUTPUT_DIR / self.config.OUTPUT_HOSTS,
@@ -428,24 +417,22 @@ class RuleConverter:
                 logger.warning(f"Hosts{target}无有效域名 → 跳过")
                 continue
             with open(cfg["path"], "w", encoding="utf-8") as f:
-                f.write(f"# Hosts {target}规则（自动转换）\n")
-                f.write(f"# 生成时间：{self._get_current_time()}\n")
-                f.write(f"# 规则数量：{len(cfg['domains'])}条\n\n")
+                # 仅写入纯净Hosts格式行，无任何注释
                 for domain in cfg["domains"]:
                     f.write(f"{cfg['ip']} {domain}\n")
             logger.info(f"Hosts{target}产物：{cfg['path']}（{len(cfg['domains'])}条）")
 
     def _generate_surge_product(self) -> None:
-        """生成Surge规则（无payload，与Clash格式兼容）"""
+        """生成Surge纯净规则（仅含必要功能性头+纯净域名）"""
         surge_cfg = {
             "block": {
                 "path": self.config.OUTPUT_DIR / self.config.OUTPUT_SURGE_BLOCK,
-                "header": f"#DOMAIN-SET,adblock_surge_block,REJECT",  # Surge标准头
+                "header": f"#DOMAIN-SET,adblock_surge_block,REJECT",  # 平台必需头，保留
                 "domains": sorted(self.convertible_domains["surge"]["block"])
             },
             "allow": {
                 "path": self.config.OUTPUT_DIR / self.config.OUTPUT_SURGE_ALLOW,
-                "header": f"#DOMAIN-SET,adblock_surge_allow,DIRECT",
+                "header": f"#DOMAIN-SET,adblock_surge_allow,DIRECT",  # 平台必需头，保留
                 "domains": sorted(self.convertible_domains["surge"]["allow"])
             }
         }
@@ -455,22 +442,23 @@ class RuleConverter:
                 logger.warning(f"Surge{target}无有效域名 → 跳过")
                 continue
             with open(cfg["path"], "w", encoding="utf-8") as f:
-                f.write(f"{cfg['header']}\n")  # 无payload字段，直接列域名
+                f.write(f"{cfg['header']}\n")  # 仅保留平台必需头
+                # 写入纯净域名，无其他注释
                 for domain in cfg["domains"]:
                     f.write(f"+.{domain.lstrip('*.')}\n")
             logger.info(f"Surge{target}产物：{cfg['path']}（{len(cfg['domains'])}条）")
 
     def _generate_clash_product(self) -> None:
-        """保留原有Clash规则生成逻辑"""
+        """生成Clash纯净规则（仅含必要功能性头+纯净域名）"""
         clash_config = {
             "block": {
                 "path": self.config.OUTPUT_DIR / self.config.OUTPUT_CLASH_BLOCK,
-                "action_header": "#RULE-SET,adblock_clash_block,REJECT",
+                "action_header": "#RULE-SET,adblock_clash_block,REJECT",  # 平台必需头，保留
                 "domains": sorted(self.convertible_domains["clash"]["block"])
             },
             "allow": {
                 "path": self.config.OUTPUT_DIR / self.config.OUTPUT_CLASH_ALLOW,
-                "action_header": "#RULE-SET,adblock_clash_allow,DIRECT",
+                "action_header": "#RULE-SET,adblock_clash_allow,DIRECT",  # 平台必需头，保留
                 "domains": sorted(self.convertible_domains["clash"]["allow"])
             }
         }
@@ -480,14 +468,15 @@ class RuleConverter:
                 logger.warning(f"Clash{target}无有效域名 → 跳过")
                 continue
             with open(cfg["path"], "w", encoding="utf-8") as f:
-                f.write(f"{cfg['action_header']}\n")
-                f.write("payload:\n")
+                f.write(f"{cfg['action_header']}\n")  # 仅保留平台必需头
+                f.write("payload:\n")  # 平台必需字段，保留
+                # 写入纯净域名，无其他注释
                 for domain in cfg["domains"]:
                     f.write(f"  - '+.{domain.lstrip('*.')}'\n")
             logger.info(f"Clash{target}产物：{cfg['path']}（{len(cfg['domains'])}条）")
 
     def _generate_mihomo_product(self) -> None:
-        """保留原有Mihomo规则生成逻辑"""
+        """生成Mihomo纯净规则（二进制编译，无多余信息）"""
         if not self.config.ENABLE_MIHOMO:
             logger.info("未启用Mihomo编译 → 跳过")
             return
@@ -504,6 +493,7 @@ class RuleConverter:
         temp_yaml = None
         try:
             with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8") as f:
+                # 临时文件仅含纯净配置，无注释
                 f.write("payload:\n")
                 for domain in sorted(filtered_block_domains):
                     f.write(f"  - '{domain.lstrip('*.')}'\n")
@@ -527,23 +517,23 @@ class RuleConverter:
                 os.unlink(temp_yaml)
 
     def generate_products(self) -> None:
-        logger.info("\n第三步：生成多平台规则产物")
+        logger.info("\n第三步：生成多平台纯净规则产物")
         logger.info("="*60)
         self.config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-        # 生成新增平台产物
+        # 生成新增平台纯净产物
         self._generate_adblock_plus_product()
         self._generate_ubo_product()
         self._generate_pihole_product()
         self._generate_hosts_product()
         self._generate_surge_product()
 
-        # 保留原有产物生成
+        # 生成原有平台纯净产物
         self._generate_clash_product()
         self._generate_mihomo_product()
 
         logger.info("="*60)
-        logger.info("所有多平台产物生成完成！")
+        logger.info("所有多平台纯净规则产物生成完成！")
 
     def run_full_flow(self) -> None:
         try:
