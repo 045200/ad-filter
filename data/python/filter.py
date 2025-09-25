@@ -41,7 +41,7 @@ class ConvertConfig:
     OUTPUT_ADBLOCK_PLUS_ALLOW: str = "allow_abp.txt"
     OUTPUT_UBO_BLOCK: str = "adblock_ubo.txt"
     OUTPUT_UBO_ALLOW: str = "allow_ubo.txt"
-    OUTPUT_PIHOLE: str = "pihole.list"
+    OUTPUT_PIHOLE: str = "adblock_pihole.list"
     OUTPUT_HOSTS: str = "hosts.txt"
     OUTPUT_SURGE_BLOCK: str = "adblock_surge.yaml"
     OUTPUT_SURGE_ALLOW: str = "allow_surge.yaml"
