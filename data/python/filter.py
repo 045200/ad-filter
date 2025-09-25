@@ -235,6 +235,7 @@ class AdvancedRuleParser:
     """高级规则解析器 - 基于数据库解析Adblock基础+AdGuard全平台规则"""
     def __init__(self, syntax_db: EnhancedSyntaxDatabase):
         self.syntax_db = syntax_db
+        self.config = syntax_db.config  # 修复：通过syntax_db访问config
         self.normalization_cfg = self.syntax_db.normalization_rules
         self.validation_cfg = self.syntax_db.validation_rules
         # 规则识别优先级（基于数据库syntax_patterns，确保AdGuard专属规则优先识别）
@@ -250,6 +251,9 @@ class AdvancedRuleParser:
             "adblock_basic_domain_rule", "adguard_domain_rule",  # 域名规则
             "hosts_rule", "pihole_domain"               # Hosts/Pi-hole规则
         ]
+        # AGLint注释处理相关属性
+        self.aglint_action = ""
+        self.aglint_target = ""
 
     def parse_rule(self, raw_rule: str) -> Dict[str, Any]:
         """完整解析流程：清理→归一化→识别类型→提取内容→修饰符→验证→支持平台"""
