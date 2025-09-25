@@ -11,8 +11,8 @@ ADBLOCKERS: Dict[str, Dict[str, str]] = {
     "ubo": {"name": "uBlock Origin", "suffix": ".txt", "comment": "!", "has_allow": True},
     "adg": {"name": "AdGuard", "suffix": ".txt", "comment": "!", "has_allow": True},
     "clash": {"name": "Clash", "suffix": ".yaml", "comment": "#", "has_allow": True},
-    "surge": {"name": "Surge", "suffix": ".txt", "comment": "#", "has_allow": False},
-    "pihole": {"name": "Pi-hole", "suffix": ".txt", "comment": "#", "has_allow": True}
+    "surge": {"name": "Surge", "suffix": ".yaml", "comment": "#", "has_allow": True},
+    "pihole": {"name": "Pi-hole", "suffix": ".list", "comment": "#", "has_allow": False}
 }
 
 # 通用头信息模板（统一主规则描述，无“混合”表述）

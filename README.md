@@ -48,8 +48,8 @@
 - uBlock Origin 拦截规则数量：0 | 白名单数量：0
 - AdGuard 拦截规则数量：19322 | 白名单数量：4581
 - Clash 拦截规则数量：0 | 白名单数量：0
-- Surge 拦截规则数量：0
-- Pi-hole 拦截规则数量：0 | 白名单数量：0
+- Surge 拦截规则数量：0 | 白名单数量：0
+- Pi-hole 拦截规则数量：0
 
 
 ## 📥 规则订阅
@@ -69,9 +69,9 @@
 | Clash       | 拦截规则   | [adblock_clash.yaml](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_clash.yaml) | [adblock_clash.yaml](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_clash.yaml) |
 | Clash       | 白名单   | [allow_clash.yaml](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_clash.yaml) | [allow_clash.yaml](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_clash.yaml) |
 | Mihomo      | 拦截规则   | [adb.mrs](https://raw.githubusercontent.com/045200/ad-filter/multi/adb.mrs)             | [adb.mrs](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adb.mrs)             |
-| Surge       | 拦截规则   | [adblock_surge.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.txt) | [adblock_surge.conf](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.txt) |
-| Pi-hole     | 拦截规则   | [adblock_pihole.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_pihole.txt) | [adblock_pihole.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_pihole.txt) |
-| Pi-hole     | 白名单规则 | [allow_pihole.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_pihole.txt) | [allow_pihole.txt](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_pihole.txt) |
+| Surge       | 拦截规则   | [adblock_surge.txt](https://raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.txt) | [adblock_surge.conf](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/adblock_surge.yaml) |
+| Surge     | 白名单规则   | [allow_surge.yaml](https://raw.githubusercontent.com/045200/ad-filter/multi/allow_surge.yaml) | [allow_surge.yaml](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/allow_surge.yaml) |
+| Pi-hole     | 拦截规则 | [pihole.list](https://raw.githubusercontent.com/045200/ad-filter/multi/pihole.list) | [pihole.list](https://ghfast.top/raw.githubusercontent.com/045200/ad-filter/multi/pihole.list) |
 
 </details>
 
