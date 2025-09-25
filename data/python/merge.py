@@ -359,7 +359,7 @@ if __name__ == "__main__":
     # 脚本路径：./data/python/merge.py（项目根目录下的data/python）
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))  # ./data/python
     PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))  # 项目根目录（./），修复核心！
-    SYNTAX_DB_PATH = os.path.join(SCRIPT_DIR, "adblock_syntax_db.json")  # ./data/python/adblock_syntax_db.json
+    SYNTAX_DB_PATH = os.path.join(SCRIPT_DIR, "syntax_db.json")  # ./data/python/adblock_syntax_db.json
 
     # 【用户要求的路径】
     INPUT_DIR = os.path.join(PROJECT_ROOT, "data", "filter")  # ./data/filter（正确！）
