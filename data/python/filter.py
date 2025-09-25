@@ -11,6 +11,7 @@ from typing import Dict, List, Set, Optional, Pattern
 from dataclasses import dataclass, field
 import logging
 from pybloom_live import ScalableBloomFilter
+from datetime import datetime
 
 
 logging.basicConfig(
@@ -36,12 +37,12 @@ class ConvertConfig:
     OUTPUT_MIHOMO: str = "adb.mrs"
     
     # 新增目标平台输出配置
-    OUTPUT_ADBLOCK_PLUS_BLOCK: str = "adblock_abp.txt"
-    OUTPUT_ADBLOCK_PLUS_ALLOW: str = "allow_abp.txt"
-    OUTPUT_UBO_BLOCK: str = "adblock_ubo.txt"
-    OUTPUT_UBO_ALLOW: str = "allow_ubo.txt"
-    OUTPUT_PIHOLE: str = "pihole.list"
-    OUTPUT_HOSTS: str = "hosts.txt"
+    OUTPUT_ADBLOCK_PLUS_BLOCK: str = "adblock_plus_block.txt"
+    OUTPUT_ADBLOCK_PLUS_ALLOW: str = "adblock_plus_allow.txt"
+    OUTPUT_UBO_BLOCK: str = "ubo_block.txt"
+    OUTPUT_UBO_ALLOW: str = "ubo_allow.txt"
+    OUTPUT_PIHOLE: str = "pihole_block.list"
+    OUTPUT_HOSTS: str = "adblock_hosts.txt"
     OUTPUT_SURGE_BLOCK: str = "adblock_surge.yaml"
     OUTPUT_SURGE_ALLOW: str = "allow_surge.yaml"
     
@@ -198,11 +199,11 @@ class RuleConverter:
             "comment": 0, "empty": 0, "non_adguard": 0
         }
 
-        # 扩展可转换域名存储（按平台分类）
+        # 扩展可转换域名存储（按平台分类）- 修复1：给Pi-hole补充allow空集合
         self.convertible_domains: Dict[str, Dict[str, Set[str]]] = {
             "adblock_plus": {"block": set(), "allow": set()},
             "ubo": {"block": set(), "allow": set()},
-            "pihole": {"block": set()},  # Pi-hole无放行规则
+            "pihole": {"block": set(), "allow": set()},  # 新增allow空集合，避免KeyError
             "hosts": {"block": set(), "allow": set()},
             "surge": {"block": set(), "allow": set()},
             "clash": {"block": set(), "allow": set()}  # 保留原有Clash
@@ -212,7 +213,7 @@ class RuleConverter:
             "valid": {
                 "adblock_plus": {"block": 0, "allow": 0},
                 "ubo": {"block": 0, "allow": 0},
-                "pihole": {"block": 0},
+                "pihole": {"block": 0, "allow": 0},  # 对应添加allow统计项
                 "hosts": {"block": 0, "allow": 0},
                 "surge": {"block": 0, "allow": 0},
                 "clash": {"block": 0, "allow": 0}
@@ -285,9 +286,13 @@ class RuleConverter:
                             self.convert_stats["invalid_domain"] += 1
                             continue
                         
-                        # 按平台分配域名（判断平台是否支持该规则类型）
+                        # 按平台分配域名 - 修复2：Pi-hole不支持白名单，跳过allow目标
                         target = "allow" if is_allow else "block"
                         for platform in self.convertible_domains.keys():
+                            # 核心修复：Pi-hole无白名单机制，跳过allow目标分配
+                            if platform == "pihole" and target == "allow":
+                                continue
+                            # 原有逻辑：判断平台是否支持该规则类型
                             if self.parser.is_platform_support_rule(platform, adguard_rule_type):
                                 self._deduplicate_domain(domain, platform, target)
 
@@ -326,10 +331,14 @@ class RuleConverter:
         logger.info(f"   - 重复域名：{self.convert_stats['duplicate']}条")
         for platform in self.convert_stats["valid"].keys():
             if platform == "pihole":
-                logger.info(f"   - {platform}：拦截{self.convert_stats['valid'][platform]['block']}条")
+                logger.info(f"   - {platform}：拦截{self.convert_stats['valid'][platform]['block']}条（无白名单）")
             else:
                 logger.info(f"   - {platform}：拦截{self.convert_stats['valid'][platform]['block']}条 | 放行{self.convert_stats['valid'][platform]['allow']}条")
         logger.info("="*60)
+
+    def _get_current_time(self) -> str:
+        """获取当前时间（用于规则注释）"""
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def _generate_adblock_plus_product(self) -> None:
         """生成Adblock Plus规则（基于外部数据库格式定义）"""
@@ -412,12 +421,6 @@ class RuleConverter:
                 "ip": self.config.HOSTS_BLOCK_IP,
                 "domains": sorted(self.convertible_domains["hosts"]["block"])
             }
-            # 可选：添加Hosts放行规则
-            # "allow": {
-            #     "path": self.config.OUTPUT_DIR / "allow_hosts.txt",
-            #     "ip": self.config.HOSTS_ALLOW_IP,
-            #     "domains": sorted(self.convertible_domains["hosts"]["allow"])
-            # }
         }
 
         for target, cfg in hosts_cfg.items():
@@ -522,11 +525,6 @@ class RuleConverter:
         finally:
             if temp_yaml and os.path.exists(temp_yaml):
                 os.unlink(temp_yaml)
-
-    def _get_current_time(self) -> str:
-        """获取当前时间（用于规则注释）"""
-        from datetime import datetime
-        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def generate_products(self) -> None:
         logger.info("\n第三步：生成多平台规则产物")
