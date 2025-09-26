@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-AdGuard规则处理脚本（注释清零版）
-修复点：彻底修正路径计算，确保输入./data/filter、输出./、ps.txt路径./data/mod/ps.txt
-"""
-
 import os
 import re
 import glob
@@ -30,30 +24,29 @@ except ImportError:
 # ------------------------------ 核心处理类 ------------------------------
 class AdGuardCommentFreeConverter:
     def __init__(self, syntax_db_path: str, output_dir: str):
-        # 加载语法数据库（路径已修正）
+        # 加载语法数据库
         self.syntax_db = self._load_syntax_db(syntax_db_path)
-        self.output_dir = output_dir  # 接收外部传入的输出目录（./）
+        self.output_dir = output_dir
         self.ag_support = self.syntax_db['platform_support']['adguard_browser_extension']
         self.compiled_patterns = self._compile_all_patterns()
         
-        # 【关键修复】ps.txt路径：项目根目录/data/mod/ps.txt（不再多一层data）
+        # 注释配置文件路径（修复后：./data/mod/ps.txt）
         self.PS_CONFIG_PATH = os.path.abspath(
             os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),  # 项目根目录（多算一层dirname，修正根目录）
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
                 "data", "mod", "ps.txt"
             )
         )
-        # 从外部文件加载注释配置（无内置）
         self.user_comment_keywords, self.comment_regex_patterns = self._load_external_comment_config()
 
-        # 流程变量（不变）
+        # 流程变量
         self.raw_rules = []
         self.converted_rules = []
         self.categorized_rules = {'block': [], 'allow': []}
         self.completed_rules = {'block': [], 'allow': []}
         self.final_rules = {'block': set(), 'allow': set()}
 
-        # 去重配置（不变）
+        # 去重配置
         bloom_cfg = self.syntax_db['performance_optimization']['bloom_filter_config']
         self.dedup_bloom = {
             cat: BloomFilter(
@@ -63,30 +56,26 @@ class AdGuardCommentFreeConverter:
             for cat in ['block', 'allow']
         }
 
-    # ------------------------------ 核心：加载ps.txt（路径已修复） ------------------------------
+    # ------------------------------ 加载注释配置 ------------------------------
     def _load_external_comment_config(self) -> Tuple[List[str], List[str]]:
         keywords = []
         regex_patterns = []
 
-        # 检查ps.txt是否在正确路径（./data/mod/ps.txt）
         if not os.path.exists(self.PS_CONFIG_PATH):
             raise FileNotFoundError(
                 f"注释配置文件不存在！请在以下路径创建 ps.txt：\n{self.PS_CONFIG_PATH}\n"
                 "参考格式：\nKEYWORD:中国移动,抖音\nREGEX:^#!.*!#$\nREGEX:^#-+.*-+#$"
             )
 
-        # 读取解析ps.txt
         with open(self.PS_CONFIG_PATH, 'r', encoding='utf-8', errors='ignore') as f:
             for line_num, line in enumerate(f, 1):
                 clean_line = line.strip()
                 if not clean_line or clean_line.startswith('#'):
                     continue
-                # 解析关键词
                 if clean_line.startswith("KEYWORD:"):
                     keyword_content = clean_line[len("KEYWORD:"):].strip()
                     if keyword_content:
                         keywords = [k.strip() for k in keyword_content.split(',') if k.strip()]
-                # 解析正则
                 elif clean_line.startswith("REGEX:"):
                     regex_content = clean_line[len("REGEX:"):].strip()
                     if regex_content:
@@ -94,7 +83,6 @@ class AdGuardCommentFreeConverter:
                 else:
                     print(f"警告：{self.PS_CONFIG_PATH} 第{line_num}行格式无效，已跳过：{clean_line}")
 
-        # 配置校验
         if not keywords:
             print(f"警告：{self.PS_CONFIG_PATH} 未配置有效关键词（需KEYWORD:行）")
         if not regex_patterns:
@@ -102,7 +90,7 @@ class AdGuardCommentFreeConverter:
 
         return keywords, regex_patterns
 
-    # ------------------------------ 步骤1：输入（路径修复为./data/filter） ------------------------------
+    # ------------------------------ 步骤1：加载规则（新增文件属性识别） ------------------------------
     def step1_input(self, input_dir: str) -> None:
         print(f"\n【步骤1：加载规则】从 {input_dir} 读取TXT规则...")
         if not os.path.exists(input_dir):
@@ -117,45 +105,77 @@ class AdGuardCommentFreeConverter:
 
         for file_path in input_files:
             file_name = os.path.basename(file_path)
-            print(f"  处理文件：{file_name}")
+            # 核心改进：按文件名识别规则类型（adblock=黑名单源，allow=白名单源）
+            is_adblock_file = "adblock" in file_name.lower()
+            is_allow_file = "allow" in file_name.lower()
+            
+            # 处理文件名歧义（同时含adblock和allow）
+            if is_adblock_file and is_allow_file:
+                print(f"警告：文件 {file_name} 同时含'adblock'和'allow'，按adblock处理")
+                is_allow_file = False
+
+            print(f"  处理文件：{file_name}（adblock源：{is_adblock_file}，allow源：{is_allow_file}）")
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 for line_num, line in enumerate(f, 1):
                     raw_rule = line.strip()
                     if not raw_rule or self._is_comment_by_config(raw_rule):
                         continue
-                    self.raw_rules.append((raw_rule, file_name, line_num))
+                    # 新增：将文件属性（is_adblock_file/is_allow_file）存入raw_rules
+                    self.raw_rules.append((raw_rule, file_name, line_num, is_adblock_file, is_allow_file))
 
         print(f"【步骤1完成】加载 {len(self.raw_rules)} 条非注释规则")
 
-    # ------------------------------ 步骤2-6：逻辑不变（仅路径已修复） ------------------------------
+    # ------------------------------ 步骤2：转换规则（按文件属性生成对应格式） ------------------------------
     def step2_convert(self) -> None:
         print(f"\n【步骤2：转换规则】处理 {len(self.raw_rules)} 条规则...")
-        for raw_rule, file_name, line_num in self.raw_rules:
+        for raw_rule, file_name, line_num, is_adblock_file, is_allow_file in self.raw_rules:
             try:
                 rule_type = self._identify_rule_type(raw_rule)
-                if rule_type == "hosts_rule":
+                converted_rule = raw_rule
+
+                # 核心改进：pihole_domain按文件属性转换格式
+                if rule_type == "pihole_domain":
+                    clean_domain = raw_rule.strip().lower()
+                    if is_allow_file:  # allow源文件→adblock白名单格式（加@@）
+                        converted_rule = f"@@||{clean_domain}^"
+                    elif is_adblock_file:  # adblock源文件→adblock黑名单格式（无@@）
+                        converted_rule = f"||{clean_domain}^"
+                    else:
+                        print(f"  转换警告（{file_name}:{line_num}）：pihole规则所在文件无'adblock/allow'标识，跳过转换：{raw_rule}")
+                        continue
+
+                # 原有其他规则转换逻辑
+                elif rule_type == "hosts_rule":
                     converted_rule = raw_rule
-                elif rule_type == "pihole_domain":
-                    converted_rule = f"||{raw_rule.lower()}^"
                 elif rule_type in ["adguard_dns_rewrite", "adguard_removeparam", "adguard_scriptlet"]:
                     converted_rule = self._convert_special_rule(raw_rule, rule_type)
-                else:
-                    converted_rule = raw_rule
-                self.converted_rules.append((converted_rule, rule_type, file_name, line_num))
+
+                # 保留文件属性，用于后续归类校验
+                self.converted_rules.append((converted_rule, rule_type, file_name, line_num, is_adblock_file, is_allow_file))
             except Exception as e:
                 print(f"  转换失败（{file_name}:{line_num}）：{raw_rule} → {str(e)}")
         print(f"【步骤2完成】成功转换 {len(self.converted_rules)} 条规则")
 
+    # ------------------------------ 步骤3：归类规则（按格式+文件属性双重校验） ------------------------------
     def step3_categorize(self) -> None:
         print(f"\n【步骤3：归类规则】区分黑白名单...")
-        for converted_rule, rule_type, file_name, line_num in self.converted_rules:
+        for converted_rule, rule_type, file_name, line_num, is_adblock_file, is_allow_file in self.converted_rules:
             try:
+                # 核心改进：pihole_domain优先按文件属性归类
+                if rule_type == "pihole_domain":
+                    if is_allow_file:
+                        self.categorized_rules["allow"].append((converted_rule, rule_type, file_name, line_num))
+                    elif is_adblock_file:
+                        self.categorized_rules["block"].append((converted_rule, rule_type, file_name, line_num))
+                    continue
+
+                # 原有其他规则归类逻辑
                 if converted_rule.startswith("@@"):
                     self.categorized_rules["allow"].append((converted_rule, rule_type, file_name, line_num))
                 elif any([
                     rule_type == "hosts_rule",
                     rule_type in ["adguard_dns_rewrite", "adguard_removeparam", "adguard_scriptlet", "adguard_extended_css"],
-                    rule_type in ["adblock_basic_domain_rule", "adblock_basic_url_rule", "adblock_basic_element_hiding", "pihole_domain"],
+                    rule_type in ["adblock_basic_domain_rule", "adblock_basic_url_rule", "adblock_basic_element_hiding"],
                     "$block" in converted_rule and "$allow" not in converted_rule,
                     self._is_valid_element_hide_rule(converted_rule)
                 ]):
@@ -166,6 +186,7 @@ class AdGuardCommentFreeConverter:
                 print(f"  归类失败（{file_name}:{line_num}）：{converted_rule} → {str(e)}")
         print(f"【步骤3完成】黑名单：{len(self.categorized_rules['block'])} 条，白名单：{len(self.categorized_rules['allow'])} 条")
 
+    # ------------------------------ 步骤4：补全规则（原有逻辑不变） ------------------------------
     def step4_complete(self) -> None:
         print(f"\n【步骤4：补全规则】完善格式...")
         for category in ["block", "allow"]:
@@ -185,6 +206,7 @@ class AdGuardCommentFreeConverter:
                     print(f"  补全失败（{file_name}:{line_num}）：{rule} → {str(e)}")
         print(f"【步骤4完成】补全后：黑名单 {len(self.completed_rules['block'])} 条，白名单 {len(self.completed_rules['allow'])} 条")
 
+    # ------------------------------ 步骤5：去重规则（原有逻辑不变） ------------------------------
     def step5_dedup(self) -> None:
         print(f"\n【步骤5：去重规则】移除重复...")
         for category in ["block", "allow"]:
@@ -202,18 +224,19 @@ class AdGuardCommentFreeConverter:
                     print(f"  去重失败（{file_name}:{line_num}）：{rule} → {str(e)}")
             print(f"  {category}：去重前 {len(self.completed_rules[category])} 条 → 去重后 {len(self.final_rules[category])} 条，重复 {duplicate_count} 条")
 
+    # ------------------------------ 步骤6：保存结果（原有逻辑不变） ------------------------------
     def step6_output(self) -> None:
         print(f"\n【步骤6：保存结果】输出到 {self.output_dir}...")
         os.makedirs(self.output_dir, exist_ok=True)
 
-        # 输出黑名单到项目根目录（./adblock_adg_clean.txt）
+        # 输出黑名单（./adblock_adg.txt）
         block_path = os.path.join(self.output_dir, "adblock_adg.txt")
         sorted_block = sorted([r for r in self.final_rules['block'] if not self._is_comment_by_config(r)], key=self._rule_sort_key)
         with open(block_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(sorted_block))
         print(f"  黑名单文件：{block_path}（{len(sorted_block)} 条）")
 
-        # 输出白名单到项目根目录（./allow_adg_clean.txt）
+        # 输出白名单（./allow_adg.txt）
         allow_path = os.path.join(self.output_dir, "allow_adg.txt")
         sorted_allow = sorted([r for r in self.final_rules['allow'] if not self._is_comment_by_config(r)])
         with open(allow_path, 'w', encoding='utf-8') as f:
@@ -222,9 +245,8 @@ class AdGuardCommentFreeConverter:
 
         print(f"【步骤6完成】文件已保存到项目根目录！")
 
-    # ------------------------------ 辅助函数（不变） ------------------------------
+    # ------------------------------ 辅助函数（原有逻辑不变） ------------------------------
     def _is_comment_by_config(self, rule: str) -> bool:
-        # 匹配ps.txt中的正则
         for regex in self.comment_regex_patterns:
             try:
                 if re.fullmatch(regex, rule, re.UNICODE):
@@ -232,13 +254,11 @@ class AdGuardCommentFreeConverter:
             except re.error:
                 print(f"警告：无效正则 {regex}，已跳过")
                 continue
-        # 匹配ps.txt中的关键词（##开头）
         if rule.startswith("##"):
             rule_content = rule.lstrip("##").strip()
             for keyword in self.user_comment_keywords:
                 if keyword in rule_content:
                     return True
-        # 常规注释
         if rule.startswith(("!", "# ")) or re.fullmatch(r"^#\d+([/年日月 :]+\d+)*", rule):
             return True
         return False
@@ -332,7 +352,7 @@ class AdGuardCommentFreeConverter:
     # ------------------------------ 启动流程 ------------------------------
     def run_full_flow(self, input_dir: str) -> None:
         print("="*60)
-        print("AdGuard规则处理流程（路径修复版）")
+        print("AdGuard规则处理流程（pihole_domain精准转换版）")
         print("="*60)
         try:
             self.step1_input(input_dir)
@@ -349,21 +369,22 @@ class AdGuardCommentFreeConverter:
             print(f"  输入目录：{input_dir}")
             print(f"  输出目录：{self.output_dir}")
             print(f"  注释配置：{self.PS_CONFIG_PATH}")
+            print("  规则逻辑：adblock*.txt的pihole→黑名单，allow*.txt的pihole→白名单")
             print("="*60)
         except Exception as e:
             print(f"\n流程失败：{str(e)}")
 
 
-# ------------------------------ 主函数（关键：修复路径计算） ------------------------------
+# ------------------------------ 主函数（路径配置不变） ------------------------------
 if __name__ == "__main__":
-    # 脚本路径：./data/python/merge.py（项目根目录下的data/python）
-    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))  # ./data/python
-    PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))  # 项目根目录（./），修复核心！
-    SYNTAX_DB_PATH = os.path.join(SCRIPT_DIR, "syntax_db.json")  # ./data/python/adblock_syntax_db.json
+    # 路径计算（修复后：脚本在./data/python，项目根目录为./）
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+    PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
+    SYNTAX_DB_PATH = os.path.join(SCRIPT_DIR, "syntax_db.json")
 
-    # 【用户要求的路径】
-    INPUT_DIR = os.path.join(PROJECT_ROOT, "data", "filter")  # ./data/filter（正确！）
-    OUTPUT_DIR = PROJECT_ROOT  # ./（项目根目录，正确！）
+    # 固定路径：输入./data/filter，输出./
+    INPUT_DIR = os.path.join(PROJECT_ROOT, "data", "filter")
+    OUTPUT_DIR = PROJECT_ROOT
 
     # 启动脚本
     converter = AdGuardCommentFreeConverter(
