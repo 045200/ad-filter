@@ -77,6 +77,7 @@ jobs:
         run: |
           echo "开始并行下载规则..."
           python ${{ env.PYTHON_SCRIPTS }}/dl.py
+          python ${{ env.PYTHON_SCRIPTS }}/dlad.py
           echo "规则下载完成"
         env:
           # 关键：关闭SSL验证（解决GitHub环境下http://rssv.cn/等链接下载失败问题）
