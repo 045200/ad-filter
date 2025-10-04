@@ -5,23 +5,36 @@ import sys
 
 def download_adblock_rules():
     """
-    下载广告规则并保存到 ../../filter/adblock99.txt
-    (相对于脚本位置 /data/python/dl.py)
+    下载广告规则并保存到适当的目录
     """
     # 配置参数
     url = "http://rssv.cn/adguard/config/black.txt"
     
-    # 计算相对于脚本位置的输出路径
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    output_dir = os.path.join(script_dir, "../../filter")
-    output_dir = os.path.normpath(output_dir)  # 规范化路径
+    # 定义可能的输出目录
+    possible_dirs = [
+        "/data/filter",  # 绝对路径
+        "./data/filter",  # 相对路径
+    ]
+    
+    # 检查根目录/data/filter/是否存在
+    root_filter_dir = "/data/filter"
+    if os.path.exists(root_filter_dir) and os.path.isdir(root_filter_dir):
+        output_dir = root_filter_dir
+        print(f"✓ 检测到根目录文件夹存在: {root_filter_dir}")
+    else:
+        # 使用相对路径
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        output_dir = os.path.join(script_dir, "../../filter")
+        output_dir = os.path.normpath(output_dir)  # 规范化路径
+        print(f"✗ 根目录文件夹不存在，使用相对路径: {output_dir}")
+    
     filename = "adblock99.txt"
     full_path = os.path.join(output_dir, filename)
     
     max_retries = 5
     timeout = 45
     
-    print("开始下载广告规则...")
+    print("\n开始下载广告规则...")
     print(f"URL: {url}")
     print(f"保存路径: {full_path}")
     
@@ -89,6 +102,13 @@ if __name__ == "__main__":
     print("=" * 50)
     print("广告规则下载脚本")
     print("=" * 50)
+    
+    # 检测根目录/data/filter/是否存在
+    root_filter_dir = "/data/filter"
+    if os.path.exists(root_filter_dir) and os.path.isdir(root_filter_dir):
+        print(f"✓ 检测到根目录文件夹: {root_filter_dir}")
+    else:
+        print(f"✗ 未检测到根目录文件夹: {root_filter_dir}")
     
     start_time = time.time()
     
