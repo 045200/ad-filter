@@ -5,13 +5,19 @@ import sys
 
 def download_adblock_rules():
     """
-    下载广告规则并保存到 /data/filter/adblock99.txt
+    下载广告规则并保存到 ../../filter/adblock99.txt
+    (相对于脚本位置 /data/python/dl.py)
     """
     # 配置参数
     url = "http://rssv.cn/adguard/config/black.txt"
-    output_dir = "/data/filter"
+    
+    # 计算相对于脚本位置的输出路径
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    output_dir = os.path.join(script_dir, "../../filter")
+    output_dir = os.path.normpath(output_dir)  # 规范化路径
     filename = "adblock99.txt"
     full_path = os.path.join(output_dir, filename)
+    
     max_retries = 5
     timeout = 45
     
