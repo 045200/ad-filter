@@ -72,12 +72,19 @@ jobs:
           python ${{ env.PYTHON_SCRIPTS }}/detect.py
           echo "依赖检查完成"
       
-      # 10. 并行下载规则- 核心步骤
+      # 10. 并行下载规则- 核心步骤（新增适配dl.py的环境变量）
       - name: Download rules in parallel
         run: |
           echo "开始并行下载规则..."
           python ${{ env.PYTHON_SCRIPTS }}/dl.py
           echo "规则下载完成"
+        env:
+          # 关键：关闭SSL验证（解决GitHub环境下http://rssv.cn/等链接下载失败问题）
+          VERIFY_SSL: false
+          # 可根据需求调整dl.py中的并发与超时配置
+          MAX_WORKERS: 6
+          TIMEOUT: 30
+          MAX_RETRIES: 4
 
       # 11. 运行merge.py（广告规则合并去重）- 核心步骤
       - name: Run merge.py
