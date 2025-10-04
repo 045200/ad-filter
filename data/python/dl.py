@@ -23,18 +23,19 @@ RULES_CONFIG = BASE_DIR / 'data' / 'python' / 'rules.txt'
 # 从环境变量获取配置
 config = {
     'MAX_WORKERS': int(os.getenv('MAX_WORKERS', 6)),
-    'TIMEOUT': int(os.getenv('TIMEOUT', 25)),
-    'MAX_RETRIES': int(os.getenv('MAX_RETRIES', 4)),
+    'TIMEOUT': int(os.getenv('TIMEOUT', 45)),  # 增加超时
+    'MAX_RETRIES': int(os.getenv('MAX_RETRIES', 6)),  # 增加重试次数
     'RETRY_DELAY': int(os.getenv('RETRY_DELAY', 2)),
     'HTTP_POOL_SIZE': int(os.getenv('HTTP_POOL_SIZE', 15)),
     'CACHE_TTL': int(os.getenv('CACHE_TTL', 86400)),
 }
 
-# HTTP请求头
+# HTTP请求头（添加Referer以模拟浏览器）
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'Referer': 'https://www.google.com/',  # 添加Referer
 }
 
 # 本地规则映射
@@ -102,7 +103,7 @@ class RuleDownloader:
         }
 
     def _init_session(self) -> requests.Session:
-        """初始化HTTP会话"""
+        """初始化HTTP会话，支持代理"""
         session = requests.Session()
         adapter = requests.adapters.HTTPAdapter(
             pool_connections=config['HTTP_POOL_SIZE'],
@@ -111,6 +112,17 @@ class RuleDownloader:
         session.mount('http://', adapter)
         session.mount('https://', adapter)
         session.headers.update(HEADERS)
+        
+        # 添加代理支持
+        http_proxy = os.getenv('HTTP_PROXY')
+        https_proxy = os.getenv('HTTPS_PROXY')
+        if http_proxy:
+            session.proxies['http'] = http_proxy
+        if https_proxy:
+            session.proxies['https'] = https_proxy
+        if http_proxy or https_proxy:
+            logger.info("使用代理: HTTP=%s, HTTPS=%s" % (http_proxy, https_proxy))
+        
         return session
 
     def _clean_filter_dir(self):
@@ -187,17 +199,11 @@ class RuleDownloader:
         return self.download_with_retry(url, save_path)
 
     def download_with_retry(self, url: str, save_path: Path) -> bool:
-        """带重试机制的文件下载"""
+        """带重试机制的文件下载，并添加HTTPS fallback"""
+        success = False
         for attempt in range(config['MAX_RETRIES'] + 1):
             try:
-                # 对于HTTP链接，在GitHub环境中可能需要特殊处理
-                if is_http_url(url) and os.getenv('GITHUB_ACTIONS'):
-                    # 在GitHub环境中，尝试使用更宽松的超时设置
-                    timeout = min(config['TIMEOUT'] * 2, 60)  # 最大60秒
-                else:
-                    timeout = config['TIMEOUT']
-                
-                # 对于HTTP链接，禁用SSL验证可能会有所帮助
+                timeout = config['TIMEOUT'] * 2 if is_http_url(url) and os.getenv('GITHUB_ACTIONS') else config['TIMEOUT']
                 verify_ssl = not is_http_url(url)
                 
                 response = self.session.get(
@@ -214,11 +220,11 @@ class RuleDownloader:
                 with open(save_path, 'w', encoding='utf-8') as f:
                     f.write(text)
 
-                return True
+                success = True
+                break
 
             except requests.exceptions.SSLError as e:
                 logger.warning(f"SSL错误 {url}: {e}")
-                # 对于SSL错误，尝试不验证SSL
                 try:
                     response = self.session.get(url, timeout=config['TIMEOUT'], verify=False)
                     response.raise_for_status()
@@ -226,18 +232,26 @@ class RuleDownloader:
                     text = self._convert_to_utf8(content)
                     with open(save_path, 'w', encoding='utf-8') as f:
                         f.write(text)
-                    return True
+                    success = True
+                    break
                 except Exception as retry_e:
-                    if attempt < config['MAX_RETRIES']:
-                        time.sleep(config['RETRY_DELAY'])
-                    else:
-                        logger.error(f"下载失败 {url}: {retry_e}")
+                    pass
             except Exception as e:
-                if attempt < config['MAX_RETRIES']:
-                    time.sleep(config['RETRY_DELAY'])
-                else:
-                    logger.error(f"下载失败 {url}: {e}")
-        return False
+                logger.warning(f"尝试 {attempt+1} 失败 {url}: {e}")
+            
+            if attempt < config['MAX_RETRIES']:
+                time.sleep(config['RETRY_DELAY'])
+
+        # HTTPS fallback
+        if not success and is_http_url(url):
+            https_url = url.replace('http://', 'https://')
+            logger.info(f"HTTP失败，尝试HTTPS: {https_url}")
+            success = self.download_with_retry(https_url, save_path)
+
+        if not success:
+            logger.error(f"最终下载失败 {url}，跳过此文件")
+        
+        return success
 
     def copy_local_rules(self):
         """复制本地规则文件"""
@@ -297,6 +311,9 @@ class RuleDownloader:
         logger.info(f"耗时:{elapsed:.1f}s 拦截:{self.stats['adblock']['success']}/{len(self.adblock_urls)} "
                    f"放行:{self.stats['allow']['success']}/{len(self.allow_urls)} "
                    f"本地:{self.stats['local']['copied']}/{len(LOCAL_RULES)}")
+        
+        if self.stats['adblock']['fail'] > 0 or self.stats['allow']['fail'] > 0:
+            logger.warning("有下载失败，但脚本继续执行。建议检查rules.txt移除失效URL。")
 
 
 if __name__ == "__main__":
