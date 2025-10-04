@@ -7,11 +7,10 @@ import time
 import requests
 import logging
 import chardet
-import re
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 
 # 配置参数
 GITHUB_WORKSPACE = os.getenv('GITHUB_WORKSPACE', os.getcwd())
@@ -21,31 +20,21 @@ FILTER_DIR = DATA_DIR / 'filter'
 MOD_PATH = DATA_DIR / 'mod'
 RULES_CONFIG = BASE_DIR / 'data' / 'python' / 'rules.txt'
 
-# 从环境变量获取配置，提供默认值
+# 从环境变量获取配置
 config = {
     'MAX_WORKERS': int(os.getenv('MAX_WORKERS', 6)),
     'TIMEOUT': int(os.getenv('TIMEOUT', 25)),
     'MAX_RETRIES': int(os.getenv('MAX_RETRIES', 4)),
     'RETRY_DELAY': int(os.getenv('RETRY_DELAY', 2)),
     'HTTP_POOL_SIZE': int(os.getenv('HTTP_POOL_SIZE', 15)),
-    'CACHE_TTL': int(os.getenv('CACHE_TTL', 86400)),  # 24小时缓存
+    'CACHE_TTL': int(os.getenv('CACHE_TTL', 86400)),
 }
 
 # HTTP请求头
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Connection': 'keep-alive',
-    'Upgrade-Insecure-Requests': '1',
-    'Cache-Control': 'max-age=0',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none',
-    'Sec-Fetch-User': '?1',
-    'DNT': '1',
-    'Pragma': 'no-cache'
 }
 
 # 本地规则映射
@@ -57,7 +46,7 @@ LOCAL_RULES = {
 # 日志配置
 logging.basicConfig(
     level=logging.INFO,
-    format='%(message)s' if os.getenv('GITHUB_ACTIONS') == 'true' else '[%(levelname)s] %(message)s',
+    format='%(message)s',
     stream=sys.stdout
 )
 logger = logging.getLogger('RuleDownloader')
@@ -72,26 +61,10 @@ def validate_url(url: str) -> bool:
         return False
 
 
-def is_api_url(url: str) -> bool:
-    """判断是否为API URL"""
-    try:
-        result = urlparse(url)
-        # 如果有查询参数，可能是API
-        if result.query:
-            return True
-        # 或者路径中包含api关键词
-        if 'api' in result.path.lower():
-            return True
-        return False
-    except:
-        return False
-
-
 def normalize_api_url(url: str) -> str:
     """标准化API URL"""
     try:
         parsed = urlparse(url)
-        # 对查询参数进行排序，确保URL一致性
         query_params = parse_qs(parsed.query)
         sorted_query = urlencode(query_params, doseq=True)
         normalized = urlunparse((
@@ -107,39 +80,12 @@ def normalize_api_url(url: str) -> str:
         return url
 
 
-def secure_path_join(base_path: Path, filename: str) -> Path:
-    """安全地拼接文件路径"""
-    # 清理文件名中的不安全字符
-    safe_filename = re.sub(r'[^\w\-_.]', '_', filename)
-    return base_path / safe_filename
-
-
-def gh_group(name):
-    if os.getenv('GITHUB_ACTIONS') == 'true':
-        logger.info(f"::group::{name}")
-
-
-def gh_endgroup():
-    if os.getenv('GITHUB_ACTIONS') == 'true':
-        logger.info("::endgroup::")
-
-
-def count_rules_in_file(file_path: Path) -> int:
-    """统计文件中的规则数量（忽略空行和注释行）"""
+def is_http_url(url: str) -> bool:
+    """检查是否为HTTP URL（非HTTPS）"""
     try:
-        if not file_path.exists():
-            return 0
-            
-        count = 0
-        with open(file_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    count += 1
-        return count
-    except Exception as e:
-        logger.error(f"统计规则数量失败 {file_path}: {e}")
-        return 0
+        return urlparse(url).scheme == 'http'
+    except:
+        return False
 
 
 class RuleDownloader:
@@ -150,9 +96,9 @@ class RuleDownloader:
         self._clean_filter_dir()
         self.adblock_urls, self.allow_urls = self._load_rules_config()
         self.stats = {
-            'adblock': {'success': 0, 'fail': 0, 'files': {}},
-            'allow': {'success': 0, 'fail': 0, 'files': {}},
-            'local': {'copied': 0, 'missing': 0, 'files': {}}
+            'adblock': {'success': 0, 'fail': 0},
+            'allow': {'success': 0, 'fail': 0},
+            'local': {'copied': 0, 'missing': 0}
         }
 
     def _init_session(self) -> requests.Session:
@@ -160,8 +106,7 @@ class RuleDownloader:
         session = requests.Session()
         adapter = requests.adapters.HTTPAdapter(
             pool_connections=config['HTTP_POOL_SIZE'],
-            pool_maxsize=config['HTTP_POOL_SIZE'],
-            max_retries=0
+            pool_maxsize=config['HTTP_POOL_SIZE']
         )
         session.mount('http://', adapter)
         session.mount('https://', adapter)
@@ -175,8 +120,8 @@ class RuleDownloader:
                 if item.is_file() and (item.name.startswith('adblock') or item.name.startswith('allow')):
                     try:
                         item.unlink()
-                    except IOError as e:
-                        logger.warning(f"删除文件失败 {item}: {e}")
+                    except:
+                        pass
 
     def _load_rules_config(self) -> Tuple[List[str], List[str]]:
         """从配置文件加载规则URL"""
@@ -184,7 +129,6 @@ class RuleDownloader:
         allow_urls = []
 
         if not RULES_CONFIG.exists():
-            logger.error(f"配置文件不存在: {RULES_CONFIG}")
             return adblock_urls, allow_urls
 
         try:
@@ -199,74 +143,46 @@ class RuleDownloader:
 
                 if line.lower() == '[adblock]':
                     current_section = 'adblock'
-                    continue
                 elif line.lower() == '[allow]':
                     current_section = 'allow'
-                    continue
-
-                if current_section == 'adblock' and validate_url(line):
-                    # 对API URL进行标准化
-                    if is_api_url(line):
-                        line = normalize_api_url(line)
-                    adblock_urls.append(line)
+                elif current_section == 'adblock' and validate_url(line):
+                    adblock_urls.append(normalize_api_url(line))
                 elif current_section == 'allow' and validate_url(line):
-                    if is_api_url(line):
-                        line = normalize_api_url(line)
-                    allow_urls.append(line)
+                    allow_urls.append(normalize_api_url(line))
 
-            logger.info(f"从配置加载: {len(adblock_urls)}个拦截规则, {len(allow_urls)}个放行规则")
-
-        except IOError as e:
-            logger.error(f"读取配置文件失败: {e}")
+        except:
+            pass
 
         return adblock_urls, allow_urls
 
-    def _convert_to_utf8(self, content: bytes) -> Tuple[str, str]:
+    def _convert_to_utf8(self, content: bytes) -> str:
         """将内容转换为UTF-8编码"""
         try:
-            # 首先尝试UTF-8
-            text = content.decode('utf-8')
-            return text, 'utf-8'
+            return content.decode('utf-8')
         except UnicodeDecodeError:
             pass
         
-        # 检测编码
         try:
             detected = chardet.detect(content)
-            encoding = detected.get('encoding', 'utf-8')
+            encoding = detected.get('encoding')
             if encoding:
-                try:
-                    text = content.decode(encoding)
-                    return text, encoding
-                except UnicodeDecodeError:
-                    pass
-        except Exception:
+                return content.decode(encoding)
+        except:
             pass
         
-        # 尝试常见编码
-        encodings_to_try = ['gbk', 'gb2312', 'gb18030', 'big5', 'latin-1', 'iso-8859-1', 'cp1252']
-        for enc in encodings_to_try:
+        for enc in ['gbk', 'gb2312', 'latin-1']:
             try:
-                text = content.decode(enc)
-                return text, enc
+                return content.decode(enc)
             except UnicodeDecodeError:
                 continue
         
-        # 最后尝试使用errors='replace'
-        try:
-            text = content.decode('utf-8', errors='replace')
-            return text, 'utf-8'
-        except Exception:
-            # 最终回退方案
-            text = content.decode('latin-1', errors='replace')
-            return text, 'latin-1'
+        return content.decode('utf-8', errors='replace')
 
     def download_with_cache(self, url: str, save_path: Path) -> bool:
         """带缓存机制的文件下载"""
         if save_path.exists():
             mtime = save_path.stat().st_mtime
             if time.time() - mtime < config['CACHE_TTL']:
-                logger.info(f"使用缓存: {save_path.name}")
                 return True
         return self.download_with_retry(url, save_path)
 
@@ -274,48 +190,53 @@ class RuleDownloader:
         """带重试机制的文件下载"""
         for attempt in range(config['MAX_RETRIES'] + 1):
             try:
-                logger.info(f"下载中 {url}" + (f" (重试 {attempt})" if attempt > 0 else ""))
+                # 对于HTTP链接，在GitHub环境中可能需要特殊处理
+                if is_http_url(url) and os.getenv('GITHUB_ACTIONS'):
+                    # 在GitHub环境中，尝试使用更宽松的超时设置
+                    timeout = min(config['TIMEOUT'] * 2, 60)  # 最大60秒
+                else:
+                    timeout = config['TIMEOUT']
                 
-                response = self.session.get(url, timeout=config['TIMEOUT'], verify=True, stream=True)
+                # 对于HTTP链接，禁用SSL验证可能会有所帮助
+                verify_ssl = not is_http_url(url)
+                
+                response = self.session.get(
+                    url, 
+                    timeout=timeout, 
+                    verify=verify_ssl,
+                    allow_redirects=True
+                )
                 response.raise_for_status()
 
-                # 流式下载
-                content = b''
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        content += chunk
+                content = response.content
+                text = self._convert_to_utf8(content)
 
-                # 转换编码
-                text, original_encoding = self._convert_to_utf8(content)
-
-                # 保存文件
                 with open(save_path, 'w', encoding='utf-8') as f:
                     f.write(text)
 
-                # 统计规则数量
-                rule_count = count_rules_in_file(save_path)
-                filename = save_path.name
-                if filename.startswith('adblock'):
-                    self.stats['adblock']['files'][filename] = rule_count
-                elif filename.startswith('allow'):
-                    self.stats['allow']['files'][filename] = rule_count
-                
-                logger.info(f"下载成功: {save_path.name} ({rule_count} 条规则)")
                 return True
 
-            except requests.exceptions.RequestException as e:
-                if attempt < config['MAX_RETRIES']:
-                    delay = config['RETRY_DELAY'] * (attempt + 1)
-                    logger.warning(f"请求失败，{delay}秒后重试: {e}")
-                    time.sleep(delay)
-                else:
-                    logger.error(f"网络请求失败 {url}: {e}")
-            except (IOError, UnicodeDecodeError) as e:
-                logger.error(f"文件处理失败 {url}: {e}")
-                return False
+            except requests.exceptions.SSLError as e:
+                logger.warning(f"SSL错误 {url}: {e}")
+                # 对于SSL错误，尝试不验证SSL
+                try:
+                    response = self.session.get(url, timeout=config['TIMEOUT'], verify=False)
+                    response.raise_for_status()
+                    content = response.content
+                    text = self._convert_to_utf8(content)
+                    with open(save_path, 'w', encoding='utf-8') as f:
+                        f.write(text)
+                    return True
+                except Exception as retry_e:
+                    if attempt < config['MAX_RETRIES']:
+                        time.sleep(config['RETRY_DELAY'])
+                    else:
+                        logger.error(f"下载失败 {url}: {retry_e}")
             except Exception as e:
-                logger.error(f"未知错误 {url}: {e}")
-                return False
+                if attempt < config['MAX_RETRIES']:
+                    time.sleep(config['RETRY_DELAY'])
+                else:
+                    logger.error(f"下载失败 {url}: {e}")
         return False
 
     def copy_local_rules(self):
@@ -325,31 +246,23 @@ class RuleDownloader:
                 if src.exists():
                     with open(src, 'rb') as f:
                         content = f.read()
-                    text, encoding = self._convert_to_utf8(content)
+                    text = self._convert_to_utf8(content)
                     with open(dest, 'w', encoding='utf-8') as f:
                         f.write(text)
-                    
-                    # 统计规则数量
-                    rule_count = count_rules_in_file(dest)
-                    self.stats['local']['files'][dest.name] = rule_count
                     self.stats['local']['copied'] += 1
-                    logger.info(f"复制本地规则: {dest.name} ({rule_count} 条规则)")
                 else:
-                    logger.warning(f"本地规则文件不存在: {src}")
                     self.stats['local']['missing'] += 1
-            except IOError as e:
-                logger.error(f"复制本地规则失败 {src}: {e}")
+            except:
                 self.stats['local']['missing'] += 1
 
     def download_remote_rules(self):
         """下载远程规则"""
         # 下载广告拦截规则
         if self.adblock_urls:
-            gh_group("下载拦截规则")
             with ThreadPoolExecutor(max_workers=config['MAX_WORKERS']) as executor:
                 futures = []
                 for i, url in enumerate(self.adblock_urls, 1):
-                    save_path = secure_path_join(FILTER_DIR, f"adblock{i:02d}.txt")
+                    save_path = FILTER_DIR / f"adblock{i:02d}.txt"
                     futures.append(executor.submit(self.download_with_cache, url, save_path))
 
                 for future in as_completed(futures):
@@ -357,17 +270,13 @@ class RuleDownloader:
                         self.stats['adblock']['success'] += 1
                     else:
                         self.stats['adblock']['fail'] += 1
-            gh_endgroup()
-        else:
-            logger.warning("未配置广告拦截规则URL")
 
         # 下载白名单规则
         if self.allow_urls:
-            gh_group("下载放行规则")
             with ThreadPoolExecutor(max_workers=config['MAX_WORKERS']) as executor:
                 futures = []
                 for i, url in enumerate(self.allow_urls, 1):
-                    save_path = secure_path_join(FILTER_DIR, f"allow{i:02d}.txt")
+                    save_path = FILTER_DIR / f"allow{i:02d}.txt"
                     futures.append(executor.submit(self.download_with_cache, url, save_path))
 
                 for future in as_completed(futures):
@@ -375,83 +284,24 @@ class RuleDownloader:
                         self.stats['allow']['success'] += 1
                     else:
                         self.stats['allow']['fail'] += 1
-            gh_endgroup()
-        else:
-            logger.warning("未配置白名单规则URL")
-
-    def print_statistics(self):
-        """打印规则统计信息"""
-        logger.info("=" * 50)
-        logger.info("规则下载统计")
-        logger.info("=" * 50)
-        
-        # 统计拦截规则
-        adblock_total = 0
-        if self.stats['adblock']['files']:
-            logger.info("拦截规则统计:")
-            for filename, count in sorted(self.stats['adblock']['files'].items()):
-                logger.info(f"  📁 {filename}: {count:>6} 条规则")
-                adblock_total += count
-            logger.info(f"拦截规则总计: {adblock_total} 条规则")
-        
-        # 统计放行规则
-        allow_total = 0
-        if self.stats['allow']['files']:
-            logger.info("放行规则统计:")
-            for filename, count in sorted(self.stats['allow']['files'].items()):
-                logger.info(f"  📁 {filename}: {count:>6} 条规则")
-                allow_total += count
-            logger.info(f"放行规则总计: {allow_total} 条规则")
-        
-        # 统计本地规则
-        local_total = 0
-        if self.stats['local']['files']:
-            logger.info("本地规则统计:")
-            for filename, count in sorted(self.stats['local']['files'].items()):
-                logger.info(f"  📁 {filename}: {count:>6} 条规则")
-                local_total += count
-            logger.info(f"本地规则总计: {local_total} 条规则")
-        
-        # 总计
-        total_rules = adblock_total + allow_total + local_total
-        logger.info("=" * 50)
-        logger.info(f"规则总计: {total_rules} 条规则")
-        logger.info("=" * 50)
 
     def run(self):
         """运行下载器"""
         start_time = time.time()
-        
-        logger.info("开始下载规则文件...")
-        
-        # 复制本地规则
-        gh_group("处理本地规则")
-        self.copy_local_rules()
-        gh_endgroup()
 
-        # 下载远程规则
+        self.copy_local_rules()
         self.download_remote_rules()
 
         elapsed = time.time() - start_time
 
-        # 输出结果摘要
-        logger.info("下载完成!")
-        logger.info(f"耗时: {elapsed:.1f}s")
-        logger.info(f"拦截规则: {self.stats['adblock']['success']} 成功, {self.stats['adblock']['fail']} 失败")
-        logger.info(f"放行规则: {self.stats['allow']['success']} 成功, {self.stats['allow']['fail']} 失败")
-        logger.info(f"本地规则: {self.stats['local']['copied']} 已复制, {self.stats['local']['missing']} 缺失")
-        
-        # 打印详细统计
-        self.print_statistics()
+        logger.info(f"耗时:{elapsed:.1f}s 拦截:{self.stats['adblock']['success']}/{len(self.adblock_urls)} "
+                   f"放行:{self.stats['allow']['success']}/{len(self.allow_urls)} "
+                   f"本地:{self.stats['local']['copied']}/{len(LOCAL_RULES)}")
 
 
 if __name__ == "__main__":
     try:
         RuleDownloader().run()
-        sys.exit(0)
-    except KeyboardInterrupt:
-        logger.info("用户中断执行")
-        sys.exit(1)
     except Exception as e:
         logger.error(f"执行失败: {e}")
         sys.exit(1)
