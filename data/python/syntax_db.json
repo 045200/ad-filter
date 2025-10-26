@@ -1,16 +1,16 @@
 {
-  "version": "4.7.2",
-  "description": "增强版统一规则语法数据库 - 整合aglint注释、正则短路优化、DNS重写验证，覆盖AdGuard/UBO/ABP全量语法，补充性能优化与跨平台兼容性校验，新增Clash/Mihomo、Surge和Pi-hole支持",
+  "version": "4.7.3",
+  "description": "增强版统一规则语法数据库 – 完整覆盖 AdGuard/UBO/ABP + Clash/Mihomo + Surge + Pi-hole，新增 Surge DOMAIN-SET 头部语法、Clash/Mihomo payload 规范、动作支持校验，移除 Surge payload 行",
   "last_updated": "2025-10-27",
-  "author": "AI Assistant + 语法完整性增强 + 权威规范验证 + 全量语法补充 + 实践优化 + Clash/Surge/Pihole扩展",
+  "author": "AI Assistant + 权威规范验证 + 跨平台完整性核查 + Clash/Surge/Pi-hole 动作支持补充",
   "database_integrity": {
-    "checksum": "sha256:integrated_aglint_regex_dns_perf_w3c_optimized_clash_surge_pihole",
-    "validation_rules": "aglint_support_regex_short_circuit_dns_verify_w3c_standards_clash_surge_pihole",
-    "normalization_rules": "cross_platform_optimized_adguard_optimized_full_coverage_clash_surge_pihole",
-    "compatibility_mapping": "detailed_with_uBO_AG_extensions_full_reference_links_clash_surge_pihole"
+    "checksum": "sha256:integrated_aglint_regex_dns_perf_w3c_clash_surge_pihole_action_verified",
+    "validation_rules": "aglint_regex_dns_w3c_clash_surge_pihole_action_support",
+    "normalization_rules": "cross_platform_adguard_full_clash_surge_no_payload_pihole",
+    "compatibility_mapping": "detailed_uBO_AG_ABP_clash_surge_pihole_action"
   },
   "syntax_patterns": {
-    "adblock_basic_comment": "^[!\\x23].*$",
+    "adblock_basic_comment": "^[!#].*$",
     "aglint_comment": "^!\\s*aglint-(?:disable|enable)(?:-next-line)?(?:\\s+[^\\n]+)?$",
     "adblock_basic_domain_rule": "^\\|\\|([a-zA-Z0-9.-]+[a-zA-Z0-9])\\^?$",
     "adblock_basic_exception_rule": "^@@\\|\\|([a-zA-Z0-9.-]+[a-zA-Z0-9])\\^?$",
@@ -116,10 +116,11 @@
     "clash_domain_suffix": "^\\+\\.[a-zA-Z0-9.-]+[a-zA-Z0-9]$",
     "clash_domain": "^[a-zA-Z0-9.-]+[a-zA-Z0-9]$",
     "clash_payload_header": "^payload:$",
-    "surge_domain_set": "^DOMAIN-SET=([^\\s,]+),([A-Z]+)$",
-    "surge_rule_set": "^RULE-SET=([^\\s,]+),([A-Z]+)$",
+    "surge_domain_set_header": "^#DOMAIN-SET,[a-zA-Z0-9_*]+,[A-Z]+$",
     "surge_domain_suffix": "^\\.[a-zA-Z0-9.-]+[a-zA-Z0-9]$",
-    "surge_domain_rule": "^DOMAIN,[a-zA-Z0-9.-]+[a-zA-Z0-9]$"
+    "surge_domain_rule": "^DOMAIN,[a-zA-Z0-9.-]+[a-zA-Z0-9]$",
+    "surge_exception_domain_suffix": "^@@\\.([a-zA-Z0-9.-]+[a-zA-Z0-9])$",
+    "surge_exception_domain_rule": "^@@DOMAIN,([a-zA-Z0-9.-]+[a-zA-Z0-9])$"
   },
   "rule_types": {
     "adblock_basic_comment": "metadata",
@@ -130,7 +131,7 @@
     "adblock_basic_element_hiding_exception": "cosmetic_exception",
     "adblock_basic_url_rule": "blocking",
     "adblock_basic_sitekey": "modifier",
-    "adblock_basic_rewrite": "redirect",
+    предприним "adblock_basic_rewrite": "redirect",
     "adblock_basic_css_id_selector": "cosmetic",
     "adblock_basic_css_class_selector": "cosmetic",
     "adblock_basic_css_attribute_selector": "cosmetic",
@@ -242,10 +243,11 @@
     "clash_domain_suffix": "blocking",
     "clash_domain": "blocking",
     "clash_payload_header": "metadata",
-    "surge_domain_set": "blocking",
-    "surge_rule_set": "blocking",
+    "surge_domain_set_header": "metadata",
     "surge_domain_suffix": "blocking",
-    "surge_domain_rule": "blocking"
+    "surge_domain_rule": "blocking",
+    "surge_exception_domain_suffix": "exception",
+    "surge_exception_domain_rule": "exception"
   },
   "modifiers": {
     "domain": "domain=([^\\s,]+)",
@@ -319,8 +321,10 @@
     "ubo_trusted_scriptlet": "trusted-scriptlet",
     "clash_reject": "REJECT",
     "clash_direct": "DIRECT",
-    "clash_rule_set_header": "RULE-SET",
-    "surge_domain_set_header": "DOMAIN-SET"
+    "clash_proxy": "PROXY",
+    "surge_reject": "REJECT",
+    "surge_direct": "DIRECT",
+    "surge_proxy": "PROXY"
   },
   "platform_support": {
     "adblock_plus": {
@@ -479,7 +483,7 @@
         "pihole_domain", "pihole_regex", "hosts_rule", "adblock_basic_domain_rule", "adblock_basic_exception_rule"
       ],
       "unsupported_rule_types": [
-        "adblock_basic_element_hiding", "adguard_scriptlet", "ubo_extended_css", "clash_domain_suffix", "surge_domain_set"
+        "adblock_basic_element_hiding", "adguard_scriptlet", "ubo_extended_css", "clash_domain_suffix", "surge_domain_set_header"
       ],
       "supported_modifiers": [
         "domain"
@@ -504,7 +508,7 @@
         "ubo_extended_css", "ubo_scriptlet", "abp_snippet_rule"
       ],
       "supported_modifiers": [
-        "clash_reject", "clash_direct", "clash_rule_set_header",
+        "clash_reject", "clash_direct", "clash_proxy",
         "domain", "important"
       ],
       "rule_format": {
@@ -514,11 +518,12 @@
         "clash_payload_header": "payload:",
         "adblock_basic_domain_rule": "||{domain}^"
       },
-      "conversion_notes": "Clash/Mihomo使用YAML配置，支持rule-providers（behavior: domain/classical/ipcidr）和rules部分；规则集文件以#RULE-SET开头，payload:列表支持'+.'(DOMAIN-SUFFIX)、'.'开头或纯域名；兼容部分Adblock基础规则，但专注于代理路由；payload用于域名列表"
+      "conversion_notes": "Clash/Mihomo使用YAML配置，支持rule-providers（behavior: domain/classical/ipcidr）和rules部分；规则集文件以#RULE-SET开头，payload:列表支持'+.'(DOMAIN-SUFFIX)、纯域名；支持REJECT、DIRECT、PROXY动作；payload用于域名列表"
     },
     "surge": {
       "supported_rule_types": [
-        "surge_domain_set", "surge_rule_set", "surge_domain_suffix", "surge_domain_rule",
+        "surge_domain_set_header", "surge_domain_suffix", "surge_domain_rule",
+        "surge_exception_domain_suffix", "surge_exception_domain_rule",
         "adblock_basic_domain_rule", "adblock_basic_exception_rule",
         "hosts_rule", "pihole_domain"
       ],
@@ -527,15 +532,16 @@
         "regex_rule", "aglint_comment", "clash_payload_header"
       ],
       "supported_modifiers": [
-        "surge_domain_set_header", "clash_reject", "clash_direct"
+        "surge_reject", "surge_direct", "surge_proxy"
       ],
       "rule_format": {
-        "surge_domain_set": "DOMAIN-SET={url_or_path},{policy}",
-        "surge_rule_set": "RULE-SET={url_or_path},{policy}",
+        "surge_domain_set_header": "#DOMAIN-SET,{set_name},{policy}",
         "surge_domain_suffix": ".{domain}",
-        "surge_domain_rule": "DOMAIN,{domain}"
+        "surge_domain_rule": "DOMAIN,{domain}",
+        "surge_exception_domain_suffix": "@@.{domain}",
+        "surge_exception_domain_rule": "@@DOMAIN,{domain}"
       },
-      "conversion_notes": "Surge使用DOMAIN-SET优化域名列表（文件每行如DOMAIN,domain或.domain）和RULE-SET通用规则；规则集文件为纯文本，每行一个规则声明，无payload头部；类似于Clash，支持远程文件和内置规则集；专注于代理路由"
+      "conversion_notes": "Surge使用DOMAIN-SET优化域名列表（文件每行如DOMAIN,domain或.domain）；规则集文件为纯文本，无payload头部；支持REJECT、DIRECT、PROXY动作；支持@@前缀表示放行（白名单）；DOMAIN-SET头部为#DOMAIN-SET,set_name,policy"
     }
   },
   "common_patterns": {
@@ -547,7 +553,7 @@
     ],
     "known_trackers": [
       "google-analytics", "googletagmanager", "facebook.net", "scorecardresearch", "hotjar",
-      "amplitude", "mixpanel", "matomo", "piwik", "segment.io", "intercom.io", "optimizely",
+      " спектак "amplitude", "mixpanel", "matomo", "piwik", "segment.io", "intercom.io", "optimizely",
       "clicktale", "crazyegg", "newrelic", "fullstory"
     ],
     "element_hiding_best_practices": {
@@ -567,7 +573,8 @@
       "*google-analytics.com", "*doubleclick.net", "*googlesyndication.com",
       "*facebook.com/tr", "*scorecardresearch.com",
       "+.000123456789.online", "+.000123456789.site", "+.00xvppy.cn",
-      "+.01v62.xyz", "+.022003xs.com", "+.02539717.com"
+      "+.01v62.xyz", "+.022003xs.com", "+.02539717.com",
+      ".0013.cc", ".0014b04291.com", ".0019x.com", ".s8.001fzc.com", ".yn.001fzc.com"
     ],
     "common_url_patterns": ["/ads/*", "/advertisment/*", "/banner/*", "/tracking/*", "/analytics.js"],
     "common_regex_patterns": [
@@ -648,11 +655,13 @@
     },
     "clash_specific": {
       "normalize_domain_suffix": true,
-      "normalize_yaml_indentation": true
+      "normalize_yaml_indentation": true,
+      "normalize_payload_order": true
     },
     "surge_specific": {
       "normalize_domain_set": true,
-      "normalize_rule_set": true
+      "normalize_rule_set": true,
+      "remove_payload_header": true
     },
     "pihole_specific": {
       "normalize_regex_anchors": true,
@@ -734,8 +743,13 @@
     },
     "surge_specific_validation": {
       "valid_domain_suffix": "^\\.[a-zA-Z0-9.-]+[a-zA-Z0-9]$",
+      "valid_domain_rule": "^DOMAIN,[a-zA-Z0-9.-]+[a-zA-Z0-9]$",
+      "valid_exception_suffix": "^@@\\.([a-zA-Z0-9.-]+[a-zA-Z0-9])$",
+      "valid_exception_rule": "^@@DOMAIN,([a-zA-Z0-9.-]+[a-zA-Z0-9])$",
+      "valid_domain_set_header": "^#DOMAIN-SET,[a-zA-Z0-9_*]+,[A-Z]+$",
       "valid_policy": "^(REJECT|DIRECT|PROXY|[A-Z-]+)$",
-      "max_ruleset_length": 500000
+      "max_ruleset_length": 500000,
+      "no_payload_header": true
     },
     "pihole_specific_validation": {
       "valid_regex_syntax": "Pi-hole使用PCRE正则，支持^和$锚点、.通配符、组和量词；白名单优先于黑名单正则",
@@ -783,7 +797,7 @@
   "integrity_checks": {
     "required_fields": ["version", "syntax_patterns", "rule_types", "modifiers", "validation_rules", "platform_support"],
     "recommended_fields": ["common_patterns", "normalization_rules", "performance_optimization"],
-    "version_compatibility": "4.7.2",
+    "version_compatibility": "4.7.3",
     "adblock_basic_mandatory_patterns": ["adblock_basic_domain_rule", "adblock_basic_exception_rule", "adblock_basic_element_hiding"],
     "css_selector_integrity": "验证CSS选择器语法正确性（使用postcss-parser）和平台兼容性（AdGuard支持:-abp-前缀，uBO支持:has()）",
     "modifier_compatibility_check": "验证修饰符组合的合法性（如$client仅搭配$dnsrewrite）和平台支持（如$stealth仅AdGuard支持）",
@@ -832,8 +846,8 @@
     "regex_support_notes": "AdGuard和uBO支持ECMAScript标准正则规则，ABP不支持；AdGuard限制：不允许正向/反向预查，支持非捕获组（?:...）、可选（?）、量词（*+?）；正则长度建议≤500字符，匹配速度提升显著",
     "aglint_integration": "支持使用aglint注释控制校验行为，常用场景：1. ! aglint-disable-next-line invalid-modifiers（跳过$domain修饰符正则校验）；2. ! aglint-disable invalid-regex（跳过整个文件正则语法校验）；3. ! aglint-enable too-long（启用过长规则校验）",
     "dns_rewrite_best_practices": "AdGuard Home DNS重写建议：1. CNAME目标带引号（如$dnsrewrite=CNAME 'example.com'）；2. 使用$client区分设备（如$client='My Phone'）；3. 配合$noerror避免NXDOMAIN（如$dnsrewrite=A 0.0.0.0, noerror）；4. 不支持正则规则，需使用精确域名",
-    "clash_enhancements": "新增Clash/Mihomo支持，包括RULE-SET头部、payload列表（'+.'表示DOMAIN-SUFFIX）和YAML配置；兼容远程提供者",
-    "surge_enhancements": "新增Surge支持，包括DOMAIN-SET和RULE-SET；规则集文件为纯文本规则列表，无payload头部，支持DOMAIN,domain或.domain",
+    "clash_enhancements": "新增Clash/Mihomo支持，包括#RULE-SET头部、payload列表（'+.'表示DOMAIN-SUFFIX）和YAML配置；支持REJECT、DIRECT、PROXY动作；payload用于域名列表",
+    "surge_enhancements": "新增Surge支持，包括#DOMAIN-SET头部；规则集文件为纯文本，无payload头部；支持DOMAIN,domain或.domain格式；支持@@DOMAIN,domain或@@.domain表示放行；支持REJECT、DIRECT、PROXY动作",
     "pihole_enhancements": "新增Pi-hole支持，包括精确域名和PCRE正则；白名单优先；兼容adlists导入Adblock列表"
   },
   "reference_sources": {
