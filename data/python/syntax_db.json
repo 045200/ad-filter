@@ -1,7 +1,7 @@
 {
-  "version": "4.7.4",
+  "version": "4.7.5",
   "description": "增强版统一规则语法数据库 – 完整覆盖 AdGuard/UBO/ABP + Clash/Mihomo + Surge + Pi-hole，专注广告拦截语法，补充精准域名规则支持",
-  "last_updated": "2025-10-27",
+  "last_updated": "2025-10-28",
   "author": "AI Assistant + 权威规范验证 + 跨平台完整性核查",
   "database_integrity": {
     "checksum": "sha256:enhanced_adblock_adguard_precise_domain_clash_surge_adblock_verified",
@@ -520,41 +520,71 @@
     },
     "clash_mihomo": {
       "supported_rule_types": [
+        "adblock_basic_domain_rule", "adblock_basic_exception_rule",
+        "adblock_basic_precise_domain", "adblock_basic_precise_exception", 
+        "adblock_basic_wildcard_domain", "hosts_rule", "pihole_domain",
+        "adguard_home_dns_rewrite", "adguard_home_precise_domain",
         "clash_payload_header", "clash_domain_suffix", "clash_domain", "clash_rule_set_header",
         "adblock_basic_comment"
       ],
       "unsupported_rule_types": [
-        "adguard_scriptlet", "adguard_dns_rewrite", "adguard_stealth_rule",
-        "ubo_extended_css", "ubo_scriptlet", "abp_snippet_rule",
+        "adguard_scriptlet", "adguard_removeparam", "adguard_redirect",
+        "adguard_stealth_rule", "adguard_extended_css", "regex_rule",
+        "adblock_basic_regex_rule", "pihole_regex", "adblock_basic_element_hiding",
+        "adblock_basic_element_hiding_exception", "ubo_extended_css", "ubo_scriptlet",
         "clash_ip_cidr", "clash_geoip", "clash_process_name", "clash_user_agent", "clash_url_regex", "clash_domain_keyword"
       ],
       "supported_modifiers": [
         "clash_reject", "clash_direct"
       ],
       "rule_format": {
+        "adblock_basic_domain_rule": "+.{domain}",
+        "adblock_basic_exception_rule": "+.{domain}",
+        "adblock_basic_precise_domain": "{domain}",
+        "adblock_basic_precise_exception": "{domain}",
+        "adblock_basic_wildcard_domain": "+.{domain}",
+        "hosts_rule": "+.{domain}",
+        "pihole_domain": "+.{domain}",
+        "adguard_home_dns_rewrite": "{domain}",
+        "adguard_home_precise_domain": "{domain}",
         "clash_payload_header": "payload:",
         "clash_rule_set_header": "#RULE-SET,{set_name},{policy}",
         "clash_domain_suffix": "+.{domain}",
         "clash_domain": "{domain}",
         "adblock_basic_comment": "# {comment}"
       },
-      "conversion_notes": "Clash/Mihomo广告拦截专用格式：支持payload头部和RULE-SET头部格式，仅支持域名后缀（+.example.com）和精确域名（example.com）匹配，仅使用REJECT和DIRECT动作，专注于广告拦截场景"
+      "conversion_notes": "支持从AdGuard/AdGuard Home/Hosts规则转换，专注DNS层广告拦截；使用+.{domain}格式表示DOMAIN-SUFFIX，{domain}表示精确域名；仅支持REJECT和DIRECT动作"
     },
     "surge": {
       "supported_rule_types": [
+        "adblock_basic_domain_rule", "adblock_basic_exception_rule",
+        "adblock_basic_precise_domain", "adblock_basic_precise_exception", 
+        "adblock_basic_wildcard_domain", "hosts_rule", "pihole_domain",
+        "adguard_home_dns_rewrite", "adguard_home_precise_domain",
         "surge_domain_set_header", "surge_domain_suffix", "surge_domain_rule",
         "surge_exception_domain_suffix", "surge_exception_domain_rule",
         "adblock_basic_comment"
       ],
       "unsupported_rule_types": [
-        "adguard_scriptlet", "adguard_dns_rewrite", "ubo_extended_css",
-        "regex_rule", "aglint_comment", "clash_payload_header",
+        "adguard_scriptlet", "adguard_removeparam", "adguard_redirect",
+        "adguard_stealth_rule", "adguard_extended_css", "regex_rule",
+        "adblock_basic_regex_rule", "pihole_regex", "adblock_basic_element_hiding",
+        "adblock_basic_element_hiding_exception", "ubo_extended_css",
         "surge_ip_cidr", "surge_geoip", "surge_process_name", "surge_user_agent", "surge_url_regex", "surge_domain_keyword"
       ],
       "supported_modifiers": [
         "surge_reject", "surge_direct"
       ],
       "rule_format": {
+        "adblock_basic_domain_rule": ".{domain}",
+        "adblock_basic_exception_rule": "@@.{domain}",
+        "adblock_basic_precise_domain": "DOMAIN,{domain}",
+        "adblock_basic_precise_exception": "@@DOMAIN,{domain}",
+        "adblock_basic_wildcard_domain": ".{domain}",
+        "hosts_rule": "DOMAIN,{domain}",
+        "pihole_domain": "DOMAIN,{domain}",
+        "adguard_home_dns_rewrite": "@@DOMAIN,{domain}",
+        "adguard_home_precise_domain": "DOMAIN,{domain}",
         "surge_domain_set_header": "#DOMAIN-SET,{set_name},{policy}",
         "surge_domain_suffix": ".{domain}",
         "surge_domain_rule": "DOMAIN,{domain}",
@@ -562,7 +592,7 @@
         "surge_exception_domain_rule": "@@DOMAIN,{domain}",
         "adblock_basic_comment": "# {comment}"
       },
-      "conversion_notes": "Surge广告拦截专用格式：支持DOMAIN-SET头部格式，仅支持域名后缀（.example.com）和精确域名（DOMAIN,example.com）匹配，支持例外规则（@@前缀），仅使用REJECT和DIRECT动作，专注于广告拦截场景"
+      "conversion_notes": "支持从AdGuard/AdGuard Home/Hosts规则转换，专注DNS层广告拦截；使用.{domain}格式表示DOMAIN-SUFFIX，DOMAIN,{domain}表示精确域名；支持@@前缀例外规则；仅使用REJECT和DIRECT动作"
     }
   },
   "conversion_rules": {
@@ -907,7 +937,7 @@
   "integrity_checks": {
     "required_fields": ["version", "syntax_patterns", "rule_types", "modifiers", "validation_rules", "platform_support", "conversion_rules", "common_patterns", "normalization_rules", "performance_optimization"],
     "recommended_fields": ["adguard_specific_enhancements", "documentation_notes", "reference_sources"],
-    "version_compatibility": "4.7.4",
+    "version_compatibility": "4.7.5",
     "adblock_basic_mandatory_patterns": ["adblock_basic_domain_rule", "adblock_basic_exception_rule", "adblock_basic_element_hiding", "adblock_basic_precise_domain", "adblock_basic_precise_exception"],
     "css_selector_integrity": "验证CSS选择器语法正确性（使用postcss-parser）和平台兼容性（AdGuard支持:-abp-前缀，uBO支持:has()）",
     "modifier_compatibility_check": "验证修饰符组合的合法性（如$client仅搭配$dnsrewrite）和平台支持（如$stealth仅AdGuard支持）",
@@ -962,10 +992,10 @@
     "regex_support_notes": "AdGuard和uBO支持ECMAScript标准正则规则，ABP不支持；AdGuard限制：不允许正向/反向预查，支持非捕获组（?:...）、可选（?）、量词（*+?）；正则长度建议≤500字符，匹配速度提升显著",
     "aglint_integration": "支持使用aglint注释控制校验行为，常用场景：1. ! aglint-disable-next-line invalid-modifiers（跳过$domain修饰符正则校验）；2. ! aglint-disable invalid-regex（跳过整个文件正则语法校验）；3. ! aglint-enable too-long（启用过长规则校验）",
     "dns_rewrite_best_practices": "AdGuard Home DNS重写建议：1. CNAME目标带引号（如$dnsrewrite=CNAME 'example.com'）；2. 使用$client区分设备（如$client='My Phone'）；3. 配合$noerror避免NXDOMAIN（如$dnsrewrite=A 0.0.0.0, noerror）；4. 不支持正则规则，需使用精确域名",
-    "clash_enhancements": "新增Clash/Mihomo广告拦截专用支持，包括payload头部和RULE-SET头部格式，仅支持域名后缀和精确域名匹配，仅使用REJECT和DIRECT动作",
-    "surge_enhancements": "新增Surge广告拦截专用支持，包括DOMAIN-SET头部格式，仅支持域名后缀和精确域名匹配，支持例外规则，仅使用REJECT和DIRECT动作",
+    "clash_enhancements": "增强Clash/Mihomo广告拦截专用支持，支持从AdGuard/AdGuard Home/Hosts规则转换，包含精准域名规则支持",
+    "surge_enhancements": "增强Surge广告拦截专用支持，支持从AdGuard/AdGuard Home/Hosts规则转换，包含精准域名规则和例外规则支持",
     "pihole_enhancements": "新增Pi-hole支持，包括精确域名和PCRE正则；白名单优先；兼容adlists导入Adblock列表",
-    "conversion_capabilities": "支持AdGuard/AdGuard Home到Clash/Surge的域名规则转换，专注于广告拦截场景，保留注释和动作映射",
+    "conversion_capabilities": "支持AdGuard/AdGuard Home到所有目标平台的域名规则转换，专注于广告拦截场景，保留注释和动作映射",
     "precise_domain_support": "全面增强精准域名规则支持，包括带修饰符的精确域名匹配、通配符域名转换、白名单优先处理等高级功能"
   },
   "reference_sources": {
