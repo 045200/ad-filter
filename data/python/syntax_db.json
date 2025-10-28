@@ -1,19 +1,22 @@
 {
-  "version": "4.7.3",
-  "description": "增强版统一规则语法数据库 – 完整覆盖 AdGuard/UBO/ABP + Clash/Mihomo + Surge + Pi-hole，专注广告拦截语法",
+  "version": "4.7.4",
+  "description": "增强版统一规则语法数据库 – 完整覆盖 AdGuard/UBO/ABP + Clash/Mihomo + Surge + Pi-hole，专注广告拦截语法，补充精准域名规则支持",
   "last_updated": "2025-10-27",
   "author": "AI Assistant + 权威规范验证 + 跨平台完整性核查",
   "database_integrity": {
-    "checksum": "sha256:integrated_aglint_regex_dns_perf_w3c_clash_surge_pihole_adblock_verified",
-    "validation_rules": "aglint_regex_dns_w3c_clash_surge_pihole_adblock_support",
-    "normalization_rules": "cross_platform_adguard_full_clash_surge_adblock_pihole",
-    "compatibility_mapping": "detailed_uBO_AG_ABP_clash_surge_pihole_adblock"
+    "checksum": "sha256:enhanced_adblock_adguard_precise_domain_clash_surge_adblock_verified",
+    "validation_rules": "aglint_regex_dns_w3c_clash_surge_pihole_adblock_precise_domain",
+    "normalization_rules": "cross_platform_adguard_full_clash_surge_adblock_pihole_precise",
+    "compatibility_mapping": "detailed_uBO_AG_ABP_clash_surge_pihole_adblock_precise"
   },
   "syntax_patterns": {
     "adblock_basic_comment": "^[!#].*$",
     "aglint_comment": "^!\\s*aglint-(?:disable|enable)(?:-next-line)?(?:\\s+[^\\n]+)?$",
     "adblock_basic_domain_rule": "^\\|\\|([a-zA-Z0-9.-]+[a-zA-Z0-9])\\^?$",
     "adblock_basic_exception_rule": "^@@\\|\\|([a-zA-Z0-9.-]+[a-zA-Z0-9])\\^?$",
+    "adblock_basic_precise_domain": "^\\|\\|([a-zA-Z0-9.-]+[a-zA-Z0-9])\\^\\$(?:[^\\s,]+)?$",
+    "adblock_basic_precise_exception": "^@@\\|\\|([a-zA-Z0-9.-]+[a-zA-Z0-9])\\^\\$(?:[^\\s,]+)?$",
+    "adblock_basic_wildcard_domain": "^\\|\\|([*a-zA-Z0-9.-]+[a-zA-Z0-9])\\^$",
     "adblock_basic_element_hiding": "^##[^#\\n]+$",
     "adblock_basic_element_hiding_exception": "^#@#[^#\\n]+$",
     "adblock_basic_url_rule": "^\\|(https?://[^|\\n]+)\\|$",
@@ -25,7 +28,6 @@
     "adblock_basic_css_combinator": "^##[^#\\n]*[ >+~][^#\\n]+$",
     "adblock_basic_css_pseudo_class": "^##[^#\\n]*:(?:hover|active|focus|visited|link|target|lang|not|has|is|where)[^#\\n]*$",
     "adblock_basic_css_pseudo_element": "^##[^#\\n]*::(?:before|after|first-line|first-letter|selection|placeholder)[^#\\n]*$",
-    "adblock_basic_wildcard_domain": "^\\|\\|[a-zA-Z0-9.*-]+\\^$",
     "adblock_basic_wildcard_url": "^[a-zA-Z0-9*.-]+/[a-zA-Z0-9*.-]+$",
     "adblock_basic_regex_rule": "^/(?:[^\\n]|\\([^)]*\\))+$/",
     "regex_rule": "^/(?:[^\\n]|\\([^)]*\\))+$/",
@@ -46,6 +48,7 @@
     "adguard_home_dns_rewrite": "\\$dnsrewrite=([^;]+);?",
     "adguard_home_client": "\\$client=([^\\s,]+)",
     "adguard_home_dnstype": "\\$dnstype=([^\\s,]+)",
+    "adguard_home_precise_domain": "^\\|\\|([a-zA-Z0-9.-]+[a-zA-Z0-9])\\^\\$(?:client|dnstype|dnsrewrite)=[^\\s,]+$",
     "adguard_extended_css": "#\\?#([^#\\n]+)$",
     "adguard_replace": "\\$replace=([^\\s,]+)",
     "adguard_extension": "\\$extension",
@@ -127,6 +130,9 @@
     "aglint_comment": "meta",
     "adblock_basic_domain_rule": "blocking",
     "adblock_basic_exception_rule": "exception",
+    "adblock_basic_precise_domain": "precise_blocking",
+    "adblock_basic_precise_exception": "precise_exception",
+    "adblock_basic_wildcard_domain": "wildcard_blocking",
     "adblock_basic_element_hiding": "cosmetic",
     "adblock_basic_element_hiding_exception": "cosmetic_exception",
     "adblock_basic_url_rule": "blocking",
@@ -138,7 +144,6 @@
     "adblock_basic_css_combinator": "cosmetic",
     "adblock_basic_css_pseudo_class": "cosmetic",
     "adblock_basic_css_pseudo_element": "cosmetic",
-    "adblock_basic_wildcard_domain": "blocking",
     "adblock_basic_wildcard_url": "blocking",
     "adblock_basic_regex_rule": "blocking",
     "regex_rule": "blocking",
@@ -159,6 +164,7 @@
     "adguard_home_dns_rewrite": "dns_modification",
     "adguard_home_client": "client_targeting",
     "adguard_home_dnstype": "dns_query_filtering",
+    "adguard_home_precise_domain": "precise_dns_rule",
     "adguard_extended_css": "cosmetic_advanced",
     "adguard_replace": "content_filtering",
     "adguard_extension": "modifier",
@@ -328,6 +334,7 @@
     "adblock_plus": {
       "supported_rule_types": [
         "adblock_basic_comment", "adblock_basic_domain_rule", "adblock_basic_exception_rule",
+        "adblock_basic_precise_domain", "adblock_basic_precise_exception", "adblock_basic_wildcard_domain",
         "adblock_basic_element_hiding", "adblock_basic_element_hiding_exception", "adblock_basic_url_rule",
         "adblock_basic_css_id_selector", "adblock_basic_css_class_selector", "adblock_basic_css_attribute_selector",
         "adblock_basic_css_combinator", "adblock_basic_css_pseudo_class", "adblock_basic_css_pseudo_element",
@@ -348,6 +355,8 @@
         "adblock_basic_comment": "{comment}",
         "adblock_basic_domain_rule": "||{domain}^",
         "adblock_basic_exception_rule": "@@||{domain}^",
+        "adblock_basic_precise_domain": "||{domain}^${modifiers}",
+        "adblock_basic_precise_exception": "@@||{domain}^${modifiers}",
         "adblock_basic_element_hiding": "##{selector}",
         "adblock_basic_element_hiding_exception": "#@#{selector}",
         "adblock_basic_url_rule": "|{url}|",
@@ -355,11 +364,12 @@
         "abp_filter_list_header": "! {header_content}",
         "aglint_comment": "! aglint-{action}{-next-line} {rule}"
       },
-      "conversion_notes": "支持Adblock基础语法+ABP专属片段规则和rewrite，不支持正则规则、高级修饰符如redirect-rule和扩展CSS；支持aglint注释跳过指定校验"
+      "conversion_notes": "支持Adblock基础语法+ABP专属片段规则和rewrite，包含精准域名规则支持；不支持正则规则、高级修饰符如redirect-rule和扩展CSS；支持aglint注释跳过指定校验"
     },
     "ublock_origin": {
       "supported_rule_types": [
         "adblock_basic_comment", "adblock_basic_domain_rule", "adblock_basic_exception_rule",
+        "adblock_basic_precise_domain", "adblock_basic_precise_exception", "adblock_basic_wildcard_domain",
         "adblock_basic_element_hiding", "adblock_basic_element_hiding_exception", "adblock_basic_url_rule",
         "adblock_basic_css_id_selector", "adblock_basic_css_class_selector", "adblock_basic_css_attribute_selector",
         "adblock_basic_css_combinator", "adblock_basic_css_pseudo_class", "adblock_basic_css_pseudo_element",
@@ -387,6 +397,8 @@
         "adblock_basic_comment": "{comment}",
         "adblock_basic_domain_rule": "||{domain}^",
         "adblock_basic_exception_rule": "@@||{domain}^",
+        "adblock_basic_precise_domain": "||{domain}^${modifiers}",
+        "adblock_basic_precise_exception": "@@||{domain}^${modifiers}",
         "adblock_basic_element_hiding": "##{selector}",
         "adblock_basic_element_hiding_exception": "#@#{selector}",
         "adblock_basic_url_rule": "|{url}|",
@@ -398,11 +410,12 @@
         "adblock_basic_regex_rule": "/{pattern}/",
         "aglint_comment": "! aglint-{action}{-next-line} {rule}"
       },
-      "conversion_notes": "支持Adblock基础语法+UBO专属扩展语法（扩展CSS/脚本/预解析指令），兼容正则规则和aglint注释，不支持某些AdGuard专属如referrerpolicy"
+      "conversion_notes": "支持Adblock基础语法+UBO专属扩展语法（扩展CSS/脚本/预解析指令），包含精准域名规则支持；兼容正则规则和aglint注释，不支持某些AdGuard专属如referrerpolicy"
     },
     "adguard_browser_extension": {
       "supported_rule_types": [
         "adblock_basic_comment", "adblock_basic_domain_rule", "adblock_basic_exception_rule",
+        "adblock_basic_precise_domain", "adblock_basic_precise_exception", "adblock_basic_wildcard_domain",
         "adblock_basic_element_hiding", "adblock_basic_element_hiding_exception", "adblock_basic_url_rule",
         "adblock_basic_css_id_selector", "adblock_basic_css_class_selector", "adblock_basic_css_attribute_selector",
         "adblock_basic_css_combinator", "adblock_basic_css_pseudo_class", "adblock_basic_css_pseudo_element",
@@ -431,6 +444,8 @@
         "adblock_basic_comment": "{comment}",
         "adblock_basic_domain_rule": "||{domain}^",
         "adblock_basic_exception_rule": "@@||{domain}^",
+        "adblock_basic_precise_domain": "||{domain}^${modifiers}",
+        "adblock_basic_precise_exception": "@@||{domain}^${modifiers}",
         "adblock_basic_element_hiding": "##{selector}",
         "adblock_basic_element_hiding_exception": "#@#{selector}",
         "adblock_basic_url_rule": "|{url}|",
@@ -450,12 +465,13 @@
         "adguard_home_dnstype": "$dnstype={type}",
         "adguard_home_noerror": "$dnsrewrite={rule},noerror"
       },
-      "conversion_notes": "支持Adblock基础语法+AdGuard全量专属语法，包括正则规则（非捕获组优化）、DNS重写（带引号参数）、aglint注释；不支持uBO预解析指令；正则规则需避免过度复杂（如嵌套>3层）以防性能问题"
+      "conversion_notes": "支持Adblock基础语法+AdGuard全量专属语法，包含精准域名规则支持；包括正则规则（非捕获组优化）、DNS重写（带引号参数）、aglint注释；不支持uBO预解析指令；正则规则需避免过度复杂（如嵌套>3层）以防性能问题"
     },
     "adguard_home": {
       "supported_rule_types": [
         "adblock_basic_domain_rule", "adblock_basic_exception_rule", 
-        "adguard_home_dns_rewrite", "adguard_home_client", "adguard_home_dnstype",
+        "adblock_basic_precise_domain", "adblock_basic_precise_exception", "adblock_basic_wildcard_domain",
+        "adguard_home_dns_rewrite", "adguard_home_client", "adguard_home_dnstype", "adguard_home_precise_domain",
         "hosts_rule", "pihole_domain"
       ],
       "unsupported_rule_types": [
@@ -468,17 +484,21 @@
       "rule_format": {
         "adblock_basic_domain_rule": "||{domain}^",
         "adblock_basic_exception_rule": "@@||{domain}^",
+        "adblock_basic_precise_domain": "||{domain}^${modifiers}",
+        "adblock_basic_precise_exception": "@@||{domain}^${modifiers}",
         "adguard_home_dns_rewrite": "||{domain}^$dnsrewrite={record}",
         "adguard_home_client": "||{domain}^$client={client_ip}",
         "adguard_home_dnstype": "||{domain}^$dnstype={type}",
+        "adguard_home_precise_domain": "||{domain}^${dns_modifiers}",
         "hosts_rule": "{ip} {domain}",
         "pihole_domain": "{domain}"
       },
-      "conversion_notes": "专用于DNS层过滤，支持域名拦截、DNS重写和hosts规则，不支持页面元素隐藏、正则规则和aglint注释"
+      "conversion_notes": "专用于DNS层过滤，支持域名拦截、DNS重写和hosts规则，包含精准域名规则支持；不支持页面元素隐藏、正则规则和aglint注释"
     },
     "pihole": {
       "supported_rule_types": [
-        "pihole_domain", "pihole_regex", "hosts_rule", "adblock_basic_domain_rule", "adblock_basic_exception_rule"
+        "pihole_domain", "pihole_regex", "hosts_rule", "adblock_basic_domain_rule", "adblock_basic_exception_rule",
+        "adblock_basic_precise_domain", "adblock_basic_precise_exception", "adblock_basic_wildcard_domain"
       ],
       "unsupported_rule_types": [
         "adblock_basic_element_hiding", "adguard_scriptlet", "ubo_extended_css", "clash_domain_suffix", "surge_domain_set_header"
@@ -491,9 +511,12 @@
         "pihole_regex": "/{pattern}/",
         "hosts_rule": "{ip} {domain}",
         "adblock_basic_domain_rule": "||{domain}^",
-        "adblock_basic_exception_rule": "@@||{domain}^"
+        "adblock_basic_exception_rule": "@@||{domain}^",
+        "adblock_basic_precise_domain": "||{domain}^",
+        "adblock_basic_precise_exception": "@@||{domain}^",
+        "adblock_basic_wildcard_domain": "||{domain}^"
       },
-      "conversion_notes": "Pi-hole支持精确域名拦截、正则表达式（PCRE语法）和hosts文件；正则优先级低于白名单；adlists可导入Adblock风格列表，但专注于DNS层阻塞；不支持元素隐藏或高级修饰符"
+      "conversion_notes": "Pi-hole支持精确域名拦截、正则表达式（PCRE语法）和hosts文件，包含精准域名规则支持；正则优先级低于白名单；adlists可导入Adblock风格列表，但专注于DNS层阻塞；不支持元素隐藏或高级修饰符"
     },
     "clash_mihomo": {
       "supported_rule_types": [
@@ -544,48 +567,106 @@
   },
   "conversion_rules": {
     "adguard_to_clash": {
-      "source_patterns": ["adblock_basic_domain_rule", "adblock_basic_exception_rule"],
+      "source_patterns": [
+        "adblock_basic_domain_rule", "adblock_basic_exception_rule",
+        "adblock_basic_precise_domain", "adblock_basic_precise_exception", "adblock_basic_wildcard_domain",
+        "adguard_home_dns_rewrite", "adguard_home_precise_domain", "hosts_rule", "pihole_domain"
+      ],
       "target_patterns": ["clash_domain_suffix", "clash_domain"],
       "conversion_logic": {
         "adblock_basic_domain_rule": "将||example.com^转换为+.example.com（REJECT）或example.com（REJECT）",
         "adblock_basic_exception_rule": "将@@||example.com^转换为+.example.com（DIRECT）或example.com（DIRECT）",
+        "adblock_basic_precise_domain": "将||example.com^$modifier转换为example.com（REJECT）",
+        "adblock_basic_precise_exception": "将@@||example.com^$modifier转换为example.com（DIRECT）",
+        "adblock_basic_wildcard_domain": "将||*.example.com^转换为+.example.com（REJECT）",
+        "adguard_home_dns_rewrite": "DNS重写规则转换为精确域名DIRECT规则",
+        "adguard_home_precise_domain": "精准DNS规则转换为精确域名规则",
+        "hosts_rule": "hosts规则转换为精确域名规则",
+        "pihole_domain": "Pi-hole域名转换为精确域名规则",
         "comment_preservation": "保留注释，转换为Clash格式的注释"
       },
       "action_mapping": {
         "blocking": "REJECT",
-        "exception": "DIRECT"
+        "exception": "DIRECT",
+        "precise_blocking": "REJECT",
+        "precise_exception": "DIRECT",
+        "wildcard_blocking": "REJECT"
+      },
+      "domain_extraction": {
+        "precise_rules": "移除修饰符部分，提取纯净域名",
+        "wildcard_rules": "转换通配符为域名后缀格式",
+        "exception_rules": "优先处理白名单规则"
       }
     },
     "adguard_to_surge": {
-      "source_patterns": ["adblock_basic_domain_rule", "adblock_basic_exception_rule"],
+      "source_patterns": [
+        "adblock_basic_domain_rule", "adblock_basic_exception_rule",
+        "adblock_basic_precise_domain", "adblock_basic_precise_exception", "adblock_basic_wildcard_domain",
+        "adguard_home_dns_rewrite", "adguard_home_precise_domain", "hosts_rule", "pihole_domain"
+      ],
       "target_patterns": ["surge_domain_suffix", "surge_domain_rule", "surge_exception_domain_suffix", "surge_exception_domain_rule"],
       "conversion_logic": {
         "adblock_basic_domain_rule": "将||example.com^转换为.example.com（REJECT）或DOMAIN,example.com（REJECT）",
         "adblock_basic_exception_rule": "将@@||example.com^转换为@@.example.com（DIRECT）或@@DOMAIN,example.com（DIRECT）",
+        "adblock_basic_precise_domain": "将||example.com^$modifier转换为DOMAIN,example.com（REJECT）",
+        "adblock_basic_precise_exception": "将@@||example.com^$modifier转换为@@DOMAIN,example.com（DIRECT）",
+        "adblock_basic_wildcard_domain": "将||*.example.com^转换为.example.com（REJECT）",
+        "adguard_home_dns_rewrite": "DNS重写规则转换为精确域名DIRECT规则",
+        "adguard_home_precise_domain": "精准DNS规则转换为精确域名规则",
+        "hosts_rule": "hosts规则转换为精确域名规则",
+        "pihole_domain": "Pi-hole域名转换为精确域名规则",
         "comment_preservation": "保留注释，转换为Surge格式的注释"
       },
       "action_mapping": {
         "blocking": "REJECT",
-        "exception": "DIRECT"
+        "exception": "DIRECT",
+        "precise_blocking": "REJECT",
+        "precise_exception": "DIRECT",
+        "wildcard_blocking": "REJECT"
+      },
+      "domain_extraction": {
+        "precise_rules": "移除修饰符部分，提取纯净域名",
+        "wildcard_rules": "转换通配符为域名后缀格式",
+        "exception_rules": "优先处理白名单规则，使用@@前缀"
       }
     },
     "adguard_home_to_clash": {
-      "source_patterns": ["adblock_basic_domain_rule", "adblock_basic_exception_rule", "adguard_home_dns_rewrite"],
+      "source_patterns": [
+        "adblock_basic_domain_rule", "adblock_basic_exception_rule",
+        "adblock_basic_precise_domain", "adblock_basic_precise_exception", "adblock_basic_wildcard_domain",
+        "adguard_home_dns_rewrite", "adguard_home_precise_domain", "hosts_rule", "pihole_domain"
+      ],
       "target_patterns": ["clash_domain_suffix", "clash_domain"],
       "conversion_logic": {
         "adblock_basic_domain_rule": "将||example.com^转换为+.example.com（REJECT）",
         "adblock_basic_exception_rule": "将@@||example.com^转换为+.example.com（DIRECT）",
+        "adblock_basic_precise_domain": "将||example.com^$modifier转换为example.com（REJECT）",
+        "adblock_basic_precise_exception": "将@@||example.com^$modifier转换为example.com（DIRECT）",
+        "adblock_basic_wildcard_domain": "将||*.example.com^转换为+.example.com（REJECT）",
         "adguard_home_dns_rewrite": "DNS重写规则转换为精确域名DIRECT规则",
+        "adguard_home_precise_domain": "精准DNS规则转换为精确域名规则",
+        "hosts_rule": "hosts规则转换为精确域名规则",
+        "pihole_domain": "Pi-hole域名转换为精确域名规则",
         "comment_preservation": "保留注释"
       }
     },
     "adguard_home_to_surge": {
-      "source_patterns": ["adblock_basic_domain_rule", "adblock_basic_exception_rule", "adguard_home_dns_rewrite"],
+      "source_patterns": [
+        "adblock_basic_domain_rule", "adblock_basic_exception_rule",
+        "adblock_basic_precise_domain", "adblock_basic_precise_exception", "adblock_basic_wildcard_domain",
+        "adguard_home_dns_rewrite", "adguard_home_precise_domain", "hosts_rule", "pihole_domain"
+      ],
       "target_patterns": ["surge_domain_suffix", "surge_domain_rule", "surge_exception_domain_suffix", "surge_exception_domain_rule"],
       "conversion_logic": {
         "adblock_basic_domain_rule": "将||example.com^转换为.example.com（REJECT）",
         "adblock_basic_exception_rule": "将@@||example.com^转换为@@.example.com（DIRECT）",
+        "adblock_basic_precise_domain": "将||example.com^$modifier转换为DOMAIN,example.com（REJECT）",
+        "adblock_basic_precise_exception": "将@@||example.com^$modifier转换为@@DOMAIN,example.com（DIRECT）",
+        "adblock_basic_wildcard_domain": "将||*.example.com^转换为.example.com（REJECT）",
         "adguard_home_dns_rewrite": "DNS重写规则转换为精确域名DIRECT规则",
+        "adguard_home_precise_domain": "精准DNS规则转换为精确域名规则",
+        "hosts_rule": "hosts规则转换为精确域名规则",
+        "pihole_domain": "Pi-hole域名转换为精确域名规则",
         "comment_preservation": "保留注释"
       }
     }
@@ -654,7 +735,13 @@
       ":xpath(", ":upward(", ":min-text-length(", ":-abp-has-text(",
       ":-abp-contains(", ":-abp-matches-css("
     ],
-    "clash_surge_common_actions": ["REJECT", "DIRECT"]
+    "clash_surge_common_actions": ["REJECT", "DIRECT"],
+    "precise_domain_conversion": {
+      "adguard_to_clash": "移除修饰符，提取纯净域名，使用精确域名格式",
+      "adguard_to_surge": "移除修饰符，提取纯净域名，使用DOMAIN,格式",
+      "wildcard_conversion": "通配符域名转换为域名后缀格式",
+      "exception_handling": "白名单规则优先处理，使用@@前缀"
+    }
   },
   "normalization_rules": {
     "domain_to_lowercase": true,
@@ -694,6 +781,12 @@
       "normalize_domain_set": true,
       "normalize_rule_set": true,
       "standardize_domain_set_headers": true
+    },
+    "precise_domain_normalization": {
+      "strip_modifiers": true,
+      "extract_clean_domain": true,
+      "preserve_exception_indicators": true,
+      "convert_wildcards_to_suffix": true
     }
   },
   "validation_rules": {
@@ -744,6 +837,11 @@
     "valid_dnsrewrite_format": "^(?:[A-Z]+)\\s+['\"]?[^'\"]+['\"]?(?:\\s+,\\s*noerror)?$",
     "valid_client_format": "^['\"]?[^'\"]+['\"]?$",
     "valid_denyallow_format": "^[a-zA-Z0-9.-]+(?:\\|~?[a-zA-Z0-9.-]+)*$",
+    "precise_domain_validation": {
+      "strip_modifiers_before_validation": true,
+      "validate_clean_domain_only": true,
+      "preserve_exception_semantics": true
+    },
     "clash_specific_validation": {
       "valid_payload_header": "^payload:$",
       "valid_rule_set_header": "^#RULE-SET,[a-zA-Z0-9_-]+,(REJECT|DIRECT)$",
@@ -786,6 +884,11 @@
     },
     "extended_css_optimization": "扩展CSS规则优先使用高效伪类（如:has()优于:xpath()），避免复杂组合器（如div > span + p 优于 div span p）",
     "scriptlet_optimization": "脚本注入使用延迟执行（DOMContentLoaded后），避免阻塞页面加载；常用脚本（如abort-on-property-read）使用内置模板，减少代码体积",
+    "precise_domain_optimization": {
+      "modifier_stripping": "预处理时移除修饰符，减少运行时开销",
+      "clean_domain_extraction": "提取纯净域名用于快速匹配",
+      "exception_priority": "白名单规则优先处理，提高性能"
+    },
     "memory_management": {
       "bloom_filter_initial_capacity": 1000000,
       "bloom_filter_error_rate": 0.001,
@@ -802,10 +905,10 @@
     "rule_compilation_notes": "AdGuard最近在Safari转换器上进行了优化，使过滤规则转换速度提高了30倍；正则规则使用预编译缓存（如RegExp.prototype.test）提升匹配效率"
   },
   "integrity_checks": {
-    "required_fields": ["version", "syntax_patterns", "rule_types", "modifiers", "validation_rules", "platform_support"],
-    "recommended_fields": ["common_patterns", "normalization_rules", "performance_optimization", "conversion_rules"],
-    "version_compatibility": "4.7.3",
-    "adblock_basic_mandatory_patterns": ["adblock_basic_domain_rule", "adblock_basic_exception_rule", "adblock_basic_element_hiding"],
+    "required_fields": ["version", "syntax_patterns", "rule_types", "modifiers", "validation_rules", "platform_support", "conversion_rules", "common_patterns", "normalization_rules", "performance_optimization"],
+    "recommended_fields": ["adguard_specific_enhancements", "documentation_notes", "reference_sources"],
+    "version_compatibility": "4.7.4",
+    "adblock_basic_mandatory_patterns": ["adblock_basic_domain_rule", "adblock_basic_exception_rule", "adblock_basic_element_hiding", "adblock_basic_precise_domain", "adblock_basic_precise_exception"],
     "css_selector_integrity": "验证CSS选择器语法正确性（使用postcss-parser）和平台兼容性（AdGuard支持:-abp-前缀，uBO支持:has()）",
     "modifier_compatibility_check": "验证修饰符组合的合法性（如$client仅搭配$dnsrewrite）和平台支持（如$stealth仅AdGuard支持）",
     "cross_platform_validation": "确保基础语法规则在各平台间的正确转换（如ABP不支持正则，自动转为基础域名规则）",
@@ -816,7 +919,8 @@
     },
     "extended_syntax_integrity": "检查扩展CSS（如#?#）和脚本（如#%#）的完整覆盖，确保AdGuard专属语法无缺失",
     "experimental_feature_check": "验证实验性语法（如uBO的:style()）的条件支持，标记为\"experimental\"类型",
-    "clash_surge_header_integrity": "验证Clash RULE-SET和Surge DOMAIN-SET头部格式正确性，确保只包含REJECT和DIRECT动作"
+    "clash_surge_header_integrity": "验证Clash RULE-SET和Surge DOMAIN-SET头部格式正确性，确保只包含REJECT和DIRECT动作",
+    "precise_domain_integrity": "验证精准域名规则转换逻辑完整性，确保修饰符正确移除和域名正确提取"
   },
   "adguard_specific_enhancements": {
     "supported_rule_types": [
@@ -826,7 +930,9 @@
       "adguard_redirect_rule", "adguard_referrerpolicy", "adguard_removeheader",
       "adguard_csp", "adguard_stealth_rule", "adguard_cookie_rule", "adguard_extended_css",
       "adguard_replace", "adguard_extension", "adguard_jsinject", "adguard_urlscript",
-      "adguard_xbl", "adguard_xml", "regex_rule", "adblock_basic_regex_rule", "aglint_comment"
+      "adguard_xbl", "adguard_xml", "regex_rule", "adblock_basic_regex_rule", "aglint_comment",
+      "adblock_basic_precise_domain", "adblock_basic_precise_exception", "adblock_basic_wildcard_domain",
+      "adguard_home_precise_domain"
     ],
     "unsupported_patterns": [],
     "dns_rewrite_types": ["A", "AAAA", "CNAME", "TXT", "MX", "PTR", "SRV", "SOA", "NS", "HTTPS", "SVCB"],
@@ -843,13 +949,15 @@
       "新增$referrerpolicy和$removeheader支持（提升header修改能力）",
       "优化正则规则编译逻辑（预编译缓存，提升AdGuard正则规则匹配速度30%）",
       "支持aglint注释跳过指定校验（如! aglint-disable-next-line invalid-modifiers）",
-      "优化DNS重写参数解析（支持带引号的客户端名称和CNAME目标）"
+      "优化DNS重写参数解析（支持带引号的客户端名称和CNAME目标）",
+      "增强精准域名规则支持（支持带修饰符的精确域名匹配）",
+      "改进通配符域名转换逻辑（优化性能和处理准确性）"
     ]
   },
   "documentation_notes": {
-    "adblock_basic_enhancements": "已全面增强Adblock基础语法覆盖，包括完整的CSS选择器支持、通配符模式、正则表达式基础支持（非捕获组优化）",
+    "adblock_basic_enhancements": "已全面增强Adblock基础语法覆盖，包括完整的CSS选择器支持、通配符模式、正则表达式基础支持（非捕获组优化），特别补充了精准域名规则支持",
     "compatibility_improvements": "所有平台支持配置已更新以反映增强的基础语法能力，补充ABP/uBO/AdGuard最新文档中的扩展语法；明确正则规则平台差异（ABP不支持，AdGuard/uBO支持）",
-    "validation_coverage": "新增了针对CSS选择器语法、正则规则语法（ECMAScript标准）、DNS重写参数（带引号支持）和aglint注释的高级验证规则，以及扩展CSS和脚本的校验",
+    "validation_coverage": "新增了针对CSS选择器语法、正则规则语法（ECMAScript标准）、DNS重写参数（带引号支持）和aglint注释的高级验证规则，以及扩展CSS和脚本的校验，特别增强了精准域名验证",
     "performance_considerations": "增加了基础语法规则的性能优化指导，补充正则规则简化建议（避免嵌套过深、减少.*使用），避免过度复杂的正则影响匹配速度；AdGuard MV3扩展正则规则≤1000条",
     "regex_support_notes": "AdGuard和uBO支持ECMAScript标准正则规则，ABP不支持；AdGuard限制：不允许正向/反向预查，支持非捕获组（?:...）、可选（?）、量词（*+?）；正则长度建议≤500字符，匹配速度提升显著",
     "aglint_integration": "支持使用aglint注释控制校验行为，常用场景：1. ! aglint-disable-next-line invalid-modifiers（跳过$domain修饰符正则校验）；2. ! aglint-disable invalid-regex（跳过整个文件正则语法校验）；3. ! aglint-enable too-long（启用过长规则校验）",
@@ -857,7 +965,8 @@
     "clash_enhancements": "新增Clash/Mihomo广告拦截专用支持，包括payload头部和RULE-SET头部格式，仅支持域名后缀和精确域名匹配，仅使用REJECT和DIRECT动作",
     "surge_enhancements": "新增Surge广告拦截专用支持，包括DOMAIN-SET头部格式，仅支持域名后缀和精确域名匹配，支持例外规则，仅使用REJECT和DIRECT动作",
     "pihole_enhancements": "新增Pi-hole支持，包括精确域名和PCRE正则；白名单优先；兼容adlists导入Adblock列表",
-    "conversion_capabilities": "支持AdGuard/AdGuard Home到Clash/Surge的域名规则转换，专注于广告拦截场景，保留注释和动作映射"
+    "conversion_capabilities": "支持AdGuard/AdGuard Home到Clash/Surge的域名规则转换，专注于广告拦截场景，保留注释和动作映射",
+    "precise_domain_support": "全面增强精准域名规则支持，包括带修饰符的精确域名匹配、通配符域名转换、白名单优先处理等高级功能"
   },
   "reference_sources": {
     "adblock_plus_spec": "https://adblockplus.org/en/filters",
