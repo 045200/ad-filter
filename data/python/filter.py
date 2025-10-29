@@ -755,50 +755,64 @@ class ComprehensiveRuleConverter:
                 logger.error(f"生成Clash {target}规则失败: {e}")
 
     def _generate_mihomo_product(self) -> None:
-        """生成Mihomo二进制规则集"""
+        """生成Mihomo二进制规则集 - 修正白名单过滤逻辑"""
         if not self.config.ENABLE_MIHOMO or not self.config.MIHOMO_BIN.exists():
             logger.warning("Mihomo编译被禁用或mihomo-tool不存在")
             return
 
-        # 过滤域名
-        white_domains = {d for d in self.convertible_domains["clash"]["allow"] if not d.startswith('/')}
-        block_domains = [
-            d for d in self.convertible_domains["clash"]["block"] 
-            if not d.startswith('/') and d not in white_domains
-        ]
-
-        if not block_domains:
-            logger.warning("Mihomo规则：无可转换的域名")
-            return
-
-        temp_yaml = None
         try:
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8") as f:
-                f.write("# Mihomo规则集 - 由AdGuard规则转换生成\n")
-                f.write("payload:\n")
-                # 使用统一的 +.domain 格式
-                for domain in sorted(block_domains):
-                    f.write(f"  - '+.{domain}'\n")
-                temp_yaml = f.name
+            # 修正：从Clash规则中提取原始域名进行比较
+            clash_block_domains = self.convertible_domains["clash"]["block"]
+            clash_allow_domains = self.convertible_domains["clash"]["allow"]
+            
+            # 统计原始域名数量
+            block_count = len(clash_block_domains)
+            allow_count = len(clash_allow_domains)
+            
+            # 过滤：从拦截列表中移除白名单中的域名
+            final_block_domains = [
+                domain for domain in clash_block_domains 
+                if domain not in clash_allow_domains
+            ]
+            
+            final_count = len(final_block_domains)
+            logger.info(f"Mihomo过滤: 黑名单{block_count}条 - 白名单{allow_count}条 = 最终{final_count}条")
+            
+            if not final_block_domains:
+                logger.warning("Mihomo规则：过滤后无可转换的域名")
+                return
 
-            output_mrs = self.config.OUTPUT_DIR / self.config.OUTPUT_MIHOMO
-            cmd = [str(self.config.MIHOMO_BIN), "convert-ruleset", "domain", "yaml", temp_yaml, str(output_mrs)]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            temp_yaml = None
+            try:
+                with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8") as f:
+                    f.write("# Mihomo规则集 - 由AdGuard规则转换生成\n")
+                    f.write("payload:\n")
+                    # 使用统一的 +.domain 格式
+                    for domain in sorted(final_block_domains):
+                        f.write(f"  - '+.{domain}'\n")
+                    temp_yaml = f.name
 
-            if result.returncode == 0:
-                # 计算哈希
-                sha256 = hashlib.sha256()
-                with open(output_mrs, "rb") as f:
-                    sha256.update(f.read())
-                logger.info(f"Mihomo产物: {output_mrs} ({len(block_domains)}条, SHA256: {sha256.hexdigest()[:16]}...)")
-            else:
-                logger.error(f"Mihomo编译失败: {result.stderr}")
+                output_mrs = self.config.OUTPUT_DIR / self.config.OUTPUT_MIHOMO
+                cmd = [str(self.config.MIHOMO_BIN), "convert-ruleset", "domain", "yaml", temp_yaml, str(output_mrs)]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
+                if result.returncode == 0:
+                    # 计算哈希
+                    sha256 = hashlib.sha256()
+                    with open(output_mrs, "rb") as f:
+                        sha256.update(f.read())
+                    logger.info(f"Mihomo产物: {output_mrs} ({final_count}条, SHA256: {sha256.hexdigest()[:16]}...)")
+                else:
+                    logger.error(f"Mihomo编译失败: {result.stderr}")
+
+            except Exception as e:
+                logger.error(f"Mihomo编译失败: {e}")
+            finally:
+                if temp_yaml and os.path.exists(temp_yaml):
+                    os.unlink(temp_yaml)
+                    
         except Exception as e:
-            logger.error(f"Mihomo编译失败: {e}")
-        finally:
-            if temp_yaml and os.path.exists(temp_yaml):
-                os.unlink(temp_yaml)
+            logger.error(f"Mihomo规则处理失败: {e}")
 
     def generate_products(self) -> None:
         """生成所有平台产物"""
