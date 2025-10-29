@@ -87,91 +87,156 @@ class AdBlockMultiConverter:
             print(f"警告: adblockparser初始化失败: {e}，将使用基础模式匹配")
             self.rule_parser = None
 
-    # ------------------------------ 步骤1：分别加载黑白名单规则 ------------------------------
+    # ------------------------------ 步骤1：从合并的rule.txt加载并分类规则 ------------------------------
     def step1_input(self, input_dir: str) -> None:
-        print(f"\n【步骤1：加载规则】从 {input_dir} 分别读取黑白名单文件...")
+        print(f"\n【步骤1：加载并分类规则】从 {input_dir} 读取rule.txt并分类黑白名单...")
         if not os.path.exists(input_dir):
             os.makedirs(input_dir, exist_ok=True)
             print(f"警告：输入目录不存在，已自动创建：{input_dir}")
             return
 
-        self._load_block_files(input_dir)
-        self._load_allow_files(input_dir)
+        # 查找rule.txt文件
+        rule_file_path = os.path.join(input_dir, "rule.txt")
+        if not os.path.exists(rule_file_path):
+            print(f"错误：未找到rule.txt文件在路径 {rule_file_path}")
+            return
 
-        print(f"【步骤1完成】加载 {len(self.raw_block_rules)} 条黑名单规则，{len(self.raw_allow_rules)} 条白名单规则")
+        self._load_and_classify_rules(rule_file_path)
 
-    def _load_block_files(self, input_dir: str) -> None:
-        """专门加载黑名单文件 - 严格过滤白名单语法"""
-        block_patterns = [
-            os.path.join(input_dir, "adblock*.txt"),
-            os.path.join(input_dir, "block*.txt"),
-            os.path.join(input_dir, "blacklist*.txt")
+        print(f"【步骤1完成】分类结果：{len(self.raw_block_rules)} 条黑名单规则，{len(self.raw_allow_rules)} 条白名单规则")
+
+    def _load_and_classify_rules(self, file_path: str) -> None:
+        """从rule.txt加载规则并根据语法分类为黑白名单"""
+        print(f"  处理合并规则文件：rule.txt")
+
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line_num, line in enumerate(f, 1):
+                raw_rule = line.strip()
+                
+                # 跳过注释和空行
+                if not raw_rule or self._is_comment_line_enhanced(raw_rule):
+                    continue
+
+                # 根据规则语法分类
+                category = self._classify_rule_by_syntax(raw_rule)
+                
+                if category == "block":
+                    self.raw_block_rules.append((raw_rule, "rule.txt", line_num, "block"))
+                elif category == "allow":
+                    self.raw_allow_rules.append((raw_rule, "rule.txt", line_num, "allow"))
+                else:
+                    print(f"    警告：无法分类的规则（{line_num}），已跳过: {raw_rule}")
+
+    def _classify_rule_by_syntax(self, rule: str) -> str:
+        """根据规则语法分类为黑名单或白名单"""
+        # 1. 纯域名规则 - 只作为白名单（最高优先级）
+        if self._is_pure_domain(rule):
+            return "allow"
+            
+        # 2. AdGuard/AdGuard Home 白名单语法（@@开头）
+        if self._is_adguard_allow_rule(rule):
+            return "allow"
+            
+        # 3. AdGuard/AdGuard Home 黑名单语法（非@@开头）
+        if self._is_adguard_block_rule(rule):
+            return "block"
+            
+        # 4. Hosts格式规则（IP地址 + 域名）
+        if self._is_hosts_rule(rule):
+            return "block"
+            
+        # 5. 使用语法数据库进行高级分类
+        rule_type = self._identify_rule_type_with_db(rule)
+        if rule_type in ['exception', 'allow', 'whitelist']:
+            return "allow"
+        elif rule_type in ['blocking', 'cosmetic', 'scriptlet']:
+            return "block"
+            
+        return "unknown"
+
+    def _is_adguard_block_rule(self, rule: str) -> bool:
+        """判断是否为AdGuard黑名单规则"""
+        # 如果是纯域名，直接返回False（确保纯域名不会被误判为黑名单）
+        if self._is_pure_domain(rule):
+            return False
+            
+        # AdGuard黑名单特征
+        block_indicators = [
+            '##',    # 元素隐藏规则
+            '#$#',   # 内容安全策略
+            '#%#',   # 扩展规则
+            '#@$#',  # 脚本规则
         ]
-
-        for pattern in block_patterns:
-            block_files = glob.glob(pattern)
-            for file_path in block_files:
-                file_name = os.path.basename(file_path)
-                print(f"  处理黑名单文件：{file_name}")
-
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    for line_num, line in enumerate(f, 1):
-                        raw_rule = line.strip()
-                        if not raw_rule or self._is_comment_line_enhanced(raw_rule):
-                            continue
-                        
-                        # 关键修复：黑名单文件中跳过白名单语法（@@开头的规则）
-                        if self._is_allow_rule_in_block_file(raw_rule):
-                            print(f"    警告：在黑名单文件 {file_name}:{line_num} 中发现白名单规则，已跳过: {raw_rule}")
-                            continue
-                            
-                        self.raw_block_rules.append((raw_rule, file_name, line_num, "block"))
-
-    def _load_allow_files(self, input_dir: str) -> None:
-        """专门加载白名单文件"""
-        allow_patterns = [
-            os.path.join(input_dir, "allow*.txt"),
-            os.path.join(input_dir, "white*.txt"),
-            os.path.join(input_dir, "whitelist*.txt")
+        
+        # 不是白名单（不以@@开头）且包含黑名单特征
+        if not rule.startswith('@@') and any(indicator in rule for indicator in block_indicators):
+            return True
+            
+        # 常规AdGuard/AdBlock规则模式
+        adguard_block_patterns = [
+            r'^\|[\^]', r'^\|', r'\|$', r'^\*', r'\*$', r'^/', r'/$', r'^\$'
         ]
+        if not rule.startswith('@@') and any(re.search(pattern, rule) for pattern in adguard_block_patterns):
+            return True
+            
+        return False
 
-        for pattern in allow_patterns:
-            allow_files = glob.glob(pattern)
-            for file_path in allow_files:
-                file_name = os.path.basename(file_path)
-                print(f"  处理白名单文件：{file_name}")
-
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    for line_num, line in enumerate(f, 1):
-                        raw_rule = line.strip()
-                        if not raw_rule or self._is_comment_line_enhanced(raw_rule):
-                            continue
-                        self.raw_allow_rules.append((raw_rule, file_name, line_num, "allow"))
-
-    def _is_allow_rule_in_block_file(self, rule: str) -> bool:
-        """检测黑名单文件中是否包含白名单语法"""
-        # 明确的Adblock白名单语法
+    def _is_adguard_allow_rule(self, rule: str) -> bool:
+        """判断是否为AdGuard白名单规则"""
+        # 明确的AdGuard白名单语法
         if rule.startswith('@@'):
             return True
             
-        # AdGuard白名单语法
-        white_indicators = [
-            '#@#',   # 元素隐藏白名单
+        # AdGuard元素隐藏白名单
+        if '#@#' in rule:
+            return True
+            
+        # 其他白名单指示符
+        allow_indicators = [
             '#@$#',  # 脚本白名单  
             '#@%#',  # 扩展白名单
             '#@?#'   # 内容安全策略白名单
         ]
-        
-        if any(indicator in rule for indicator in white_indicators):
+        if any(indicator in rule for indicator in allow_indicators):
             return True
             
-        # 检查语法数据库中的白名单模式
-        for pattern_name, pattern in self.compiled_patterns.items():
-            if pattern.match(rule):
-                rule_type = self.syntax_db['rule_types'].get(pattern_name, 'unknown')
-                if rule_type in ['exception', 'allow', 'whitelist']:
-                    return True
-                    
+        return False
+
+    def _is_hosts_rule(self, rule: str) -> bool:
+        """判断是否为hosts格式规则"""
+        # 如果是纯域名，直接返回False
+        if self._is_pure_domain(rule):
+            return False
+        return re.match(r'^\s*(\d+\.\d+\.\d+\.\d+|\:\:[\d\w\:]+)\s+', rule) is not None
+
+    def _is_pure_domain(self, rule: str) -> bool:
+        """判断是否为纯域名 - 严格检测"""
+        # 移除首尾空白
+        rule = rule.strip()
+        
+        # 排除空字符串
+        if not rule:
+            return False
+            
+        # 排除包含任何Adblock特殊字符的规则
+        adblock_chars = ['|', '*', '^', '$', '#', '@', '!', '/', '?', '=', '&', '%', '~', '+', '(', ')', '[', ']', '{', '}', '<', '>', '\\']
+        if any(char in rule for char in adblock_chars):
+            return False
+            
+        # 排除包含空格的规则
+        if ' ' in rule:
+            return False
+            
+        # 匹配严格的域名格式：字母、数字、点、连字符，且有点号分隔
+        domain_pattern = r'^[a-zA-Z0-9.*-]+\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})*$'
+        if re.match(domain_pattern, rule) is not None:
+            return True
+            
+        # 排除IP地址
+        ip_pattern = r'^\d+\.\d+\.\d+\.\d+$'
+        if re.match(ip_pattern, rule):
+            return False
+            
         return False
 
     # ------------------------------ 步骤2：基于语法数据库的规则识别与转换 ------------------------------
@@ -195,20 +260,20 @@ class AdBlockMultiConverter:
 
         for raw_rule, file_name, line_num, category in raw_rules:
             try:
-                # 双重检查：确保没有白名单规则混入
-                if self._is_allow_rule_in_block_file(raw_rule):
-                    print(f"  警告：在黑名单中发现白名单规则（{file_name}:{line_num}），已跳过: {raw_rule}")
+                # 关键修复：在黑名单转换中，如果发现纯域名，直接跳过并记录警告
+                if self._is_pure_domain(raw_rule):
+                    print(f"  严重错误：在黑名单中发现纯域名规则（{file_name}:{line_num}），纯域名只能作为白名单，已跳过: {raw_rule}")
                     stats['failed'] += 1
                     continue
-                    
+
                 converted_rule = self._convert_to_block_syntax(raw_rule)
                 if converted_rule:
-                    # 再次检查转换后的规则不是白名单
+                    # 双重检查：确保转换后的规则不是白名单格式
                     if converted_rule.startswith('@@'):
-                        print(f"  错误：规则转换后变成了白名单（{file_name}:{line_num}），已跳过: {raw_rule} -> {converted_rule}")
+                        print(f"  严重错误：黑名单规则转换后变成了白名单（{file_name}:{line_num}），已跳过: {raw_rule} -> {converted_rule}")
                         stats['failed'] += 1
                         continue
-                        
+
                     rule_type = self._identify_rule_type_with_db(converted_rule)
                     converted_rules.append((converted_rule, rule_type, category))
                     stats['success'] += 1
@@ -237,7 +302,7 @@ class AdBlockMultiConverter:
                     if not converted_rule.startswith('@@'):
                         print(f"  警告：白名单规则转换后丢失了@@前缀（{file_name}:{line_num}），已修复: {raw_rule} -> @@{converted_rule}")
                         converted_rule = f"@@{converted_rule}"
-                        
+
                     rule_type = self._identify_rule_type_with_db(converted_rule)
                     converted_rules.append((converted_rule, rule_type, category))
                     stats['success'] += 1
@@ -252,81 +317,112 @@ class AdBlockMultiConverter:
 
     def _convert_to_block_syntax(self, rule: str) -> Optional[str]:
         """将任意规则转换为Adblock黑名单语法"""
-        # 如果已经是Adblock格式，确保是黑名单格式
-        if self._is_adblock_rule(rule):
-            # 如果发现白名单规则，返回None（应该已经被过滤）
-            if rule.startswith('@@'):
-                return None
+        # 关键修复：在黑名单转换中，如果发现纯域名，直接返回None
+        if self._is_pure_domain(rule):
+            return None
+
+        # 如果已经是Adblock格式且是黑名单，直接返回
+        if self._is_adblock_rule(rule) and not rule.startswith('@@'):
             return rule
-        
+
         # 处理hosts格式
         if self._is_hosts_rule(rule):
             return self._convert_hosts_to_block(rule)
-        
-        # 处理纯域名
-        if self._is_pure_domain(rule):
-            return f"||{rule}^"
-        
+
+        # 处理AdGuard格式规则
+        if self._is_adguard_block_rule(rule):
+            return self._convert_adguard_to_block(rule)
+
         # 处理其他格式
         return self._convert_unknown_to_block(rule)
 
     def _convert_to_allow_syntax(self, rule: str) -> Optional[str]:
         """将任意规则转换为Adblock白名单语法"""
-        # 如果已经是Adblock格式，确保有@@前缀
-        if self._is_adblock_rule(rule):
-            if rule.startswith('@@'):
-                return rule
-            else:
-                return f"@@{rule}"
-        
-        # 处理纯域名
+        # 处理纯域名 - 这是纯域名唯一合法的转换路径
         if self._is_pure_domain(rule):
             return f"@@||{rule}^"
-        
+
+        # 如果已经是Adblock白名单格式，直接返回
+        if self._is_adblock_rule(rule) and rule.startswith('@@'):
+            return rule
+
+        # 处理AdGuard白名单格式
+        if self._is_adguard_allow_rule(rule):
+            return self._convert_adguard_to_allow(rule)
+
         # 处理其他格式
         return self._convert_unknown_to_allow(rule)
 
-    def _is_adblock_rule(self, rule: str) -> bool:
-        """判断是否为Adblock格式规则"""
-        adblock_patterns = [
-            r'^\|[\^]', r'^##', r'^@@', r'^\|', r'\|$', r'^\*', r'\*$', 
-            r'^/', r'/$', r'^\$', r'#@#', r'#@\$#', r'#\$#', r'#%#', r'#@%#'
-        ]
-        return any(re.search(pattern, rule) for pattern in adblock_patterns)
+    def _convert_adguard_to_block(self, rule: str) -> Optional[str]:
+        """转换AdGuard黑名单规则为标准Adblock格式"""
+        # 关键检查：确保不是纯域名
+        if self._is_pure_domain(rule):
+            return None
+            
+        # 简单的AdGuard规则可以直接使用
+        if self._is_basic_adblock_rule(rule):
+            return rule
+            
+        # 处理元素隐藏规则
+        if '##' in rule:
+            return rule
+            
+        # 提取域名并转换为基本规则
+        domain = self._extract_domain(rule)
+        if domain and not self._is_pure_domain(domain):  # 确保提取的域名不是纯域名
+            return f"||{domain}^"
+            
+        return None
 
-    def _is_hosts_rule(self, rule: str) -> bool:
-        """判断是否为hosts格式规则"""
-        return re.match(r'^\s*(\d+\.\d+\.\d+\.\d+|\:\:[\d\w\:]+)\s+', rule) is not None
-
-    def _is_pure_domain(self, rule: str) -> bool:
-        """判断是否为纯域名"""
-        # 匹配域名格式：允许字母、数字、点、连字符，且有点号分隔
-        domain_pattern = r'^[a-zA-Z0-9.*-]+\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})*$'
-        return re.match(domain_pattern, rule) is not None
+    def _convert_adguard_to_allow(self, rule: str) -> Optional[str]:
+        """转换AdGuard白名单规则为标准Adblock格式"""
+        # 如果已经是@@开头，直接返回
+        if rule.startswith('@@'):
+            return rule
+            
+        # 处理AdGuard元素隐藏白名单
+        if '#@#' in rule:
+            # 将#@#替换为##并添加@@前缀
+            converted = rule.replace('#@#', '##')
+            return f"@@{converted}"
+            
+        # 提取域名并转换为基本白名单规则
+        domain = self._extract_domain(rule)
+        if domain:
+            return f"@@||{domain}^"
+            
+        return None
 
     def _convert_hosts_to_block(self, rule: str) -> Optional[str]:
         """转换hosts规则为黑名单语法"""
+        # 关键检查：确保不是纯域名
+        if self._is_pure_domain(rule):
+            return None
+            
         parts = rule.split()
         if len(parts) >= 2:
             domain = parts[1].strip()
-            if domain and not domain.startswith('#'):
+            if domain and not domain.startswith('#') and not self._is_pure_domain(domain):
                 return f"||{domain}^"
         return None
 
     def _convert_unknown_to_block(self, rule: str) -> Optional[str]:
         """转换未知格式规则为黑名单语法"""
+        # 关键修复：在未知格式转换中也要检查纯域名
+        if self._is_pure_domain(rule):
+            return None
+            
         # 尝试提取域名
         domain = self._extract_domain(rule)
-        if domain:
+        if domain and not self._is_pure_domain(domain):  # 确保提取的域名不是纯域名
             return f"||{domain}^"
         return None
 
     def _convert_unknown_to_allow(self, rule: str) -> Optional[str]:
-        """转换未知格式规则为白名单语法 - 修复：直接返回带@@前缀的规则"""
+        """转换未知格式规则为白名单语法"""
         # 尝试提取域名
         domain = self._extract_domain(rule)
         if domain:
-            # 关键修复：直接返回完整的白名单格式，而不是依赖外层添加@@
             return f"@@||{domain}^"
         return None
 
@@ -334,22 +430,38 @@ class AdBlockMultiConverter:
         """从规则中提取域名"""
         # 移除可能的协议头
         rule = re.sub(r'^https?://', '', rule)
-        
+
         # 移除路径和参数
         rule = rule.split('/')[0].split('?')[0].split('#')[0]
-        
+
         # 检查是否为有效域名格式
         if self._is_pure_domain(rule):
             return rule
-        
+
         # 尝试匹配IP地址或localhost
         if re.match(r'^\d+\.\d+\.\d+\.\d+$', rule) or rule == 'localhost':
             return rule
-            
+
         return None
+
+    def _is_adblock_rule(self, rule: str) -> bool:
+        """判断是否为Adblock格式规则"""
+        # 如果是纯域名，直接返回False
+        if self._is_pure_domain(rule):
+            return False
+            
+        adblock_patterns = [
+            r'^\|[\^]', r'^##', r'^@@', r'^\|', r'\|$', r'^\*', r'\*$', 
+            r'^/', r'/$', r'^\$', r'#@#', r'#@\$#', r'#\$#', r'#%#', r'#@%#'
+        ]
+        return any(re.search(pattern, rule) for pattern in adblock_patterns)
 
     def _identify_rule_type_with_db(self, rule: str) -> str:
         """使用语法数据库识别规则类型"""
+        # 如果是纯域名，直接返回白名单类型
+        if self._is_pure_domain(rule):
+            return "pure_domain_allow"
+            
         # 优先使用数据库中的高级模式匹配
         for pattern_name, pattern in self.compiled_patterns.items():
             if pattern.match(rule):
@@ -373,6 +485,10 @@ class AdBlockMultiConverter:
         """判断是否为基础Adblock规则"""
         if self._is_comment_line_enhanced(rule):
             return False
+            
+        # 如果是纯域名，直接返回False
+        if self._is_pure_domain(rule):
+            return False
 
         basic_patterns = [
             r'^\|[\^]', r'^##', r'^@@', r'^\|', r'\|$', r'^\*', r'\*$', 
@@ -382,6 +498,10 @@ class AdBlockMultiConverter:
 
     def _fallback_rule_identification(self, rule: str) -> str:
         """后备规则识别逻辑"""
+        # 如果是纯域名，直接返回白名单类型
+        if self._is_pure_domain(rule):
+            return "pure_domain_allow"
+            
         if re.match(self.syntax_db['advanced_syntax_patterns']['hosts_rule'], rule):
             return "hosts_rule"
 
@@ -452,6 +572,11 @@ class AdBlockMultiConverter:
         adp_allow_rules = []
 
         for rule in self.final_block_rules:
+            # 最终检查：确保黑名单中没有纯域名
+            if self._is_pure_domain(rule):
+                print(f"  最终检查错误：在黑名单输出中发现纯域名，已跳过: {rule}")
+                continue
+                
             rule_type = self._identify_rule_type_with_db(rule)
             if rule_type in self.adp_supported_types:
                 adp_block_rules.append(rule)
@@ -483,6 +608,11 @@ class AdBlockMultiConverter:
         ubo_allow_rules = []
 
         for rule in self.final_block_rules:
+            # 最终检查：确保黑名单中没有纯域名
+            if self._is_pure_domain(rule):
+                print(f"  最终检查错误：在黑名单输出中发现纯域名，已跳过: {rule}")
+                continue
+                
             rule_type = self._identify_rule_type_with_db(rule)
             if rule_type in self.ubo_supported_types:
                 ubo_block_rules.append(rule)
@@ -514,6 +644,11 @@ class AdBlockMultiConverter:
         ag_allow_rules = []
 
         for rule in self.final_block_rules:
+            # 最终检查：确保黑名单中没有纯域名
+            if self._is_pure_domain(rule):
+                print(f"  最终检查错误：在黑名单输出中发现纯域名，已跳过: {rule}")
+                continue
+                
             rule_type = self._identify_rule_type_with_db(rule)
             if rule_type in self.ag_supported_types:
                 ag_block_rules.append(rule)
@@ -692,9 +827,10 @@ class AdBlockMultiConverter:
     # ------------------------------ 启动流程 ------------------------------
     def run_full_flow(self, input_dir: str) -> None:
         print("="*60)
-        print("AdBlock多平台规则处理流程 - 独立黑白名单处理")
+        print("AdBlock多平台规则处理流程 - 合并规则文件处理")
         print(f"语法数据库版本: {self.syntax_db['version']}")
-        print("输入: 分别处理黑白名单文件")
+        print("输入: 合并的rule.txt文件（包含AdGuard/hosts/domain规则）")
+        print("分类: AdGuard黑名单语法、hosts语法 → 黑名单 | AdGuard白名单语法、纯域名 → 白名单")
         print("输出: Adblock Plus, uBlock Origin, AdGuard 格式规则")
         print("="*60)
         try:
