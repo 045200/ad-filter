@@ -144,7 +144,7 @@
 ### ✅ 白名单规则来源
 - 那个谁520广告白名单：[https://raw.githubusercontent.com/qq5460168/EasyAds/main/allow.txt](https://raw.githubusercontent.com/qq5460168/EasyAds/main/allow.txt)
 - AdGuardHome通用白名单：[https://raw.githubusercontent.com/mphin/AdGuardHomeRules/main/Allowlist.txt](https://raw.githubusercontent.com/mphin/AdGuardHomeRules/main/Allowlist.txt)
-- 冷漠域名白名单：[https://file-git.trli.club/file-hosts/allow/Domains](https://file-git.trli.club/file-hosts/allow/Domains)
+- googlebyeads白名单：[https://raw.githubusercontent.com/8680/GOODBYEADS/master/data/rules/allow.txt](https://raw.githubusercontent.com/8680/GOODBYEADS/master/data/rules/allow.txt)
 - jhsvip白名单：[https://raw.githubusercontent.com/jhsvip/ADRuls/main/white.txt](https://raw.githubusercontent.com/jhsvip/ADRuls/main/white.txt)
 - liwenjie119白名单：[https://raw.githubusercontent.com/liwenjie119/adg-rules/master/white.txt](https://raw.githubusercontent.com/liwenjie119/adg-rules/master/white.txt)
 - 喵二白名单：[https://raw.githubusercontent.com/miaoermua/AdguardFilter/main/whitelist.txt](https://raw.githubusercontent.com/miaoermua/AdguardFilter/main/whitelist.txt)
