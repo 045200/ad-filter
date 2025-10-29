@@ -102,7 +102,8 @@ class RuleDownloader:
         self.stats = {
             'adblock': {'success': 0, 'fail': 0, 'total_rules': 0},
             'allow': {'success': 0, 'fail': 0, 'total_rules': 0},
-            'local': {'copied': 0, 'missing': 0, 'total_rules': 0}
+            'local': {'copied': 0, 'missing': 0, 'total_rules': 0},
+            'merged': {'total_rules': 0}  # 新增：合并文件统计
         }
 
     def _init_session(self) -> requests.Session:
@@ -115,7 +116,7 @@ class RuleDownloader:
         session.mount('http://', adapter)
         session.mount('https://', adapter)
         session.headers.update(HEADERS)
-        
+
         # 添加代理支持
         http_proxy = os.getenv('HTTP_PROXY')
         https_proxy = os.getenv('HTTPS_PROXY')
@@ -125,14 +126,14 @@ class RuleDownloader:
             session.proxies['https'] = https_proxy
         if http_proxy or https_proxy:
             logger.info("使用代理: HTTP=%s, HTTPS=%s" % (http_proxy, https_proxy))
-        
+
         return session
 
     def _clean_filter_dir(self):
         """清理过滤器目录（保持原逻辑，简化日志）"""
         if FILTER_DIR.exists():
             for item in FILTER_DIR.iterdir():
-                if item.is_file() and (item.name.startswith('adblock') or item.name.startswith('allow')):
+                if item.is_file() and (item.name.startswith('adblock') or item.name.startswith('allow') or item.name == 'rule.txt'):
                     try:
                         item.unlink()
                     except IOError as e:
@@ -295,12 +296,51 @@ class RuleDownloader:
         else:
             logger.warning("无放行规则URL配置")
 
+    def merge_rules_to_single_file(self):
+        """合并所有规则到一个rule.txt文件中（新增功能）"""
+        rule_file = FILTER_DIR / "rule.txt"
+        try:
+            with open(rule_file, 'w', encoding='utf-8') as outfile:
+                # 写入文件头
+                outfile.write("# 合并规则文件 - 包含黑白名单规则\n")
+                outfile.write(f"# 生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                outfile.write("# ==================================\n\n")
+                
+                # 合并放行规则（白名单）
+                outfile.write("# ===== 放行规则 (白名单) =====\n")
+                allow_files = sorted(FILTER_DIR.glob("allow*.txt"))
+                for allow_file in allow_files:
+                    if allow_file.exists():
+                        outfile.write(f"\n# 来自: {allow_file.name}\n")
+                        with open(allow_file, 'r', encoding='utf-8') as infile:
+                            outfile.write(infile.read())
+                        outfile.write("\n")
+                
+                # 合并拦截规则（黑名单）
+                outfile.write("\n# ===== 拦截规则 (黑名单) =====\n")
+                adblock_files = sorted(FILTER_DIR.glob("adblock*.txt"))
+                for adblock_file in adblock_files:
+                    if adblock_file.exists():
+                        outfile.write(f"\n# 来自: {adblock_file.name}\n")
+                        with open(adblock_file, 'r', encoding='utf-8') as infile:
+                            outfile.write(infile.read())
+                        outfile.write("\n")
+                
+            # 统计合并文件的规则数量
+            merged_rule_count = count_rules_in_file(rule_file)
+            self.stats['merged']['total_rules'] = merged_rule_count
+            logger.info(f"合并规则文件创建成功: {rule_file.name}（{merged_rule_count}条规则）")
+            
+        except IOError as e:
+            logger.error(f"创建合并规则文件失败: {str(e)[:50]}")
+
     def print_statistics(self):
         """打印统计信息（大幅简化：仅输出总计）"""
         logger.info("\n=== 规则下载总计 ===")
         logger.info(f"拦截规则: 成功{self.stats['adblock']['success']}/总{len(self.adblock_urls)}，共{self.stats['adblock']['total_rules']}条")
         logger.info(f"放行规则: 成功{self.stats['allow']['success']}/总{len(self.allow_urls)}，共{self.stats['allow']['total_rules']}条")
         logger.info(f"本地规则: 复制{self.stats['local']['copied']}/总{len(LOCAL_RULES)}，共{self.stats['local']['total_rules']}条")
+        logger.info(f"合并文件: 共{self.stats['merged']['total_rules']}条规则")
         logger.info(f"总规则数: {self.stats['adblock']['total_rules'] + self.stats['allow']['total_rules'] + self.stats['local']['total_rules']}条")
 
     def run(self):
@@ -310,6 +350,7 @@ class RuleDownloader:
 
         self.copy_local_rules()
         self.download_remote_rules()
+        self.merge_rules_to_single_file()  # 新增：合并规则文件
 
         elapsed = time.time() - start_time
         logger.info(f"\n执行完成，总耗时: {elapsed:.1f}秒")
