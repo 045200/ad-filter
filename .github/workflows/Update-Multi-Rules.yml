@@ -58,13 +58,13 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq moreutils dnsutils net-tools
+          sudo apt-get install -y jq
 
       # 5. 安装Python依赖- 核心步骤（规则处理脚本依赖）
       - name: Install Python dependencies
         run: |
           pip install --upgrade pip
-          pip install chardet pybloom_live pytz requests adblockparser json5 re2
+          pip install chardet pybloom_live pytz requests adblockparser json5
       
       - name: Run 脚本依赖检查
         run: |
