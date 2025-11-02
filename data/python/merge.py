@@ -425,8 +425,8 @@ def main():
         return
 
     # 文件路径配置
-    base_dir = Path(__file__).parent
-    input_file = base_dir / "rule.txt"
+    base_dir = Path(__file__).parent.parent.parent
+    input_file = base_dir / "data" / "filter" / "rule.txt"
     output_dir = base_dir
 
     # 检查文件存在
