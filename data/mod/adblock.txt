@@ -1,3 +1,231 @@
+# 字节系广告
+# 汽水音乐补充规则
+! 拦截广告视频源
+||v3-luna.douyinvod.com/ad/
+||lf-webcast-gr-sourcecdn.bytegecko.com/ad/
+||zijieapi.com/ad/
+
+! 拦截广告跳转按钮
+luna.music.com##a[href*="ad.douyin.com"]
+luna.music.com##button:has-text(去看视频)
+luna.music.com##div:has-text(再看1个)
+
+! 拦截奖励弹窗
+luna.music.com##div.reward-popup
+luna.music.com##div[class*="reward-dialog"]
+
+! 拦截计时器组件
+luna.music.com##div.time-reward-container
+luna.music.com##div[class*="countdown-timer"]
+
+! 高级拦截
+||luna.music.com/api/reward/video
+||music-api.tiktokv.com/reward/
+
+! 基础广告域名拦截（字节跳动系）
+||bytegecko.com^$third-party
+||zijieapi.com^$third-party
+||douyinvod.com^$third-party
+||amemv.com^$third-party
+||bytedance.com^$script
+
+! 汽水音乐专项规则（动态广告接口）
+luna.music.com##.reward-video-popup
+luna.music.com##div[class*="ad-container"]
+luna.music.com##[data-testid="ad-layer"]
+luna.music.com##.ads-skip-button
+luna.music.com##.video-reward-overlay
+
+! 抖音/西瓜视频广告拦截（防止跨平台广告）
+||lf-webcast-*.bytegecko.com^$media
+||*.douyinvod.com/ad/*$xmlhttprequest
+||api*.amemv.com^$domain=ixigua.com
+
+! 高级规则（覆盖弹窗和重定向）
+||bytedance.com^$popup
+||gecko.zijieapi.com^$redirect=nooptext
+
+# ====== 通用广告拦截规则 =====
+! 国内主流广告SDK拦截
+||ad.*.cn^
+||*.adsensor.org^
+||*.ad.*.com^
+||*.ad*.com^
+||*.ad*.cn^
+||*.umeng.*^
+||*.umeng.com^
+||*.umengcdn.com^
+||*.mob.com^
+||*.mobad.*^
+||*.gdt.qq.com^
+||*.e.qq.com^
+||*.talkingdata.*^
+||*.tanx.com^
+||*.aliyun.com/ad/
+||*.miaozhen.com^
+||*.admaster.com.cn^
+||*.sensorsdata.cn^
+||*.adjust.com^
+||*.appsflyer.com^
+
+! 主流APP广告拦截
+||*.baidu.com/ad/
+||*.bdstatic.com/ad/
+||*.iqiyi.com/*/ad/
+||*.iqiyi.com/adv/
+||*.youku.com/ad/
+||*.tudou.com/ad/
+||*.tencent.com/ad/
+||*.qq.com/ad/
+||*.weibo.com/ad/
+||*.sina.com.cn/ad/
+||*.sohu.com/ad/
+||*.bilibili.com/ad/
+||*.douyin.com/ad/
+||*.kuaishou.com/ad/
+||*.zhihu.com/ad/
+||*.xiaohongshu.com/ad/
+
+! 运营商广告拦截
+||*.10086.cn/ad/
+||*.10010.com/ad/
+||*.189.cn/ad/
+||*.chinamobile.com/ad/
+||*.chinaunicom.com/ad/
+||*.chinatelecom.com/ad/
+
+! 常见APP开屏广告
+||*/splashad*
+||*/splash/*ad*
+||*/launchad*
+||*/ad/splash*
+||*/ad/launch*
+||*/startpage/ad*
+||*/ad/startpage*
+
+! 通用广告拦截规则
+||*/*advert*
+||*/*banner*ad*
+||*/*popup*ad*
+||*/*float*ad*
+||*/*sponsor*
+||*/*adimg*
+||*/*adpic*
+||*/*gg.*
+||*/*ad/*.js
+||*/*ad/*.css
+||*/*ad/*.jpg
+||*/*ad/*.png
+||*/*ad/*.gif
+
+! 屏蔽常见统计和追踪
+||*.cnzz.com^
+||*.baidu.com/analytics/
+||*.google-analytics.com^
+||*.doubleclick.net^
+||*.mmstat.com^
+||*.sogou.com/analytics/
+||*.taobao.com/monitor/
+
+# ====== 腾讯系广告 ======
+||*.gdtimg.com^
+||gdt?.qq.com^
+||adxlog?.v.qq.com^
+||adxlog??.v.qq.com^
+||ads*.qq.com^
+||ad*.qq.com^
+||e.qq.com^
+||tanx.com^
+||ad.qun.qq.com^
+||adpm.app.qq.com^
+||adxlog-upload.v.qq.com^
+||adsmind.gdtimg.com^
+||adver.qq.com^
+||adui.tgideas.qq.com^
+||ad.weixin.qq.com^
+||adn.weixin.qq.com^
+||adtest.weixin.qq.com^
+||adcdn.weixin.qq.com^
+||ad.*.qq.com^
+||ad.*.tencent.com^
+||gdt.qq.com^
+||mp.weixin.qq.com/mp/ad*
+||mp.weixin.qq.com/mp/advertisement*
+||mp.weixin.qq.com/wxopen/ad*
+||a*.qq.com/tws*
+||tbskip.qq.com^
+||mini-program-ads.qq.com^
+||qq.com/ylh/
+||qpic.cn/ylh/
+||ylh.qq.com^
+||e.qq.com/ylh/
+||mi.gdt.qq.com/ylh/
+||ssl.gdt.qq.com/ylh/
+||v.gdt.qq.com/ylh/
+||qq.com/adx/
+||qq.com/adjs/
+||qq.com/ad-material/
+||finder.weixin.qq.com^
+||finder*.weixin.qq.com^
+||recommend.weread.qq.com^
+||mp.weixin.qq.com/api/recommend^
+||szextshort.weixin.qq.com^
+||tcss.qq.com^
+||analytics.qq.com^
+||weixin.qq.com/cgi-bin/recommend^
+||push.weread.qq.com^
+||miniprogram.qq.com/recommend^
+
+# ====== 字节系广告 =====
+||pangolin.snssdk.com^
+||pangolin16*.snssdk.com^
+||isnssdk.com/pangle/
+||isnssdk.com/adx/
+||toutiao.com/pangle/
+||toutiao.com/adx/
+||bytedance.com/pangle/
+||bytedance.com/adx/
+||snssdk.com/adx/
+||lf1-ttcdn-tos.pstatp.com/ad/
+||lf1-ttcdn-tos.pstatp.com/adx/
+||ixigua.com/adx/
+||douyin.com/adx/
+
+# ====== 百度系广告 =====
+||baidu.com/als/ad
+||baidu.com/cpro/
+||baidu.com/pos/
+||baidu.com/adx/
+||cpro.baidu.com^
+||pos.baidu.com^
+||dup.baidustatic.com/js/du^
+||mbd.baidu.com/ad/
+||hmma.baidu.com^
+
+# ====== 阿里系广告 =====
+||alimama.com^$domain=~alimama.com
+||taobao.com/adx/
+||tbcdn.cn/adx/
+||amdc.alipay.com/ad/
+||adashx.ut.taobao.com^
+||ykad-data.youku.com^
+
+# ====== 其他平台广告 =====
+||360.cn/adx/
+||qhres.com/ad/
+||gifshow.com/adx/
+||ksad.ksapisrv.com^
+||meituan.com/adx/
+||dpfile.com/adx/
+
+# ====== 媒体资源拦截 =====
+||*/ad-*.jpg^$image
+||*/ads/*.mp4^$media
+||*/adx/*.js^
+||*/stats?type=ad^
+||*/log?ad=^
+||*/tracking/ad^
+
 ! 智能电视相关
 ||upgrade-adservice.hismarttv.com^
 ||plugin-sync-upgrade-juui.hismarttv.com^
