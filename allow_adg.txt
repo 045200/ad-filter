@@ -1,9 +1,9 @@
 ! Title: AdGuard 白名单
 ! Homepage: https://github.com/045200/ad-filter
 ! Expires: 12 Hours
-! Version: 2026-01-01 09:10:38（北京时间）
+! Version: 2026-01-01 20:27:01（北京时间）
 ! Description: 适用于 AdGuard 的白名单规则
-! Total count: 8369
+! Total count: 8382
 @@$generichide,domain=androidpolice.com|babygaga.com|backyardboss.net|carbuzz.com|cbr.com|collider.com|dualshockers.com|footballfancast.com|footballleagueworld.co.uk|gamerant.com|givemesport.com|hardcoregamer.com|hotcars.com|howtogeek.com|makeuseof.com|moms.com|movieweb.com|pocket-lint.com|pocketnow.com|screenrant.com|simpleflying.com|thegamer.com|therichest.com|thesportster.com|thethings.com|thetravel.com|topspeed.com|xda-developers.com
 @@&ad_type=$domain=ultimate-guitar.com
 @@&http_referer=$domain=chaopx.com
@@ -1363,6 +1363,7 @@
 @@||126.net^$important
 @@||127.0.0.1/admin/admin_ad.php?$domain=127.0.0.1
 @@||1337x.st/css/webfonts/oswald-*.$font
+@@||1337x.st^$csp=script-src 'self' 'unsafe-inline'
 @@||159i.com/a_d/$media
 @@||163.com/user/event?id=
 @@||163.com^$important
@@ -1582,6 +1583,7 @@
 @@||ad.admitad.com/*/?ulp=
 @@||ad.alimama.com^$genericblock
 @@||ad.amgdgt.com/ads/js/*$domain=ad.amgdgt.com
+@@||ad.amgdgt.com/ads/js/optout.js
 @@||ad.dotandad.com/mediamond_vm.jsp$domain=video.mediaset.it
 @@||ad.doubleclick.net/ddm/$popup,domain=billiger.de|creditcard.com.au|debitcards.com.au|finder.com|finder.com.au|findershopping.com.au|guide-epargne.be|legacy.com|mail.yahoo.com|nytimes.com|spaargids.be|whatphone.com.au
 @@||ad.doubleclick.net/ddm/ad/*$domain=twitch.tv,3p
@@ -1648,11 +1650,11 @@
 @@||ads-twitter.com/uwt.js$domain=aussiebum.com|factory.pixiv.net
 @@||ads.adfox.ru/*/getCodeTest?$domain=tv.yandex.by|tv.yandex.kz|tv.yandex.ru
 @@||ads.adfox.ru/*/prepareCode?$domain=tv.yandex.by|tv.yandex.kz|tv.yandex.ru
-@@||ads.adthrive.com/api/$domain=adamtheautomator.com|mediaite.com|packhacker.com|packinsider.com
-@@||ads.adthrive.com/builds/core/*/js/adthrive.min.js$domain=adamtheautomator.com|laurelberninteriors.com|mediaite.com|packhacker.com|packinsider.com
-@@||ads.adthrive.com/builds/core/*/prebid.min.js$domain=laurelberninteriors.com|mediaite.com
+@@||ads.adthrive.com/api/$domain=adamtheautomator.com|packhacker.com|packinsider.com
+@@||ads.adthrive.com/builds/core/*/js/adthrive.min.js$domain=adamtheautomator.com|laurelberninteriors.com|packhacker.com|packinsider.com
+@@||ads.adthrive.com/builds/core/*/prebid.min.js$domain=laurelberninteriors.com
 @@||ads.adthrive.com/builds/core/*/vendor/prebid/*/prebid.min.js$domain=laurelberninteriors.com
-@@||ads.adthrive.com/sites/$script,domain=adamtheautomator.com|mediaite.com|packhacker.com|packinsider.com
+@@||ads.adthrive.com/sites/$script,domain=adamtheautomator.com|packhacker.com|packinsider.com
 @@||ads.adthrive.com/sites/*/ads.min.js$domain=laurelberninteriors.com
 @@||ads.aiir.net/rf/feed?callback=jQuery
 @@||ads.alafish.cn^$~3p
@@ -2949,6 +2951,7 @@
 @@||content.googleapis.com$document
 @@||content.ingbank.pl^$xhr,image,domain=ingksiegowosc.pl
 @@||content.jwplatform.com^$domain=tomshardware.com
+@@||content.pouet.net/avatars/adx.gif$image,~3p
 @@||content.s8bbs.com/ad/bbs/*.jpg
 @@||contentcenter-vali-drcn.dbankcdn.com^
 @@||contract-miner.com^$generichide
@@ -3053,7 +3056,6 @@
 @@||daoju.qq.com/time/*/js/ad/
 @@||darkino.online^$generichide
 @@||dashboard.jwplayer.com^$document
-@@||dashboard.mgid.com^$popup
 @@||dashboard.tinypass.com/xbuilder/experience/$domain=cnbc.com
 @@||dashi.163.com^
 @@||data-collector.soulapp.cn^
@@ -3657,7 +3659,6 @@
 @@||fuseplatform.net^*/fuse.js$script,domain=broadsheet.com.au|friendcafe.jp
 @@||fuxi.163.com^
 @@||fuyufs.com^$generichide
-@@||fwmrm.net/ad/g/1?$domain=pga.com
 @@||fxgate.baidu.com^$important
 @@||fxporn69.com^$generichide
 @@||g-acs.m.goofish.com^
@@ -3681,19 +3682,20 @@
 @@||g.doubleclick.net/gampad/ads?env=$xhr,domain=wunderground.com
 @@||g.doubleclick.net/gampad/adx?$xhr,domain=v.ifeng.com
 @@||g.doubleclick.net/gampad/live/ads?*tver.$xhr,domain=imasdk.googleapis.com
+@@||g.doubleclick.net/gpt/pubads_impl_$domain=accuweather.com|blastingnews.com|bloomberg.com|chelseafc.com|chromatographyonline.com|cornwalllive.com|digitaltrends.com|downdetector.com|edy.rakuten.co.jp|epaper.timesgroup.com|formularywatch.com|game.anymanager.io|games.coolgames.com|managedhealthcareexecutive.com|medicaleconomics.com|nationalreview.com|nationalworld.com|nbcsports.com|nycgo.com|physicianspractice.com|scotsman.com|telsu.fi|voici.fr|weather.com
 @@||g.doubleclick.net/gpt/pubads_impl_$script,domain=koigaku.machicon.jp
 @@||g.doubleclick.net/gpt/pubads_impl_$script,domain=ukr.net
 @@||g.doubleclick.net/pagead/ads$subdocument,domain=sudokugame.org
 @@||g.doubleclick.net/pagead/ads?gdpr=$subdocument,domain=decrypt.day
 @@||g.doubleclick.net/pagead/images/gmob/close-circle-30x30.png$image,domain=safeframe.googlesyndication.com
-@@||g.doubleclick.net/pagead/managed/js/gpt/$script,domain=adamtheautomator.com|allestoringen.be|allestoringen.nl|aussieoutages.com|canadianoutages.com|downdetector.ae|downdetector.ca|downdetector.co.nz|downdetector.co.uk|downdetector.co.za|downdetector.com|downdetector.com.ar|downdetector.com.br|downdetector.dk|downdetector.es|downdetector.fi|downdetector.fr|downdetector.hk|downdetector.ie|downdetector.in|downdetector.it|downdetector.jp|downdetector.mx|downdetector.no|downdetector.pl|downdetector.pt|downdetector.ru|downdetector.se|downdetector.sg|downdetector.tw|downdetector.web.tr|euronews.com|filmweb.pl|hoyme.jp|ictnews.org|journaldequebec.com|kino.de|mediaite.com|samsclub.com|spiegel.de|thestar.co.uk|xn--allestrungen-9ib.at|xn--allestrungen-9ib.ch|xn--allestrungen-9ib.de|yorkshirepost.co.uk
+@@||g.doubleclick.net/pagead/managed/js/gpt/$script,domain=adamtheautomator.com|allestoringen.be|allestoringen.nl|aussieoutages.com|canadianoutages.com|downdetector.ae|downdetector.ca|downdetector.co.nz|downdetector.co.uk|downdetector.co.za|downdetector.com|downdetector.com.ar|downdetector.com.br|downdetector.dk|downdetector.es|downdetector.fi|downdetector.fr|downdetector.hk|downdetector.ie|downdetector.in|downdetector.it|downdetector.jp|downdetector.mx|downdetector.no|downdetector.pl|downdetector.pt|downdetector.ru|downdetector.se|downdetector.sg|downdetector.tw|downdetector.web.tr|euronews.com|filmweb.pl|hoyme.jp|ictnews.org|journaldequebec.com|kino.de|samsclub.com|spiegel.de|thestar.co.uk|xn--allestrungen-9ib.at|xn--allestrungen-9ib.ch|xn--allestrungen-9ib.de|yorkshirepost.co.uk
 @@||g.doubleclick.net/pagead/managed/js/gpt/*/pubads_impl.js$domain=blog.nicovideo.jp|laurelberninteriors.com|metropcs.mobi
 @@||g.doubleclick.net/pagead/managed/js/gpt/*/pubads_impl.js$domain=games.coolgames.com
 @@||g.doubleclick.net/pagead/managed/js/gpt/*/pubads_impl.js$domain=soranews24.com
 @@||g.doubleclick.net/pagead/ppub_config$domain=bloomberg.com|independent.co.uk|repretel.com|telsu.fi|weather.com
 @@||g.doubleclick.net/tag/js/gpt.js$domain=koigaku.machicon.jp
 @@||g.doubleclick.net/tag/js/gpt.js$domain=soranews24.com
-@@||g.doubleclick.net/tag/js/gpt.js$script,xhr,domain=accuweather.com|adamtheautomator.com|bestiefy.com|blastingnews.com|blog.nicovideo.jp|bloomberg.com|chromatographyonline.com|cornwalllive.com|devclass.com|digitaltrends.com|edy.rakuten.co.jp|epaper.timesgroup.com|euronews.com|filmweb.pl|formularywatch.com|games.coolgames.com|gearpatrol.com|hoyme.jp|journaldequebec.com|kino.de|laurelberninteriors.com|managedhealthcareexecutive.com|mediaite.com|medicaleconomics.com|metropcs.mobi|newsweek.com|nycgo.com|olx.pl|physicianspractice.com|repretel.com|samsclub.com|spiegel.de|standard.co.uk|telsu.fi|theta.tv|weather.com|wralsportsfan.com
+@@||g.doubleclick.net/tag/js/gpt.js$script,xhr,domain=accuweather.com|adamtheautomator.com|bestiefy.com|blastingnews.com|blog.nicovideo.jp|bloomberg.com|chromatographyonline.com|cornwalllive.com|devclass.com|digitaltrends.com|edy.rakuten.co.jp|epaper.timesgroup.com|euronews.com|filmweb.pl|formularywatch.com|games.coolgames.com|gearpatrol.com|hoyme.jp|journaldequebec.com|kino.de|laurelberninteriors.com|managedhealthcareexecutive.com|medicaleconomics.com|metropcs.mobi|newsweek.com|nycgo.com|olx.pl|physicianspractice.com|repretel.com|samsclub.com|spiegel.de|standard.co.uk|telsu.fi|theta.tv|weather.com|wralsportsfan.com
 @@||g.live.com^
 @@||g.live.com^$important
 @@||g.msn.com^
@@ -3852,6 +3854,7 @@
 @@||go.redirectingat.com/*&url=$domain=forums.redflagdeals.com
 @@||go.redirectingat.com^$document
 @@||go.xliirdr.com/?*targetDomain=fikfapcams.com$domain=fikfap.com
+@@||go.xlirdr.com/api/models/vast$xhr
 @@||goalsport.info^$generichide
 @@||gocomics.com/assets/ad-dependencies-$script,~3p
 @@||godlikeproductions.com/adblock/js/checks/fingerprint.js$domain=godlikeproductions.com
@@ -4444,6 +4447,7 @@
 @@||imasdk.googleapis.com/js/sdkloader/ima3.js$domain=vidyome.com
 @@||imasdk.googleapis.com/js/sdkloader/ima3.js$domain=vizita.si
 @@||imasdk.googleapis.com/js/sdkloader/ima3.js$domain=voicetv.co.th
+@@||imasdk.googleapis.com/js/sdkloader/ima3.js$domain=vtvgiaitri.vn
 @@||imasdk.googleapis.com/js/sdkloader/ima3.js$domain=vvvvid.it
 @@||imasdk.googleapis.com/js/sdkloader/ima3.js$domain=wetv.vip
 @@||imasdk.googleapis.com/js/sdkloader/ima3.js$domain=wibc.com
@@ -5824,6 +5828,7 @@
 @@||pack.google.com^$important
 @@||package.wallpaper.cdn.pandora.xiaomi.com.lan^
 @@||package.wallpaper.cdn.pandora.xiaomi.com.lan^$important
+@@||pagead2.googlesyndication.com/gampad/ads?*laurelberninteriors.com*&iu=%2F18190176%2C22509719621%2FAdThrive_Video_Collapse_Autoplay_$domain=imasdk.googleapis.com
 @@||pagead2.googlesyndication.com/getconfig/sodar$domain=forum.release-apk.com
 @@||pagead2.googlesyndication.com/getconfig/sodar$domain=freemcserver.net
 @@||pagead2.googlesyndication.com/pagead/$domain=free-scores.com,image
@@ -5915,6 +5920,7 @@
 @@||pagead2.googlesyndication.com/pagead/js/adsbygoogle.js$domain=t2bot.ru
 @@||pagead2.googlesyndication.com/pagead/js/adsbygoogle.js$domain=themodellingnews.com
 @@||pagead2.googlesyndication.com/pagead/js/adsbygoogle.js$domain=unlockapk.com
+@@||pagead2.googlesyndication.com/pagead/js/adsbygoogle.js$domain=uploadbox.io
 @@||pagead2.googlesyndication.com/pagead/js/adsbygoogle.js$domain=vladan.fr
 @@||pagead2.googlesyndication.com/pagead/js/adsbygoogle.js$domain=vorsprung-online.de
 @@||pagead2.googlesyndication.com/pagead/js/adsbygoogle.js$domain=worder.cat
@@ -6176,6 +6182,7 @@
 @@||porngun.net^$generichide
 @@||pornhub.*/*?*&ajax=$xhr
 @@||pornhub.*/*?ajax=*&$xhr
+@@||pornhub.*/devices/wankband^$document
 @@||pornhub.*/signup
 @@||porntop.com^
 @@||pornzog.com^
@@ -6307,6 +6314,7 @@
 @@||qhres.com^*/monitor_analytic.js$domain=mse.360.cn
 @@||qhres2.com^
 @@||qhres2.com^$domain=baike.so.com
+@@||qhres2.com^$domain=www.n.cn
 @@||qi.163.com^
 @@||qianpanso.cn/other/*.js$domain=cilimao.co|cilimao.one
 @@||qiantucdn.com/static/images/adsbygoogle.js
@@ -6631,6 +6639,7 @@
 @@||securepubads.g.doubleclick.net/gpt/pubads_impl_*.js$domain=sinarharian.com.my
 @@||securepubads.g.doubleclick.net/gpt/pubads_impl_*.js$domain=ukr.net
 @@||securepubads.g.doubleclick.net/gpt/pubads_impl_*.js$domain=wunderground.com
+@@||securepubads.g.doubleclick.net/gpt/pubads_impl_108.js^$domain=pocketnow.com
 @@||securepubads.g.doubleclick.net/pagead/managed/js/gpt/$domain=fifetoday.co.uk
 @@||securepubads.g.doubleclick.net/pagead/managed/js/gpt/*/pubads_impl.js$domain=abccar.com.tw
 @@||securepubads.g.doubleclick.net/pagead/managed/js/gpt/*/pubads_impl.js$domain=kitco.com
@@ -6802,6 +6811,7 @@
 @@||skiplinks.xyz/skipad.webp$domain=skiplinks.xyz|lewdsteam.com|adultcomixxx.com
 @@||skl.apple.com^$important
 @@||skmedix.pl/*/*.js$~3p
+@@||skmedix.pl^$generichide
 @@||skyapi.live.net^$important
 @@||skycloud-exploit.weebly.com^$generichide
 @@||sl.hpplay.cn^
@@ -7099,6 +7109,7 @@
 @@||sto520.com^$generichide
 @@||storage.360buyimg.com^
 @@||storage.googleapis.com/aisw-assets/fanpage/adblock/advert*_.json$domain=staige.tv
+@@||storage.googleapis.com/vkcdnservice.appspot.com/script$domain=yandexcdn.com
 @@||storage.googleapis.com^$important
 @@||storage.jd.com^
 @@||storage.wikawika.xyz^
@@ -7704,6 +7715,7 @@
 @@||vectorsdk.map.qq.com^
 @@||vectorsdk.map.qq.com^$important
 @@||veev.to^$generichide
+@@||vegashipcalc.co.uk/scripts/ads.js
 @@||venipa.net^$generichide
 @@||venus.yhd.com^
 @@||verdirectotv.com^$generichide
@@ -7838,6 +7850,7 @@
 @@||web.archive.org/*/http$removeparam
 @@||web.basemark.com^$generichide
 @@||web.facebook.com^$generichide
+@@||web.telegram.org^$generichide
 @@||web.vip.miui.com^
 @@||web.vip.miui.com^$important
 @@||webapi.amap.com^
