@@ -15,10 +15,15 @@
   <a href="https://github.com/045200/ad-filter/issues/">
     <img src="https://img.shields.io/github/issues/045200/ad-filter?style=flat-square&color=red" alt="开放issues" />
   </a>
+  <!-- 新增的 Telegram 群组徽章（放在 issues 后面） -->
+  <a href="https://t.me/easyads96">
+    <img src="https://img.shields.io/badge/Telegram-2CA5E0?style=flat-square&logo=telegram&logoColor=white" alt="Telegram群组" />
+  </a>
   <a href="https://github.com/045200/ad-filter">
     <img src="https://img.shields.io/github/license/045200/ad-filter?style=flat-square&color=9cf" alt="许可证" />
   </a>
 </p>
+
 
 <p align="center">
   <b>🚫 强力去广告 | 🔄 定时更新 | 🛡️ 多种格式</b>
