@@ -1,9 +1,10 @@
 ! Title: uBlock Origin 白名单
 ! Homepage: https://github.com/045200/ad-filter
 ! Expires: 12 Hours
-! Version: 2026-07-30 09:30:31（北京时间）
+! Version: 2026-07-30 21:29:34（北京时间）
 ! Description: 适用于 uBlock Origin 的白名单规则
-! Total count: 9008
+! Total count: 8998
+@@$csp=worker-src 'none',domain=uptostream.com
 @@$popup,domain=datanodes.to,3p
 @@&ad_type=$domain=ultimate-guitar.com
 @@&http_referer=$domain=chaopx.com
@@ -102,7 +103,6 @@
 @@/api/v2/models-online?$domain=tik.porn
 @@/assets/js/advertisement.js$~3p
 @@/bag2?r[]=*&r[]=$domain=free.com.tw
-@@/banner/ad/*$image,domain=achaloto.com
 @@/check.php?callback=$script,domain=ytmp3.cc
 @@/clickn(download|upload)\.[a-z]{3,5}/$script,xhr,domain=clickndownload.*|clicknupload.*
 @@/common/cf/*$domain=66u.com|changhong.com|fei3d.com|oneplusbbs.com|readboy.com
@@ -204,7 +204,6 @@
 @@cdn.*.qq.com
 @@clicks.$domain=cimbclicks.com.my,~3p
 @@doubleclick.net/ads/preferences/
-@@down.360safe.com^
 @@favicon.ico$domain=indexsubtitle.cc
 @@gimg*.baidu.com/gimg/app=$domain=kimivod.com
 @@goo.gl
@@ -1592,6 +1591,7 @@
 @@||ad.alimama.com^$genericblock
 @@||ad.amgdgt.com/ads/js/*$domain=ad.amgdgt.com
 @@||ad.dotandad.com/mediamond_vm.jsp$domain=video.mediaset.it
+@@||ad.doubleclick.net/clk*&destinationURL=$popup
 @@||ad.doubleclick.net/ddm/$popup,domain=billiger.de|creditcard.com.au|debitcards.com.au|finder.com|finder.com.au|findershopping.com.au|guide-epargne.be|legacy.com|mail.yahoo.com|nytimes.com|spaargids.be|whatphone.com.au
 @@||ad.doubleclick.net/ddm/ad/*$domain=twitch.tv,3p
 @@||ad.doubleclick.net/ddm/clk/*?https://creditcards.chase.com/
@@ -1717,6 +1717,7 @@
 @@||ads.temu.com^$popup
 @@||ads.themoneytizer.com/*/gen.js$domain=mylink.*|my1ink.*|myl1nk.*|myli3k.*
 @@||ads.tiktok.com^$generichide
+@@||ads.tiktok.com^$popup
 @@||ads.tiktok.com^$~3p
 @@||ads.twitter.com^$domain=ads.twitter.com|analytics.twitter.com
 @@||ads.twitter.com^$popup
@@ -1781,7 +1782,6 @@
 @@||aiasahi.jp/ads/$image,domain=japan.zdnet.com
 @@||aider-res.meizu.com^
 @@||aider.meizu.com^
-@@||aigenda.ru^$generichide
 @@||aihuishou.com^
 @@||aikanlive.miguvideo.com^
 @@||aikanvod.miguvideo.com^
@@ -2134,7 +2134,6 @@
 @@||apkmirror.com^$generichide
 @@||apkmoddone.phongroblox.com^$generichide
 @@||apm.zhihu.com^
-@@||apmebf.com/ad/$domain=betfair.com
 @@||apmfront.17u.cn^
 @@||apnetv.tv^$generichide
 @@||app-advertise.zhihuishu.com^
@@ -2424,6 +2423,7 @@
 @@||bgp.video-upload-v*.lf.bytelb.net^
 @@||bid.g.doubleclick.net/dbm/vast$xhr,domain=safeframe.googlesyndication.com
 @@||bidder.criteo.com/amp/rtc$domain=ettoday.net
+@@||bidder.criteo.com/cdb|$domain=app.axenthost.com
 @@||bidobido.xyz^
 @@||big.bilibili.com^
 @@||bigfishaudio.com/banners/$image,~3p
@@ -2727,7 +2727,6 @@
 @@||cdn.ping0.cc^
 @@||cdn.plyr.io/*/plyr.svg$domain=akwam.*
 @@||cdn.plyr.io^
-@@||cdn.plytv.me/scripts/embed.min.js
 @@||cdn.pogo.com/*/exhibit/imasdk/application.js
 @@||cdn.ptztv.live/flyads/streaming.js
 @@||cdn.radiostreamlive.com/v*/js/adblock/advert-1bb.js
@@ -2854,6 +2853,7 @@
 @@||cinehd.app^$generichide
 @@||cinema.pia.co.jp/img/ad/$image,~3p
 @@||citibank.com/*/branding/
+@@||citynews.ca/*/get_ad_$domain=citynews.ca
 @@||citysbs.com^*/swfupload/
 @@||citytalk.tw/js/ct/common/v3/ui/fblike/FBLike.html
 @@||cl2.webterren.com^
@@ -3613,7 +3613,6 @@
 @@||embed.binkies3d.com/content/$domain=gsmarena.com
 @@||embed.ex.co^$xhr,domain=espncricinfo.com
 @@||embed.redditmedia.com/widgets/platform.js$domain=gamerant.com
-@@||embed.sendtonews.com/player*.php$domain=earth.com
 @@||embed.sendtonews.com/player3/$domain=clutchpoints.com
 @@||embed.sendtonews.com/player3/$domain=nypost.com
 @@||embed.wcostream.com/ad-verify|$xhr,domain=embed.wcostream.com
@@ -3728,7 +3727,6 @@
 @@||facebook.com^$important
 @@||facepic.qidian.com^
 @@||faculty.uml.edu^$image,stylesheet
-@@||familyporner.com/jesojof/js/prebid-ads.js
 @@||fang.com/stats/clickm2011.js
 @@||fangcloud.com^$generichide
 @@||fanqienovel.com^
@@ -3920,7 +3918,6 @@
 @@||g.doubleclick.net/gampad/ads?$xhr,domain=soranews24.com
 @@||g.doubleclick.net/gampad/ads?*%2Ftver.$xhr,domain=imasdk.googleapis.com
 @@||g.doubleclick.net/gampad/ads?*&iu=%2F18190176%2C22509719621%2FAdThrive_Video_Collapse_Autoplay_$xhr,domain=imasdk.googleapis.com
-@@||g.doubleclick.net/gampad/ads?*&iu=%2F18190176%2C22509719621%2FAdThrive_Video_In-Post_ClicktoPlay_$domain=imasdk.googleapis.com
 @@||g.doubleclick.net/gampad/ads?*&prev_scp=kw%3Diqdspiegel%2Cdigtransform%2Ciqadtile4%2$xhr,domain=spiegel.de
 @@||g.doubleclick.net/gampad/ads?*&url=https%3A%2F%2Fgames.poki.com$xhr,domain=imasdk.googleapis.com
 @@||g.doubleclick.net/gampad/ads?*&url=https%3A%2F%2Frepuls.io$xhr,domain=imasdk.googleapis.com
@@ -4192,7 +4189,6 @@
 @@||googletagmanager.com/gtm.js$domain=se.pl
 @@||googletagmanager.com/gtm.js$domain=zennioptical.com
 @@||googletagmanager.com/gtm.js$script,redirect-rule,domain=rocketnews24.com
-@@||googletagmanager.com/gtm.js^$domain=comedycentral.tv
 @@||googletagmanager.com^
 @@||googletagmanager.com^$important
 @@||googletagservices.com/tag/js/gpt.js$domain=allestoringen.be|allestoringen.nl|downdetector.ae|downdetector.ca|downdetector.cl|downdetector.co.nz|downdetector.co.uk|downdetector.co.za|downdetector.com|downdetector.com.ar|downdetector.com.au|downdetector.com.br|downdetector.com.co|downdetector.cz|downdetector.dk|downdetector.ec|downdetector.es|downdetector.fi|downdetector.fr|downdetector.gr|downdetector.hk|downdetector.hr|downdetector.hu|downdetector.id|downdetector.ie|downdetector.in|downdetector.it|downdetector.jp|downdetector.mx|downdetector.my|downdetector.no|downdetector.pe|downdetector.ph|downdetector.pk|downdetector.pl|downdetector.pt|downdetector.ro|downdetector.ru|downdetector.se|downdetector.sg|downdetector.sk|downdetector.tw|downdetector.web.tr|xn--allestrungen-9ib.at|xn--allestrungen-9ib.ch|xn--allestrungen-9ib.de
@@ -4534,7 +4530,6 @@
 @@||idsly.com^$generichide
 @@||idv-prod1.apple.com^$important
 @@||idv.cdn-apple.com^$important
-@@||iejima.org/ad-banner/$image,~3p
 @@||ietheivaicai.com^
 @@||ievaphone.com/public/javascripts/ads.js
 @@||iface2.iqiyi.com^
@@ -5898,7 +5893,6 @@
 @@||news.qq.com^
 @@||news.sina.com.cn^
 @@||news.u17i.com/advert/
-@@||newscgp.com/prod/prebid/nyp/pb.js$domain=nypost.com
 @@||newser.com/javascript/*/adblock.js
 @@||newsmth.net/nForum/*/ADAgent_
 @@||newsweek.com/prebid.js$script,domain=newsweek.com
@@ -5974,6 +5968,7 @@
 @@||oasjs.kataweb.it/adsetup_pcmp.js$domain=kataweb.it
 @@||oauth-login-drcn.platform.dbankcloud.com^
 @@||oauth.secure.pixiv.net^
+@@||oauth.vk.com/authorize?
 @@||oauth2.googleapis.com^
 @@||objects.githubusercontent.com^
 @@||obs.af-north-1.myhuaweicloud.com^
@@ -6226,6 +6221,7 @@
 @@||p9-dcd-sign.byteimg.com^
 @@||p9-dcd.byteimg.com^
 @@||p9-dy.byteimg.com
+@@||p9-dy.byteimg.com^
 @@||p9-faceu-img-sign.byteimg.com^
 @@||p9-flow-imagex-sign.byteimg.com^
 @@||p9-heycan-hgt-sign.byteimg.com^
@@ -6659,7 +6655,6 @@
 @@||proxy-tf-all-ws.bilivideo.com^
 @@||proxy.ads.canalplus-bo.net/web/undefined/v1/adserver/info/?asset=*&channel=$xmlhttprequest,domain=www.mycanal.fr
 @@||przegladpiaseczynski.pl/wp-content/plugins/wppas/$~3p
-@@||przegladpiaseczynski.pl/wp-content/uploads/*-300x250-$image,~3p
 @@||ps.eyeota.net/eopt$domain=youronlinechoices.com
 @@||ps.w.org^$image,domain=wordpress.org
 @@||ps3-infos.fr/adsense/openads/ads/ads.js
@@ -6702,7 +6697,6 @@
 @@||pubads.g.doubleclick.net/ssai/event/*/streams$xhr,domain=news4jax.com|gmg-wjxt-prod.cdn.arcpublishing.com
 @@||public.gdtimg.com
 @@||public.gdtimg.com^
-@@||publicwww.com/ad/paypro_success.html
 @@||publicwww.com^$generichide
 @@||publish-pic-cpu.baidu.com^
 @@||publisher.adservice.com^$document
@@ -6983,7 +6977,6 @@
 @@||s.yimg.com^
 @@||s.yimg.jp/images/listing/tool/yads/yads-timeline-ex.js$domain=yahoo.co.jp
 @@||s.youku.com^
-@@||s0.2mdn.net/ads/studio/Enabler.js$domain=yuukinohana.co.jp
 @@||s0.2mdn.net^
 @@||s0.2mdn.net^$image,domain=client.falixnodes.net
 @@||s0.meituan.net^
@@ -7035,7 +7028,6 @@
 @@||safeway.com/*/?bannerId
 @@||sammyboy.com/members/*advertisement$xhr
 @@||samsungknox.com^
-@@||sanyonews.jp/files/image/ad/okachoku.jpg$~3p
 @@||saomiao.51240.com^
 @@||saomiao.bmcx.com^
 @@||sarapbabe.com/nativeads-v2.js
@@ -7331,7 +7323,6 @@
 @@||smallseotools.com^$generichide
 @@||smallseotools.com^$generichide,badfilter
 @@||smart.360.cn^
-@@||smartadserver.com/ac^$domain=deezer.com
 @@||smartadserver.com/genericpost$domain=filmweb.pl
 @@||smartcard.apps.coloros.com^
 @@||smarthome-drcn.dbankcdn.com^
@@ -7855,6 +7846,7 @@
 @@||themes.googleusercontent.com/static/fonts/$domain=tweaktown.com
 @@||themeslide.com^$generichide
 @@||themis.soulapp.cn^
+@@||themoviedb.org/assets/
 @@||thenewslens.com/assets/js/*/admanager.js$domain=thenewslens.com
 @@||thepiratebay.*/ajax_
 @@||thepiratebay.org/cdn-cgi/challenge-platform/$~3p
@@ -8339,7 +8331,6 @@
 @@||vjav.com^
 @@||vjav0.ahcdn.com^
 @@||vjs.zencdn.net/*/video-js.css
-@@||vk.com/ads?$popup,domain=vk.com
 @@||vlm-ads.aimatch.com/vlm/jserver/$domain=titulky.com
 @@||vm.gtimg.cn^
 @@||vmmp.qpic.cn^
@@ -8426,7 +8417,6 @@
 @@||web.archive.org/*/http$removeparam
 @@||web.basemark.com^$generichide
 @@||web.facebook.com^$generichide
-@@||web.telegram.org^$generichide
 @@||web.vip.miui.com^
 @@||web.vip.miui.com^$important
 @@||webapi.amap.com^
@@ -8721,13 +8711,13 @@
 @@||www.porntrex.com^
 @@||www.porsche.cn^
 @@||www.porsche.com^
-@@||www.pussyspace.com/ajax/contact/exo-logo.png|
 @@||www.pussyspace.com/class/captcha/arrow.png|
 @@||www.pussyspace.com/class/captcha/captcha.php|
 @@||www.pussyspace.com/favicon.ico|
 @@||www.pussyspace.com/player/loading.gif|
 @@||www.pussyspace.com/style/img/navbg.hover.png|
 @@||www.pussyspace.com/upload/no_img.jpg|
+@@||www.pussyspace.net/ajax/contact/exo-logo.png|
 @@||www.pussyspace.net/class/captcha/arrow.png|
 @@||www.pussyspace.net/class/captcha/captcha.php|
 @@||www.pussyspace.net/favicon.ico|
