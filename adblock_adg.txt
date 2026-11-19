@@ -1,9 +1,9 @@
 ! Title: AdGuard 拦截规则
 ! Homepage: https://github.com/045200/ad-filter
 ! Expires: 12 Hours
-! Version: 2026-11-19 03:47:01（北京时间）
+! Version: 2026-11-19 13:09:34（北京时间）
 ! Description: 适用于 AdGuard 的广告拦截规则
-! Total count: 100749
+! Total count: 100756
 #
 ############
 ###AC_ad
@@ -3574,6 +3574,7 @@
 ##.page-ad
 ##.page-content__advert
 ##.page-header-ad
+##.page-nav ~ .addbox[style]
 ##.page-top-ads
 ##.page-wwads
 ##.pageAdSkin
@@ -4431,6 +4432,7 @@
 ##[alt='52bl']
 ##[alt='ad']
 ##[class$="_main_outstream"][style="right: 0px;"]
+##[class*="card-ads"]
 ##[class][data-sitename][data-header-version] > div[id^="detection-block"]
 ##[class][onclick="window.location.href='/api/goapp/'"]
 ##[class][onclick="window.location.href='https://www.suyuexs.com'"]
@@ -4558,6 +4560,8 @@
 ##[id^="section-ad-banner"]
 ##[id^="ts_ad_"]
 ##[name^="google_ads_iframe"]
+##[onclick*="'Ad Click'"]
+##[onclick*="ad_slot"]
 ##[onclick*="trackEvent', 'ad"]
 ##[onclick*='fjbglfrv.com']
 ##[onclick*='https://i.opiwb.com:']
@@ -4714,8 +4718,10 @@
 ##a[href="javascript:GoGd();"]
 ##a[href="javascript:GoTp();"]
 ##a[href="javascript:window.GoTp();"]
+##a[href]:not([target="_blank"]) + a[href][rel*="sponsored"][target="_blank"]
 ##a[href][data-ad_slot_name]
 ##a[href][target="_blank"] > img[width="100%"][src$=".gif"]
+##a[href][target="_blank"][rel*="sponsored"] > img[alt^="PG"]
 ##a[href][target="_blank"][rel="external nofollow"] > img[src]
 ##a[href^="/ad.html?url="]
 ##a[href^="/ad/"] > img[id][src*="hdslb.com"]
@@ -4851,6 +4857,7 @@
 ##a[onclick*="/dasp.php?a="]
 ##a[onclick*="open"] > img[src*=".dailygn.com/"]
 ##a[onmousedown^="this.href='https://paid.outbrain.com/network/redir?"]
+##a[rel*="sponsored"][onclick]
 ##a[target="_blank"] > img.king
 ##a[target="_blank"] > img[src*=".ikstatic.cn"][style="width:100%;height:100%"]
 ##ad-slot
